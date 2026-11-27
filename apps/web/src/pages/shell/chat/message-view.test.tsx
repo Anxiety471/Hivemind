@@ -1,12 +1,22 @@
 // @vitest-environment jsdom
+import type { ChatJobReference, ChatReferenceContext } from "@rakazo/chat-ui/web";
 import type { ThreadMessage } from "@rakazo/contracts";
 import type { ComponentProps, ReactNode } from "react";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rpc } from "../../../lib/query/rpc";
 import { MessageView } from "./message-view";
+
+const references = vi.hoisted(() => ({
+  context: undefined as ChatReferenceContext | undefined,
+  openTicket: undefined as ((ticketRef: string) => void) | undefined,
+}));
+vi.mock("./chat-references", () => ({
+  useChatReferences: () => ({ referenceContext: references.context }),
+  useOpenTicket: () => references.openTicket,
+}));
 
 const skills = vi.hoisted(() => ({
   updateDraft: vi.fn(async () => ({})),
@@ -548,4 +558,58 @@ it("puts one standalone activity panel beside a message's cards, before them", (
   expect(container.textContent?.indexOf("Open calendar")).toBeLessThan(
     container.textContent?.indexOf("Tuesday at 2 pm") ?? -1,
   );
+});
+
+describe("chat references", () => {
+  const board: ChatReferenceContext = {
+    ticketPrefix: "TASK",
+    repositories: [{ url: "https://example.com/owner/repo", isDefault: true }],
+    tickets: [],
+  };
+
+  beforeEach(() => {
+    references.context = board;
+    references.openTicket = vi.fn();
+  });
+  afterEach(() => {
+    references.context = undefined;
+    references.openTicket = undefined;
+  });
+
+  it("opens the ticket a reply names in the board's detail view", () => {
+    renderView("bot", [{ kind: "text", text: "Picked up TASK-397 this morning." }]);
+    const chip = container.querySelector<HTMLButtonElement>("button.rk-chat-ticket-chip");
+    expect(chip?.textContent).toBe("TASK-397");
+    act(() => chip?.click());
+    expect(references.openTicket).toHaveBeenCalledWith("TASK-397");
+  });
+
+  it("opens the ticket a person names in their own message too", () => {
+    renderView("user", [{ kind: "text", text: "Check TASK-397 please." }]);
+    const chip = container.querySelector<HTMLButtonElement>("button.rk-chat-ticket-chip");
+    act(() => chip?.click());
+    expect(references.openTicket).toHaveBeenCalledWith("TASK-397");
+  });
+
+  it("links a pull request number and a commit from the thread's job cards", () => {
+    const threadJobs: ChatJobReference[] = [{ repo: "owner/repo", commit: "ffc2c036" }];
+    renderView("bot", [{ kind: "text", text: "Merged PR #19 at `ffc2c036`, so the fix is in." }], {
+      threadJobs,
+    });
+    const pullRequest = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://example.com/owner/repo/pull/19"]',
+    );
+    const commit = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://example.com/owner/repo/commit/ffc2c036"]',
+    );
+    expect(pullRequest?.textContent).toContain("#19");
+    expect(commit?.textContent).toContain("ffc2c036");
+  });
+
+  it("leaves a pull request number plain when the board names no repository", () => {
+    references.context = undefined;
+    renderView("bot", [{ kind: "text", text: "Merged PR #19 today." }]);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("#19");
+  });
 });

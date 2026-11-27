@@ -2296,3 +2296,32 @@ describe("native markdown page links", () => {
     container.remove();
   });
 });
+
+describe("native markdown ticket links", () => {
+  it("draws a ticket as a link that opens it, or as its text without a handler", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const openTicket = vi.fn();
+    const markdown = "Work on [TASK-397](rakazo-ticket:TASK-397) next";
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<ChatMarkdown onOpenTicket={openTicket}>{markdown}</ChatMarkdown>);
+    });
+    const links = [...container.querySelectorAll<HTMLElement>("[data-accessibility-role='link']")];
+    expect(links.map((link) => link.textContent)).toEqual(["TASK-397"]);
+    await act(async () => {
+      links[0]!.click();
+    });
+    expect(openTicket).toHaveBeenCalledWith("TASK-397");
+    await act(async () => {
+      root.render(<ChatMarkdown>{markdown}</ChatMarkdown>);
+    });
+    expect(container.querySelector("[data-accessibility-role='link']")).toBeNull();
+    expect(container.textContent).toContain("Work on TASK-397 next");
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+});

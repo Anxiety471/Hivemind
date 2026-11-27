@@ -20,10 +20,12 @@ vi.mock("@lingui/core/macro", () => ({
   t: (strings: TemplateStringsArray, ...values: unknown[]) => String.raw(strings, ...values),
 }));
 
-vi.mock("@rakazo/chat-ui/web", () => ({
+vi.mock("@rakazo/chat-ui/web", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   ChatMarkdown: ({ children }: { children: string }) => <>{children}</>,
 }));
 
+import type { ChatRepository } from "@rakazo/chat-ui/web";
 import { JobCard } from "./JobCard";
 
 type JobBlock = Extract<MessageBlock, { kind: "job" }>;
@@ -107,14 +109,23 @@ const retry = createRetry({ attempts: 3 });
 
 function mountCard(
   block: JobBlock,
-  options: { readOnly?: boolean; onJobAction?: (text: string) => Promise<void> } = {},
+  options: {
+    readOnly?: boolean;
+    onJobAction?: (text: string) => Promise<void>;
+    repositories?: readonly ChatRepository[];
+  } = {},
 ) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   flushSync(() =>
     root.render(
-      <JobCard block={block} readOnly={options.readOnly} onJobAction={options.onJobAction} />,
+      <JobCard
+        block={block}
+        readOnly={options.readOnly}
+        onJobAction={options.onJobAction}
+        repositories={options.repositories}
+      />,
     ),
   );
   const card = () => container.querySelector<HTMLElement>('[data-testid="job-card"]');
@@ -260,12 +271,53 @@ describe("JobCard", () => {
     card.unmount();
   });
 
+  it("links the commit into the repository of the job's pull request", () => {
+    const card = mountCard({
+      ...job,
+      branch: undefined,
+      commit: "163daa2f1c9d0a1b",
+      prUrl: "https://example.com/owner/repo/pull/19",
+    });
+    const link = card.byTestId("job-commit-link");
+    expect(link?.getAttribute("href")).toBe(
+      "https://example.com/owner/repo/commit/163daa2f1c9d0a1b",
+    );
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.textContent).toBe("163daa2");
+    card.unmount();
+  });
+
+  it("links the commit through the board repository the job's repo names, beside its branch", () => {
+    const card = mountCard(
+      { ...job, repo: "owner/repo", commit: "163daa2f1c9d0a1b" },
+      { repositories: [{ url: "https://example.com/owner/repo", isDefault: false }] },
+    );
+    expect(card.byTestId("job-commit-link")?.getAttribute("href")).toBe(
+      "https://example.com/owner/repo/commit/163daa2f1c9d0a1b",
+    );
+    // The branch chip stays a button; the commit link is not nested inside it.
+    expect(card.byTestId("job-meta-branch")?.querySelector("a")).toBeNull();
+    card.unmount();
+  });
+
+  it("keeps the commit as plain text when no repository is known for it", () => {
+    const card = mountCard({
+      ...job,
+      branch: undefined,
+      repo: "owner/repo",
+      commit: "163daa2f1c9d",
+    });
+    expect(card.byTestId("job-commit-link")).toBeNull();
+    expect(card.byTestId("job-meta-commit")?.textContent).toBe("163daa2");
+    card.unmount();
+  });
+
   it("shows the coding metadata: agent, model, effort, branch, commit, diff, tokens and cost", () => {
     const card = mountCard(richJob);
     expect(card.byTestId("job-meta-agent")?.textContent).toBe("pi · deepseek-v4.1-flash · max");
     const branch = card.byTestId("job-meta-branch");
     expect(branch?.textContent).toContain("t/billing-worker");
-    expect(branch?.textContent).toContain("163daa2");
+    expect(card.byTestId("job-commit-link")?.textContent).toBe("163daa2");
     expect(card.byTestId("job-meta-diff")?.textContent).toContain("3 files");
     expect(card.byTestId("job-meta-diff")?.textContent).toContain("+142");
     expect(card.byTestId("job-meta-diff")?.textContent).toContain("-28");

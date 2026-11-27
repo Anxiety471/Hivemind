@@ -1,6 +1,7 @@
 import { i18n } from "@lingui/core";
 import { useLingui } from "@lingui/react/macro";
 import { useTimeout } from "@rakazo/chat-ui/hooks";
+import type { ChatJobReference } from "@rakazo/chat-ui/web";
 import type {
   BotAvatarSet,
   ComputerReleaseReason,
@@ -356,6 +357,19 @@ export const Transcript = memo(function Transcript({
     (message) => !exchanges.lineOf.has(message.id) || exchanges.lines.has(message.id),
   );
   const separatorIds = timeSeparatorIds(shownMessages);
+  // The thread's job and cloud agent cards, read by every reply that links their commits and PRs.
+  // Kept as the same array while those cards are unchanged, so unchanged replies do not redraw.
+  const threadJobsRef = useRef<readonly ChatJobReference[]>([]);
+  const threadJobs = useMemo(() => {
+    const jobs = messages.flatMap((message) =>
+      message.blocks.filter((block) => block.kind === "job" || block.kind === "cloud_agent"),
+    );
+    const previous = threadJobsRef.current;
+    if (jobs.length !== previous.length || jobs.some((job, index) => job !== previous[index])) {
+      threadJobsRef.current = jobs;
+    }
+    return threadJobsRef.current;
+  }, [messages]);
   const unreadDividerId = unreadDividerMessageId(shownMessages, unreadAfterSeq, olderCursor, meId);
   // Remounted per chat, so each opened chat paints its latest rows before the full history.
   const [tailOnly, setTailOnly] = useState(true);
@@ -810,6 +824,7 @@ export const Transcript = memo(function Transcript({
                       onMarkUnread={onMarkUnread}
                       onReact={onReact}
                       onJobAction={onJobAction}
+                      threadJobs={threadJobs}
                     />
                     {failedRun && failedMessageId === message.id && onRetryRun ? (
                       <MessageRunError

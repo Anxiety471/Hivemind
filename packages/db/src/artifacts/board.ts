@@ -1,5 +1,6 @@
 import type {
   Board,
+  BoardRepository,
   Ticket,
   TicketComment,
   TicketDecision,
@@ -9,6 +10,7 @@ import type {
   TicketStatus,
 } from "@rakazo/contracts";
 import {
+  BoardRepositorySchema,
   parseTicketRef,
   TICKET_ARCHIVE_AFTER_DAYS,
   TicketDecisionSchema,
@@ -81,12 +83,27 @@ export async function findTicket(
   });
 }
 
+const StoredBoardRepositoriesSchema = BoardRepositorySchema.array();
+
+/** A shape this release does not know shows no repositories rather than failing the board. */
+export function readBoardRepositories(
+  row: Pick<BoardRow, "id" | "repositories">,
+): BoardRepository[] {
+  return readJsonColumn(
+    StoredBoardRepositoriesSchema,
+    row.repositories,
+    { table: "boards", column: "repositories", id: row.id },
+    { fallback: [] },
+  );
+}
+
 export function toBoardDto(row: BoardRow): Board {
   return {
     id: row.id,
     spaceId: row.spaceId,
     name: row.name,
     ticketPrefix: row.ticketPrefix,
+    repositories: readBoardRepositories(row),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

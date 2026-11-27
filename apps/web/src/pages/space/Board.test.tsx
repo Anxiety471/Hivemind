@@ -11,7 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
-  boards: { subscribe: vi.fn() },
+  boards: { get: vi.fn(), list: vi.fn(), subscribe: vi.fn() },
   bots: { list: vi.fn() },
   tickets: {
     list: vi.fn(),

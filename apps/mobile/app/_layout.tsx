@@ -59,6 +59,7 @@ import { loadAppearancePreference, mobileTokens } from "../lib/appearance/appear
 import { capTextScaling } from "../lib/appearance/text-scale";
 import { replaceWithSignIn } from "../lib/auth/auth-routing";
 import { useReferral } from "../lib/billing/referral";
+import { ChatReferencesProvider } from "../lib/board/chat-references";
 import { AvatarScreenFocus } from "../lib/bots/avatar-life";
 import { CallKeyboardContext } from "../lib/calls/call-keyboard-context";
 import { useCallActive } from "../lib/calls/call-session";
@@ -268,7 +269,9 @@ function ChatContentProviders({
         <LinkFaviconsContext.Provider value={linkFavicons}>
           <MermaidDiagramContext.Provider value={MermaidDiagram}>
             <CodeCopyButtonContext.Provider value={CodeCopyButton}>
-              <OpenPageContext.Provider value={openPage}>{children}</OpenPageContext.Provider>
+              <OpenPageContext.Provider value={openPage}>
+                <ChatReferencesProvider>{children}</ChatReferencesProvider>
+              </OpenPageContext.Provider>
             </CodeCopyButtonContext.Provider>
           </MermaidDiagramContext.Provider>
         </LinkFaviconsContext.Provider>

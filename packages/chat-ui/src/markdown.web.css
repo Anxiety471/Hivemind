@@ -549,3 +549,38 @@ a.rk-chat-link:hover .rk-chat-link-label {
   outline-offset: 2px;
   border-radius: 2px;
 }
+
+/* A ticket named in a message: its ref, underlined like a page title, opening the ticket. */
+.rk-chat-ticket-chip {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2.5px;
+  text-decoration-color: color-mix(in srgb, currentColor 30%, transparent);
+  cursor: pointer;
+}
+
+.rk-chat-ticket-chip:hover {
+  text-decoration-color: color-mix(in srgb, currentColor 50%, transparent);
+}
+
+.rk-chat-ticket-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Code inside a link (a commit SHA) reads as the link's own text, not as a second box. */
+.rk-chat-markdown a.rk-chat-link code {
+  border: 0;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-weight: inherit;
+}

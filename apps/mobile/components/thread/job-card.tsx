@@ -1,10 +1,13 @@
 import { useLingui } from "@lingui/react/macro";
 import { useNow } from "@rakazo/chat-ui/hooks";
+import { resolveJobCommitUrl } from "@rakazo/chat-ui/native";
 import type { MessageBlock } from "@rakazo/contracts";
 import { httpsUrl } from "@rakazo/core";
+import { bestEffort } from "@rakazo/logging";
 import { typeScale } from "@rakazo/ui-tokens";
-import { Linking, Pressable, Text, View } from "react-native";
+import { Linking, Platform, Pressable, Text, View } from "react-native";
 import { mobileTokens } from "../../lib/appearance/appearance";
+import { useChatReferences } from "../../lib/board/chat-references";
 
 type JobBlock = Extract<MessageBlock, { kind: "job" }>;
 
@@ -49,10 +52,16 @@ export function JobCard({ block }: { block: JobBlock }) {
         : tokens.warning;
   const reply = block.reply?.trim();
   const href = httpsUrl(block.url);
+  const { referenceContext } = useChatReferences();
+  const prHref = httpsUrl(block.prUrl);
+  const commitHref = resolveJobCommitUrl(
+    { repo: block.repo, prUrl: block.prUrl, url: block.url, commit: block.commit },
+    referenceContext?.repositories,
+  );
   return (
     <Pressable
       onPress={() => {
-        if (href) Linking.openURL(href).catch(() => undefined);
+        if (href) void bestEffort("open job", Linking.openURL(href));
       }}
       disabled={!href}
       testID="job-card"
@@ -95,6 +104,41 @@ export function JobCard({ block }: { block: JobBlock }) {
             >
               {block.branch}
             </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {block.commit || prHref ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+          {block.commit ? (
+            <Pressable
+              disabled={!commitHref}
+              onPress={() => {
+                if (commitHref) void bestEffort("open commit", Linking.openURL(commitHref));
+              }}
+              accessibilityRole={commitHref ? "link" : "text"}
+              accessibilityLabel={t`Commit ${block.commit.slice(0, 7)}`}
+            >
+              <Text
+                style={{
+                  color: commitHref ? tokens.foreground : tokens.mutedForeground,
+                  fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }),
+                  ...typeScale.caption,
+                }}
+              >
+                {block.commit.slice(0, 7)}
+              </Text>
+            </Pressable>
+          ) : null}
+          {prHref ? (
+            <Pressable
+              onPress={() => void bestEffort("open pull request", Linking.openURL(prHref))}
+              accessibilityRole="link"
+              accessibilityLabel={block.prLabel || t`Pull request`}
+            >
+              <Text style={{ color: tokens.foreground, ...typeScale.caption }}>
+                {block.prLabel || t`Pull request`}
+              </Text>
+            </Pressable>
           ) : null}
         </View>
       ) : null}

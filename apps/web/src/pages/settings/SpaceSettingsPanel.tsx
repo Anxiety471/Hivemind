@@ -7,6 +7,7 @@ import { useSave } from "../../lib/query/query";
 import type { RpcClient } from "../../lib/query/rpc";
 import type { SettingsSpace } from "../shell/create-delete-dialogs";
 import { DeleteSpaceDialog } from "../shell/create-delete-dialogs";
+import { SpaceBoardSettings } from "./SpaceBoardSettings";
 import { SpaceSettingOverrides } from "./SpaceSettingOverrides";
 
 /**
@@ -39,8 +40,9 @@ export function SpaceSettingsPanel({
   const pending = rename.pending;
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [overridesBusy, setOverridesBusy] = useState(false);
+  const [boardBusy, setBoardBusy] = useState(false);
   // A rename in flight holds the dialog open, so a failure is shown instead of lost on leaving.
-  const busy = pending || overridesBusy;
+  const busy = pending || overridesBusy || boardBusy;
   useEffect(() => {
     onBusyChange?.(busy);
   }, [busy, onBusyChange]);
@@ -103,6 +105,7 @@ export function SpaceSettingsPanel({
         </SettingsGroup>
       ) : null}
       <SpaceMembersSettings space={space} onLeft={onLeft} />
+      <SpaceBoardSettings onBusyChange={setBoardBusy} />
       <SpaceSettingOverrides onClose={onClose} onBusyChange={setOverridesBusy} />
       {space.canDelete ? (
         <Button

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
@@ -30,21 +32,86 @@ var prefixPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 
 const prefixPatternSource = "/^[A-Za-z][A-Za-z0-9]*$/"
 
-// Board is BoardSchema (packages/contracts/src/artifacts/board.ts:52-60).
+const (
+	// maxRepositories is BOARD_MAX_REPOSITORIES, maxAliases BOARD_REPOSITORY_MAX_ALIASES and
+	// aliasMaxLength BOARD_REPOSITORY_ALIAS_MAX_LENGTH (packages/contracts/src/artifacts/board.ts).
+	maxRepositories = 20
+	maxAliases      = 10
+	aliasMaxLength  = 40
+	// linkURLMaxLength is TICKET_LINK_URL_MAX_LENGTH, the cap a repository link is checked against.
+	linkURLMaxLength = 500
+	aliasLineMessage = "Alias cannot contain line breaks"
+)
+
+// linkLower is the JavaScript toLowerCase the alias dedupe compares with.
+var linkLower = cases.Lower(language.Und)
+
+// BoardRepository is BoardRepositorySchema (packages/contracts/src/artifacts/board.ts).
+type BoardRepository struct {
+	URL       string   `json:"url"`
+	Aliases   []string `json:"aliases"`
+	IsDefault bool     `json:"isDefault"`
+}
+
+// Board is BoardSchema (packages/contracts/src/artifacts/board.ts).
 type Board struct {
-	ID           string `json:"id"`
-	SpaceID      string `json:"spaceId"`
-	Name         string `json:"name"`
-	TicketPrefix string `json:"ticketPrefix"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
+	ID           string            `json:"id"`
+	SpaceID      string            `json:"spaceId"`
+	Name         string            `json:"name"`
+	TicketPrefix string            `json:"ticketPrefix"`
+	Repositories []BoardRepository `json:"repositories"`
+	CreatedAt    string            `json:"createdAt"`
+	UpdatedAt    string            `json:"updatedAt"`
 }
 
 func dto(row tickets.Board) Board {
 	return Board{
 		ID: row.ID, SpaceID: row.SpaceID, Name: row.Name, TicketPrefix: row.Prefix,
-		CreatedAt: shared.ISO(row.CreatedAt), UpdatedAt: shared.ISO(row.UpdatedAt),
+		Repositories: readRepositories(row.Repositories),
+		CreatedAt:    shared.ISO(row.CreatedAt), UpdatedAt: shared.ISO(row.UpdatedAt),
 	}
+}
+
+// readRepositories is readBoardRepositories: a stored value this release does not know shows no
+// repositories rather than failing the board. It always returns a non-nil slice (JSON `[]`).
+func readRepositories(raw []byte) []BoardRepository {
+	value, err := validate.DecodeAny(raw)
+	if err != nil {
+		return []BoardRepository{}
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return []BoardRepository{}
+	}
+	out := make([]BoardRepository, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(*validate.Object)
+		if !ok {
+			return []BoardRepository{}
+		}
+		url, ok := object.Values["url"].(string)
+		if !ok {
+			return []BoardRepository{}
+		}
+		isDefault, ok := object.Values["isDefault"].(bool)
+		if !ok {
+			return []BoardRepository{}
+		}
+		rawAliases, ok := object.Values["aliases"].([]any)
+		if !ok {
+			return []BoardRepository{}
+		}
+		aliases := make([]string, 0, len(rawAliases))
+		for _, rawAlias := range rawAliases {
+			alias, ok := rawAlias.(string)
+			if !ok {
+				return []BoardRepository{}
+			}
+			aliases = append(aliases, alias)
+		}
+		out = append(out, BoardRepository{URL: url, Aliases: aliases, IsDefault: isDefault})
+	}
+	return out
 }
 
 // gate is the boardEnabled middleware: it runs before the input parse, so an account without the
@@ -111,6 +178,130 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 type renameInput struct {
 	name         *string
 	ticketPrefix *string
+	// repositories is the normalized list when hasRepositories is set (an empty list clears it).
+	hasRepositories bool
+	repositories    []BoardRepository
+}
+
+// repositoryInput is one BoardRepositoryInputSchema value after its url was normalized.
+type repositoryInput struct {
+	url       string
+	aliases   []string
+	isDefault bool
+}
+
+// parseAlias is BoardRepositoryAliasSchema: trimmed 1..40 characters with no line break. zod's
+// refine runs even after a length check failed, so the line-break check always runs on the trimmed
+// text.
+func parseAlias(path validate.Path, raw any) (string, []validate.Issue) {
+	text, problems := validate.String(path, raw, validate.StringRules{Trim: true, Min: 1, Max: aliasMaxLength})
+	if s, ok := raw.(string); ok {
+		if trimmed := validate.JSTrim(s); strings.ContainsAny(trimmed, "\r\n\t") {
+			problems = append(problems, validate.Issue{
+				"code": "custom", "path": path.Raw(), "message": aliasLineMessage,
+			})
+		}
+	}
+	return text, problems
+}
+
+// parseRepositories is `z.array(BoardRepositoryInputSchema).max(BOARD_MAX_REPOSITORIES).optional()`.
+// Each entry's url goes through the repository link rules, its aliases through
+// BOARD_REPOSITORY_MAX_ALIASES and parseAlias, and isDefault defaults to false.
+func parseRepositories(object *validate.Object, found *[]validate.Issue) (bool, []repositoryInput) {
+	v := object.Field("repositories")
+	if v == validate.Undefined {
+		return false, nil
+	}
+	path := validate.Path{"repositories"}
+	items, problems := validate.AsArray(path, v)
+	if problems != nil {
+		*found = append(*found, problems...)
+		return true, nil
+	}
+	if len(items) > maxRepositories {
+		*found = append(*found, validate.ArrayBounds(path, len(items), 0, maxRepositories)...)
+		return true, nil
+	}
+	out := make([]repositoryInput, 0, len(items))
+	for index, item := range items {
+		itemPath := path.With(index)
+		fields, problems := validate.AsObject(item, itemPath)
+		if problems != nil {
+			*found = append(*found, problems...)
+			continue
+		}
+		var entry repositoryInput
+		rawURL, urlProblems := validate.String(itemPath.With("url"), fields.Field("url"),
+			validate.StringRules{Max: linkURLMaxLength})
+		*found = append(*found, urlProblems...)
+		if urlProblems == nil {
+			normalized, ok := tickets.NormalizeRepositoryURL(rawURL)
+			if !ok {
+				*found = append(*found, validate.Issue{
+					"code": "custom", "path": itemPath.With("url").Raw(), "message": tickets.RepositoryURLMessage,
+				})
+			} else {
+				entry.url = normalized
+			}
+		}
+		entry.aliases = []string{}
+		if rawAliases := fields.Field("aliases"); rawAliases != validate.Undefined {
+			aliasPath := itemPath.With("aliases")
+			aliasItems, aliasProblems := validate.AsArray(aliasPath, rawAliases)
+			*found = append(*found, aliasProblems...)
+			if aliasProblems == nil && len(aliasItems) > maxAliases {
+				*found = append(*found, validate.ArrayBounds(aliasPath, len(aliasItems), 0, maxAliases)...)
+			} else if aliasProblems == nil {
+				for aliasIndex, rawAlias := range aliasItems {
+					alias, problems := parseAlias(aliasPath.With(aliasIndex), rawAlias)
+					*found = append(*found, problems...)
+					if problems == nil {
+						entry.aliases = append(entry.aliases, alias)
+					}
+				}
+			}
+		}
+		if rawDefault := fields.Field("isDefault"); rawDefault != validate.Undefined {
+			isDefault, problems := validate.Boolean(itemPath.With("isDefault"), rawDefault)
+			*found = append(*found, problems...)
+			entry.isDefault = isDefault
+		}
+		out = append(out, entry)
+	}
+	return true, out
+}
+
+// normalizeRepositories is normalizeBoardRepositories (packages/contracts/src/artifacts/board.ts):
+// one entry per URL (the first wins, at most maxRepositories), aliases deduplicated
+// case-insensitively with the first casing kept, and only the first default kept.
+func normalizeRepositories(input []repositoryInput) []BoardRepository {
+	seen := make(map[string]bool, len(input))
+	out := make([]BoardRepository, 0, len(input))
+	hasDefault := false
+	for _, entry := range input {
+		if len(out) >= maxRepositories {
+			break
+		}
+		if seen[entry.url] {
+			continue
+		}
+		seen[entry.url] = true
+		aliasKeys := make(map[string]bool, len(entry.aliases))
+		aliases := make([]string, 0, len(entry.aliases))
+		for _, alias := range entry.aliases {
+			key := linkLower.String(alias)
+			if aliasKeys[key] {
+				continue
+			}
+			aliasKeys[key] = true
+			aliases = append(aliases, alias)
+		}
+		isDefault := entry.isDefault && !hasDefault
+		hasDefault = hasDefault || isDefault
+		out = append(out, BoardRepository{URL: entry.url, Aliases: aliases, IsDefault: isDefault})
+	}
+	return out
 }
 
 // parse is RenameBoardInput: a trimmed name of 1..80 or a trimmed 1..12 letter-and-digit prefix,
@@ -147,7 +338,11 @@ func parse(raw orpc.Input) (renameInput, *orpc.Error) {
 		}
 	}
 	// The object's refine runs only when its fields parsed.
-	if found == nil && result.name == nil && result.ticketPrefix == nil {
+	if has, entries := parseRepositories(object, &found); has {
+		result.hasRepositories = true
+		result.repositories = normalizeRepositories(entries)
+	}
+	if found == nil && result.name == nil && result.ticketPrefix == nil && !result.hasRepositories {
 		found = append(found, validate.Issue{
 			"code": "custom", "path": []any{}, "message": "Provide a name or ticketPrefix",
 		})
@@ -186,9 +381,13 @@ func Rename(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		args = append(args, nextPrefix)
 		assignments = append(assignments, `"ticketPrefix" = $`+itoa(len(args)))
 	}
+	if input.hasRepositories {
+		args = append(args, db.JSON(input.repositories))
+		assignments = append(assignments, `repositories = $`+itoa(len(args))+`::jsonb`)
+	}
 	// Nothing to write: Prisma's update with empty data never touches the row, so its updatedAt
 	// stays as it was (a case-only or same-case prefix is not a change).
-	if !changesPrefix && input.name == nil {
+	if !changesPrefix && input.name == nil && !input.hasRepositories {
 		return dto(board), nil
 	}
 	var updated tickets.Board

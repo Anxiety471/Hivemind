@@ -1,6 +1,7 @@
 import { ph } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react/macro";
 import type { SpaceSetting } from "@rakazo/contracts";
+import { hasLab } from "@rakazo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
@@ -11,13 +12,15 @@ import {
   ApprovalModeRow,
   ApprovalRulesRow,
 } from "../../components/settings/approval-settings-rows";
+import { BoardRepositoriesSection } from "../../components/settings/board-repositories-section";
 import { SettingsGroup, SettingsRow } from "../../components/settings/settings-group";
 import { LoadFailure } from "../../components/ui/load-failure";
 import { errorText } from "../../lib/api/user-error";
 import { mobileTokens } from "../../lib/appearance/appearance";
 import { useSideInsets } from "../../lib/layout/side-insets";
 import { native, useThemedStyles } from "../../lib/native/native";
-import { queryClient, rpcQuery, useSave } from "../../lib/query/query";
+import { accountRpcQuery, queryClient, rpcQuery, useSave } from "../../lib/query/query";
+import { useScreenQuery } from "../../lib/query/screen-query";
 import { settingsTarget } from "../../lib/query/settings-target";
 import { useApprovalSettings } from "../../lib/settings/approval-settings";
 
@@ -38,6 +41,7 @@ export default function SpaceSettings() {
   const overridesRead = rpcQuery("spaceSettings/overrides", undefined, space);
   const overridesQuery = useQuery({ ...overridesRead, enabled: isSpace }, queryClient);
   const overrides = overridesQuery.data ?? null;
+  const boardLab = hasLab(useScreenQuery(accountRpcQuery("me")).data?.labs, "board");
   const loadError = overridesQuery.error
     ? errorText(overridesQuery.error, t`Something went wrong. Try again.`)
     : null;
@@ -156,6 +160,9 @@ export default function SpaceSettings() {
               />
             ) : null}
           </SettingsGroup>
+        ) : null}
+        {target.scope === "space" ? (
+          <BoardRepositoriesSection target={target} spaceId={target.spaceId} enabled={boardLab} />
         ) : null}
       </ScrollView>
     </SafeAreaView>

@@ -79,6 +79,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   streaming = false,
   renderMention,
   onOpenPage,
+  onOpenTicket,
   palette = darkTokens,
   colorScheme = "dark",
 }: ChatMarkdownProps & { palette?: ColorTokens; colorScheme?: ResolvedAppearance }) {
@@ -102,8 +103,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   };
 
   const inlineChips = useMemo(
-    () => ({ renderMention, onOpenPage, palette }),
-    [renderMention, onOpenPage, palette],
+    () => ({ renderMention, onOpenPage, onOpenTicket, palette }),
+    [renderMention, onOpenPage, onOpenTicket, palette],
   );
   return (
     <OpenLinkContext.Provider value={openLink}>
@@ -142,3 +143,18 @@ export { RemoteMarkdownImage } from "./native/images";
 export { LinkifiedText } from "./native/linkified-text";
 export { useNativeLinkConfirm } from "./native/links";
 export { MarkdownLongPressContext } from "./native/sideways-scroll";
+export type {
+  ChatJobReference,
+  ChatReferenceContext,
+  ChatRepository,
+  ChatTicketReference,
+} from "./references";
+export {
+  deriveRepositoryBaseUrl,
+  markdownTicketRef,
+  repositoryCommitUrl,
+  repositoryPullRequestUrl,
+  resolveJobCommitUrl,
+  withBlockChatReferences,
+  withChatReferences,
+} from "./references";

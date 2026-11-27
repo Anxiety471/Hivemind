@@ -280,7 +280,13 @@ function sourceRecords(): AccountExportRecord[] {
       files: null,
       createdAt: at,
     },
-    { type: "board", id: "src-board", name: "Board", ticketPrefix: "ADA" },
+    {
+      type: "board",
+      id: "src-board",
+      name: "Board",
+      ticketPrefix: "ADA",
+      repositories: [{ url: "https://github.com/acme/app", aliases: ["app"], isDefault: true }],
+    },
     {
       type: "ticket",
       id: "src-ticket",

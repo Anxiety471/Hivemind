@@ -85,6 +85,7 @@ import type { ChatMenuState, ChatMenuTarget } from "./shell/chat/chat-context-me
 import { ChatContextMenu } from "./shell/chat/chat-context-menu";
 import { ChatFindBar } from "./shell/chat/chat-find-bar";
 import { ChatHeader } from "./shell/chat/chat-header";
+import { ChatReferencesProvider } from "./shell/chat/chat-references";
 import { FALLBACK_BOT_COLOR } from "./shell/chat/chat-shared";
 import { HelperThreadView } from "./shell/chat/helper-thread-view";
 import { Transcript } from "./shell/chat/transcript";
@@ -1609,7 +1610,9 @@ function SpaceShell() {
   return (
     <SpaceRpcProvider spaceId={shellSpaceId}>
       {initialBotsLoaded || initialLoadFailed ? (
-        <PagesProvider value={pages}>{shell}</PagesProvider>
+        <PagesProvider value={pages}>
+          <ChatReferencesProvider>{shell}</ChatReferencesProvider>
+        </PagesProvider>
       ) : (
         <PageLoading />
       )}

@@ -1,7 +1,8 @@
 import { plural } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { useNow } from "@rakazo/chat-ui/hooks";
-import { ChatMarkdown } from "@rakazo/chat-ui/web";
+import type { ChatRepository } from "@rakazo/chat-ui/web";
+import { ChatMarkdown, resolveJobCommitUrl } from "@rakazo/chat-ui/web";
 import type { JobCardFile, JobCardStats, JobCardStep, MessageBlock } from "@rakazo/contracts";
 import { httpsUrl } from "@rakazo/core";
 import { Button, cn, writeClipboard } from "@rakazo/ui-web";
@@ -647,10 +648,13 @@ function JobIcon({ block }: { block: JobBlock }) {
  */
 export function JobCard({
   block,
+  repositories,
   readOnly = false,
   onJobAction,
 }: {
   block: JobBlock;
+  /** The Space's board repositories, which link a commit when the job's own address does not. */
+  repositories?: readonly ChatRepository[];
   /** A helper's own thread: the card shows its job but never acts on it. */
   readOnly?: boolean;
   /** Sends text into the chat's own thread, as if the reader had typed it there. */
@@ -685,6 +689,7 @@ export function JobCard({
   const reply = block.reply?.trim();
   const href = jobOpenUrl(block.url, block.jobId);
   const prHref = httpsUrl(block.prUrl);
+  const commitHref = resolveJobCommitUrl(block, repositories);
   const files = block.files ?? [];
   const steps = block.steps ?? [];
   const stats = block.stats;
@@ -755,25 +760,44 @@ export function JobCard({
   const toggleComposer = () => setComposerOpen((current) => !current);
 
   const agentLine = [block.agent, block.model, block.effort].filter(Boolean).join(" · ");
+  const commitAnchor =
+    block.commit && commitHref ? (
+      <a
+        href={commitHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-testid="job-commit-link"
+        className="font-mono underline-offset-2 hover:underline"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {block.commit.slice(0, 7)}
+      </a>
+    ) : null;
+  // A branch chip is a button, which cannot hold a link, so a linked commit sits beside it.
   const branchOrCommit = block.branch ? (
-    <MetaChip
-      icon={branchCopied ? <Check /> : <GitBranch />}
-      title={branchCopied ? t`Branch copied` : t`Copy branch name`}
-      testId="job-meta-branch"
-      onClick={() => copyBranch(block.branch!)}
-    >
-      <span className="min-w-0 truncate font-mono" dir="auto">
-        {block.branch}
-      </span>
-      {block.commit ? (
-        <span className="shrink-0 font-mono text-caption text-muted-foreground/70">
-          {block.commit.slice(0, 7)}
+    <>
+      <MetaChip
+        icon={branchCopied ? <Check /> : <GitBranch />}
+        title={branchCopied ? t`Branch copied` : t`Copy branch name`}
+        testId="job-meta-branch"
+        onClick={() => copyBranch(block.branch!)}
+      >
+        <span className="min-w-0 truncate font-mono" dir="auto">
+          {block.branch}
         </span>
+        {block.commit && !commitHref ? (
+          <span className="shrink-0 font-mono text-caption text-muted-foreground/70">
+            {block.commit.slice(0, 7)}
+          </span>
+        ) : null}
+      </MetaChip>
+      {commitAnchor ? (
+        <span className="shrink-0 text-caption text-muted-foreground">{commitAnchor}</span>
       ) : null}
-    </MetaChip>
+    </>
   ) : block.commit ? (
     <MetaChip icon={<GitBranch />} testId="job-meta-commit">
-      <span className="font-mono">{block.commit.slice(0, 7)}</span>
+      {commitAnchor ?? <span className="font-mono">{block.commit.slice(0, 7)}</span>}
     </MetaChip>
   ) : null;
   const leadingMeta = (

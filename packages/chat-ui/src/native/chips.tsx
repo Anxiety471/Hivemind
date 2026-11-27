@@ -8,9 +8,11 @@ import { Text, View } from "react-native";
 import type { ChatMarkdownProps } from "../markdown";
 import { PAGE_ICON } from "../page-icon";
 
-/** What a chip in the text does: a mention's rendering, and opening a linked page. */
+/** What a chip in the text does: a mention's rendering, and opening a linked page or ticket. */
 export const InlineChipsContext = createContext<
-  Pick<ChatMarkdownProps, "renderMention" | "onOpenPage"> & { palette: ColorTokens }
+  Pick<ChatMarkdownProps, "renderMention" | "onOpenPage" | "onOpenTicket"> & {
+    palette: ColorTokens;
+  }
 >({ palette: darkTokens });
 
 export function MarkdownMention({
@@ -113,6 +115,29 @@ export function PageIcon({
         />
       ))}
     </View>
+  );
+}
+
+/** A ticket named in the text: its ref, which opens the ticket when a handler is set. */
+export function MarkdownTicketChip({
+  ticketRef,
+  children,
+  titleStyle,
+  onOpenTicket,
+}: {
+  ticketRef: string;
+  children: ReactNode;
+  titleStyle: MarkdownStyleMap[string];
+  /** A user bubble's opener; Markdown reads it from the message. */
+  onOpenTicket?: (ticketRef: string) => void;
+}) {
+  const { onOpenTicket: fromMessage } = useContext(InlineChipsContext);
+  const openTicket = onOpenTicket ?? fromMessage;
+  if (!openTicket) return <Text>{children}</Text>;
+  return (
+    <Text accessibilityRole="link" style={titleStyle} onPress={() => openTicket(ticketRef)}>
+      {children}
+    </Text>
   );
 }
 

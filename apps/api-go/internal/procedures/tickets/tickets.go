@@ -100,17 +100,19 @@ func Enabled(ctx context.Context, tx pgx.Tx, deployment shared.Deployment, userI
 type Board struct {
 	ID, SpaceID, Name, Prefix string
 	NextNumber                int64
-	CreatedAt, UpdatedAt      time.Time
+	// Repositories is the raw repositories jsonb, read by the boards DTO.
+	Repositories         []byte
+	CreatedAt, UpdatedAt time.Time
 }
 
 // BoardColumns is the select list every boards row is read with.
-const BoardColumns = `id, "spaceId", name, "ticketPrefix", "nextNumber", "createdAt", "updatedAt"`
+const BoardColumns = `id, "spaceId", name, "ticketPrefix", "nextNumber", repositories, "createdAt", "updatedAt"`
 
 // ScanBoard reads one boards row.
 func ScanBoard(row pgx.Row) (Board, error) {
 	var board Board
 	err := row.Scan(&board.ID, &board.SpaceID, &board.Name, &board.Prefix, &board.NextNumber,
-		&board.CreatedAt, &board.UpdatedAt)
+		&board.Repositories, &board.CreatedAt, &board.UpdatedAt)
 	return board, err
 }
 
@@ -366,6 +368,12 @@ func normalizePullRequestURL(value string) (string, bool) {
 func normalizeIssueURL(value string) (string, bool) {
 	return normalizeTicketItemURL(value, true)
 }
+
+// NormalizeRepositoryURL is normalizeRepositoryUrl for the boards package's repository list.
+func NormalizeRepositoryURL(value string) (string, bool) { return normalizeRepositoryURL(value) }
+
+// RepositoryURLMessage is the message TicketRepositoryInputSchema raises for a bad link.
+const RepositoryURLMessage = repositoryURLMessage
 
 // normalizeRepositoryURL is normalizeRepositoryUrl: the one form a repository link is stored in
 // (lowercase, https, the repository path without a trailing ".git" or slash), or false when the

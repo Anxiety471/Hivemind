@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { BoardRepositorySchema } from "../artifacts/board.js";
 import { PageSourceSchema, PageTitleSchema } from "../artifacts/pages.js";
 import { BotSchema } from "../bots/bot.js";
 import { BotAvatarSetSchema } from "../bots/bot-avatar.js";
@@ -226,6 +227,8 @@ export const AccountExportRecordSchema = z.discriminatedUnion("type", [
     id: Id,
     name: z.string(),
     ticketPrefix: z.string(),
+    /** Older exports predate board repositories and read as none. */
+    repositories: z.array(BoardRepositorySchema).optional().default([]),
   }),
   z.object({
     type: z.literal("ticket"),

@@ -12,12 +12,13 @@ import {
   linkLabel,
   markdownMentionId,
   markdownPageId,
+  markdownTicketRef,
   remoteMarkdownImage,
   sanitizeMarkdownUrl,
 } from "../markdown";
 import { isMermaidFence } from "../mermaid";
 import { astText, cellPlainText, enclosingLink, soleRemoteImage } from "./ast";
-import { MarkdownMention, MarkdownPageChip } from "./chips";
+import { MarkdownMention, MarkdownPageChip, MarkdownTicketChip } from "./chips";
 import { CodeFence, CodeScrollView, MermaidFence, ProseFence } from "./code";
 import { contraryDirection } from "./direction";
 import { FitImage, LinkedRemoteImage, RemoteMarkdownImage } from "./images";
@@ -164,6 +165,18 @@ function renderMarkdownLink(
       <MarkdownPageChip key={node.key} pageId={pageId} titleStyle={styleMap.page_chip_title}>
         {children}
       </MarkdownPageChip>
+    );
+  }
+  const ticketRef = markdownTicketRef(node.attributes.href);
+  if (ticketRef) {
+    return (
+      <MarkdownTicketChip
+        key={node.key}
+        ticketRef={ticketRef}
+        titleStyle={styleMap.page_chip_title}
+      >
+        {children}
+      </MarkdownTicketChip>
     );
   }
   const mentionId = markdownMentionId(node.attributes.href);

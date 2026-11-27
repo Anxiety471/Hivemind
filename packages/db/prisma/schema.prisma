@@ -2672,6 +2672,7 @@ model Board {
   name         String   @default("Board")
   ticketPrefix String   @default("TASK")
   nextNumber   Int      @default(1)
+  repositories Json     @default("[]")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   tickets      Ticket[]

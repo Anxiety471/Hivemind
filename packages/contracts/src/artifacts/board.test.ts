@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  BoardRepositoryInputSchema,
   CreateTicketInput,
   DecideTicketInput,
   GetTicketInput,
   hasPendingTicketDecision,
   isTicketCompletedStatus,
   mergeTicketLinks,
+  normalizeBoardRepositories,
   normalizeIssueUrl,
   normalizePullRequestUrl,
   normalizeRepositoryUrl,
   normalizeTicketDecision,
   parseTicketRef,
   pullRequestMergeFinishesTicket,
+  RenameBoardInput,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TicketDecisionInputSchema,
@@ -363,5 +366,100 @@ describe("ticket contracts", () => {
     expect(() =>
       DecideTicketInput.parse({ ticketId: "t1", optionId: "opt_1", customAnswer: "Both" }),
     ).toThrow();
+  });
+});
+
+describe("BoardRepositoryInputSchema", () => {
+  it("normalizes the link and fills in the optional aliases and default flag", () => {
+    expect(BoardRepositoryInputSchema.parse({ url: " HTTPS://GitHub.com/Acme/App.git/ " })).toEqual(
+      { url: "https://github.com/acme/app", aliases: [], isDefault: false },
+    );
+  });
+
+  it("refuses a link that is not a repository", () => {
+    expect(
+      BoardRepositoryInputSchema.safeParse({ url: "https://github.com/acme/app/pull/12" }).success,
+    ).toBe(false);
+  });
+
+  it("trims aliases and refuses line breaks, tabs, blanks and long aliases", () => {
+    expect(
+      BoardRepositoryInputSchema.parse({ url: "https://github.com/a/b", aliases: [" web "] })
+        .aliases,
+    ).toEqual(["web"]);
+    for (const alias of ["a\nb", "a\tb", "a\rb", "   ", "x".repeat(41)]) {
+      expect(
+        BoardRepositoryInputSchema.safeParse({ url: "https://github.com/a/b", aliases: [alias] })
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it("caps the aliases at ten", () => {
+    const aliases = Array.from({ length: 11 }, (_, index) => `alias-${index}`);
+    expect(
+      BoardRepositoryInputSchema.safeParse({ url: "https://github.com/a/b", aliases }).success,
+    ).toBe(false);
+  });
+});
+
+describe("normalizeBoardRepositories", () => {
+  const url = "https://github.com/acme/app";
+
+  it("keeps the first entry for a repeated URL", () => {
+    expect(
+      normalizeBoardRepositories([
+        { url, aliases: ["first"], isDefault: false },
+        { url, aliases: ["second"], isDefault: true },
+      ]),
+    ).toEqual([{ url, aliases: ["first"], isDefault: false }]);
+  });
+
+  it("trims aliases and dedupes them case-insensitively, keeping the first casing", () => {
+    expect(
+      normalizeBoardRepositories([
+        { url, aliases: [" Web", "web ", "WEB", "API"], isDefault: false },
+      ])[0]?.aliases,
+    ).toEqual(["Web", "API"]);
+  });
+
+  it("keeps only the first default", () => {
+    const result = normalizeBoardRepositories([
+      { url, aliases: [], isDefault: false },
+      { url: "https://gitlab.com/g/a/b", aliases: [], isDefault: true },
+      { url: "https://github.com/x/y", aliases: [], isDefault: true },
+    ]);
+    expect(result.map((item) => item.isDefault)).toEqual([false, true, false]);
+  });
+
+  it("caps the list at twenty repositories", () => {
+    const input = Array.from({ length: 25 }, (_, index) => ({
+      url: `https://github.com/acme/repo-${index}`,
+      aliases: [],
+      isDefault: false,
+    }));
+    expect(normalizeBoardRepositories(input)).toHaveLength(20);
+  });
+});
+
+describe("RenameBoardInput repositories", () => {
+  it("accepts a repositories-only rename", () => {
+    expect(
+      RenameBoardInput.safeParse({ repositories: [{ url: "https://github.com/a/b" }] }).success,
+    ).toBe(true);
+    expect(RenameBoardInput.safeParse({ repositories: [] }).success).toBe(true);
+  });
+
+  it("still requires at least one field", () => {
+    const result = RenameBoardInput.safeParse({});
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toBe("Provide a name or ticketPrefix");
+  });
+
+  it("refuses more than twenty repositories", () => {
+    const repositories = Array.from({ length: 21 }, (_, index) => ({
+      url: `https://github.com/acme/repo-${index}`,
+    }));
+    expect(RenameBoardInput.safeParse({ repositories }).success).toBe(false);
   });
 });

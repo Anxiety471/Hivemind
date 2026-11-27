@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import type { Board } from "@rakazo/contracts";
+import { ticketLinkLabel } from "@rakazo/contracts";
 import type { Deferred } from "@rakazo/core/test-async";
 import { deferred } from "@rakazo/core/test-async";
 import type { ComponentProps, ReactNode } from "react";
@@ -50,7 +52,10 @@ vi.mock("../../components/spaces/SpaceMembersSettings", () => ({
   SpaceMembersSettings: () => <div data-testid="space-members-settings" />,
 }));
 
-const client = vi.hoisted(() => ({ spaces: {} }));
+const client = vi.hoisted(() => ({
+  spaces: {},
+  boards: { get: vi.fn(), list: vi.fn(), rename: vi.fn() },
+}));
 vi.mock("../../lib/query/rpc", () => ({
   rpc: client,
   rpcForSpace: () => client,
@@ -58,6 +63,7 @@ vi.mock("../../lib/query/rpc", () => ({
   selectedSpaceId: () => null,
 }));
 
+import { setLabs } from "../../lib/bootstrap";
 import { SpaceSettingsPanel } from "./SpaceSettingsPanel";
 
 let container: HTMLDivElement;
@@ -243,5 +249,125 @@ describe("SpaceSettingsPanel", () => {
     await render({});
     await click("Delete space");
     expect(container.querySelector("h2")?.textContent).toBe("Delete Support?");
+  });
+});
+
+const REPO_A = "https://example.com/owner/a";
+const REPO_B = "https://example.com/owner/b";
+
+function board(repositories: Board["repositories"]): Board {
+  return {
+    id: "board-a",
+    spaceId: "space-a",
+    name: "Board",
+    ticketPrefix: "TASK",
+    repositories,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+async function fill(label: string, value: string) {
+  const input = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+  if (!input) throw new Error(`Missing ${label}`);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function submitRepository() {
+  const form = container.querySelector("form[data-testid='space-board-repository-form']");
+  if (!form) throw new Error("Missing repository form");
+  await act(async () => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function renderWithBoard(repositories: Board["repositories"]) {
+  client.boards.get.mockResolvedValue(board(repositories));
+  client.boards.rename.mockResolvedValue(board(repositories));
+  await render({});
+  await act(async () => {
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-testid="space-board-repositories"]')).not.toBeNull(),
+    );
+  });
+}
+
+describe("SpaceSettingsPanel repositories", () => {
+  beforeEach(() => {
+    setLabs(["board"]);
+    client.boards.get.mockReset();
+    client.boards.rename.mockReset();
+  });
+  afterEach(() => setLabs([]));
+
+  it("is hidden while the board lab is off", async () => {
+    setLabs([]);
+    await render({});
+    expect(container.querySelector('[data-testid="space-board-repositories"]')).toBeNull();
+    expect(client.boards.get).not.toHaveBeenCalled();
+  });
+
+  it("saves an added repository in normalized form, as the default when none is set", async () => {
+    await renderWithBoard([]);
+    await fill("Repository URL", "https://Example.com/Owner/Repo.git");
+    await fill("Aliases (comma-separated)", "api, repo, ,");
+    await submitRepository();
+    expect(client.boards.rename).toHaveBeenCalledWith({
+      repositories: [
+        { url: "https://example.com/owner/repo", aliases: ["api", "repo"], isDefault: true },
+      ],
+    });
+  });
+
+  it("adds after the existing repositories and keeps their default", async () => {
+    await renderWithBoard([{ url: REPO_A, aliases: ["alpha"], isDefault: true }]);
+    await fill("Repository URL", REPO_B);
+    await submitRepository();
+    expect(client.boards.rename).toHaveBeenCalledWith({
+      repositories: [
+        { url: REPO_A, aliases: ["alpha"], isDefault: true },
+        { url: REPO_B, aliases: [], isDefault: false },
+      ],
+    });
+  });
+
+  it("marks another repository as the default", async () => {
+    await renderWithBoard([
+      { url: REPO_A, aliases: [], isDefault: true },
+      { url: REPO_B, aliases: [], isDefault: false },
+    ]);
+    await click("Make default");
+    expect(client.boards.rename).toHaveBeenCalledWith({
+      repositories: [
+        { url: REPO_A, aliases: [], isDefault: false },
+        { url: REPO_B, aliases: [], isDefault: true },
+      ],
+    });
+  });
+
+  it("removes a repository and hands the default to the one left", async () => {
+    await renderWithBoard([
+      { url: REPO_A, aliases: [], isDefault: true },
+      { url: REPO_B, aliases: ["bee"], isDefault: false },
+    ]);
+    await click(`Remove ${ticketLinkLabel(REPO_A)}`);
+    expect(client.boards.rename).toHaveBeenCalledWith({
+      repositories: [{ url: REPO_B, aliases: ["bee"], isDefault: true }],
+    });
+  });
+
+  it("explains a link that is not a repository and saves nothing", async () => {
+    await renderWithBoard([]);
+    await fill("Repository URL", "not a repository");
+    await submitRepository();
+    expect(client.boards.rename).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "Use a repository link such as https://example.com/owner/repo.",
+    );
   });
 });

@@ -965,3 +965,39 @@ describe("web markdown parser failure", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("web markdown ticket and commit links", () => {
+  it("draws a ticket as a button that opens it and a commit SHA as a link", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const openTicket = vi.fn();
+    const sha = "ffc2c036f5804d114af39ea6b91c8a75b9cbe55b";
+    const markdown = `Ticket [TASK-397](rakazo-ticket:TASK-397) and [\`ffc2c036\`](<https://git.example.test/acme/hivemind/commit/${sha}>)`;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<ChatMarkdown onOpenTicket={openTicket}>{markdown}</ChatMarkdown>);
+    });
+    const chip = container.querySelector<HTMLButtonElement>("button.rk-chat-ticket-chip");
+    expect(chip?.textContent).toBe("TASK-397");
+    const commit = container.querySelector<HTMLAnchorElement>("a code");
+    expect(commit?.textContent).toBe("ffc2c036");
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(
+      `https://git.example.test/acme/hivemind/commit/${sha}`,
+    );
+    await act(async () => {
+      chip!.click();
+    });
+    expect(openTicket).toHaveBeenCalledWith("TASK-397");
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+
+    const html = renderToStaticMarkup(
+      <ChatMarkdown>{"[TASK-397](rakazo-ticket:TASK-397)"}</ChatMarkdown>,
+    );
+    expect(html).toContain("<span>TASK-397</span>");
+    expect(html).not.toContain("<button");
+  });
+});

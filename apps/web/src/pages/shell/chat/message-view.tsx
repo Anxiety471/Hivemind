@@ -1,6 +1,12 @@
 import { plural } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
-import { ChatMarkdown, LinkifiedText, withBlockMentions } from "@rakazo/chat-ui/web";
+import type { ChatJobReference, ChatReferenceContext } from "@rakazo/chat-ui/web";
+import {
+  ChatMarkdown,
+  LinkifiedText,
+  withBlockChatReferences,
+  withBlockMentions,
+} from "@rakazo/chat-ui/web";
 import type {
   BotAvatarSet,
   ComputerReleaseReason,
@@ -56,6 +62,7 @@ import type { createSpaceRpc } from "../../../lib/query/rpc";
 import type { ImportSetupTarget } from "../bots/import-setup-card";
 import { ImportSetupCard } from "../bots/import-setup-card";
 import { ReplyLine } from "./chat-context";
+import { useChatReferences, useOpenTicket } from "./chat-references";
 import { FALLBACK_BOT_COLOR, previewMessageText } from "./chat-shared";
 import {
   AppConnectCard,
@@ -110,6 +117,7 @@ export const MessageView = memo(function MessageView({
   markedUnread = false,
   onReact,
   onJobAction,
+  threadJobs,
 }: {
   artifactTarget: ArtifactTarget;
   canAnswer: boolean;
@@ -141,6 +149,8 @@ export const MessageView = memo(function MessageView({
   readOnly?: boolean;
   /** Sends text into this chat's thread, as if the reader had typed it, from a job card. */
   onJobAction?: (text: string) => Promise<void>;
+  /** The thread's job and cloud agent cards, so a reference to their commit or PR links here too. */
+  threadJobs?: readonly ChatJobReference[];
   /** The adjacent receipts represented by this peer line. */
   peerExchange?: PeerExchange;
   speakerName?: string;
@@ -197,17 +207,34 @@ export const MessageView = memo(function MessageView({
   const isLive = message.id.startsWith("progress:");
   const quoteMessageId = message.id.includes(":") ? undefined : message.id;
 
+  const { referenceContext } = useChatReferences();
+  const openTicket = useOpenTicket();
+  // The board's references plus the commits and PRs of this thread's job cards (and this message's).
+  const effectiveReferenceContext = useMemo<ChatReferenceContext | undefined>(() => {
+    const ownJobs = message.blocks.filter(
+      (block) => block.kind === "job" || block.kind === "cloud_agent",
+    );
+    const jobs = [
+      ...(threadJobs ?? []),
+      ...ownJobs.filter((block) => !threadJobs?.includes(block)),
+    ];
+    if (!referenceContext && jobs.length === 0) return undefined;
+    return { ...referenceContext, jobs };
+  }, [referenceContext, threadJobs, message.blocks]);
+
   // Only what is drawn names the mentioned bots; copy, quote, and speech keep the original text.
-  const blocks = useMemo(
-    () =>
-      mentions?.length
-        ? withBlockMentions(
-            message.blocks,
-            mentions.map((bot) => ({ id: bot.botId, name: bot.name })),
-          )
-        : message.blocks,
-    [message.blocks, mentions],
-  );
+  // A person's own text links its references in the bubble instead, from the plain text itself.
+  const blocks = useMemo(() => {
+    const mentioned = mentions?.length
+      ? withBlockMentions(
+          message.blocks,
+          mentions.map((bot) => ({ id: bot.botId, name: bot.name })),
+        )
+      : message.blocks;
+    return effectiveReferenceContext && message.role !== "user"
+      ? withBlockChatReferences(mentioned, effectiveReferenceContext)
+      : mentioned;
+  }, [message.blocks, message.role, mentions, effectiveReferenceContext]);
   const openPage = useOpenPage();
   const pageCards = pages?.length ? (
     <div className="mt-3 flex flex-col gap-3">
@@ -401,6 +428,7 @@ export const MessageView = memo(function MessageView({
                         streaming={block.kind === "progress"}
                         renderMention={renderMention}
                         onOpenPage={openPage}
+                        onOpenTicket={openTicket}
                       >
                         {block.text}
                       </ChatMarkdown>
@@ -548,7 +576,12 @@ export const MessageView = memo(function MessageView({
                   className="max-w-full text-body-lg text-foreground"
                   dir="auto"
                 >
-                  <ChatMarkdown streaming renderMention={renderMention} onOpenPage={openPage}>
+                  <ChatMarkdown
+                    streaming
+                    renderMention={renderMention}
+                    onOpenPage={openPage}
+                    onOpenTicket={openTicket}
+                  >
                     {block.text}
                   </ChatMarkdown>
                 </div>
@@ -700,7 +733,13 @@ export const MessageView = memo(function MessageView({
                   )}
                   dir="auto"
                 >
-                  <LinkifiedText onOpenPage={openPage}>{block.text}</LinkifiedText>
+                  <LinkifiedText
+                    onOpenPage={openPage}
+                    onOpenTicket={openTicket}
+                    referenceContext={effectiveReferenceContext}
+                  >
+                    {block.text}
+                  </LinkifiedText>
                 </div>
                 {i === hoverAnchorIndex ? hoverActions : null}
               </div>
@@ -718,7 +757,11 @@ export const MessageView = memo(function MessageView({
                   dir="auto"
                 >
                   <div data-quote-message-id={quoteMessageId}>
-                    <ChatMarkdown renderMention={renderMention} onOpenPage={openPage}>
+                    <ChatMarkdown
+                      renderMention={renderMention}
+                      onOpenPage={openPage}
+                      onOpenTicket={openTicket}
+                    >
                       {block.text}
                     </ChatMarkdown>
                   </div>
@@ -796,6 +839,7 @@ export const MessageView = memo(function MessageView({
               <JobCard
                 key={i}
                 block={block}
+                repositories={effectiveReferenceContext?.repositories}
                 readOnly={readOnly}
                 onJobAction={readOnly ? undefined : onJobAction}
               />

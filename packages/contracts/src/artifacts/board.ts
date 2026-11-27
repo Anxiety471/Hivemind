@@ -273,11 +273,73 @@ export function parseTicketRef(
   return { prefix, number };
 }
 
+export const BOARD_MAX_REPOSITORIES = 20;
+export const BOARD_REPOSITORY_MAX_ALIASES = 10;
+export const BOARD_REPOSITORY_ALIAS_MAX_LENGTH = 40;
+
+export const BoardRepositoryAliasSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(BOARD_REPOSITORY_ALIAS_MAX_LENGTH)
+  .refine((value) => !/[\r\n\t]/.test(value), "Alias cannot contain line breaks");
+
+export const BoardRepositorySchema = z.object({
+  url: z.string(),
+  aliases: z.array(z.string()),
+  isDefault: z.boolean(),
+});
+export type BoardRepository = z.infer<typeof BoardRepositorySchema>;
+
+export const BoardRepositoryInputSchema = z.object({
+  url: TicketRepositoryInputSchema,
+  aliases: z
+    .array(BoardRepositoryAliasSchema)
+    .max(BOARD_REPOSITORY_MAX_ALIASES)
+    .optional()
+    .default([]),
+  isDefault: z.boolean().optional().default(false),
+});
+export type BoardRepositoryInput = z.infer<typeof BoardRepositoryInputSchema>;
+
+/**
+ * The one form a board's repositories are stored in: one entry per repository URL (the first
+ * wins), aliases trimmed and deduplicated case-insensitively (first casing kept), and at most one
+ * default (the first marked one).
+ */
+export function normalizeBoardRepositories(
+  input: readonly z.output<typeof BoardRepositoryInputSchema>[],
+): BoardRepository[] {
+  const seen = new Set<string>();
+  const out: BoardRepository[] = [];
+  let hasDefault = false;
+  for (const entry of input) {
+    if (out.length >= BOARD_MAX_REPOSITORIES) break;
+    if (seen.has(entry.url)) continue;
+    seen.add(entry.url);
+    const aliasKeys = new Set<string>();
+    const aliases: string[] = [];
+    for (const alias of entry.aliases) {
+      const trimmed = alias.trim();
+      const key = trimmed.toLowerCase();
+      if (aliasKeys.has(key)) continue;
+      aliasKeys.add(key);
+      aliases.push(trimmed);
+    }
+    const isDefault: boolean = entry.isDefault && !hasDefault;
+    hasDefault = hasDefault || isDefault;
+    out.push({ url: entry.url, aliases, isDefault });
+  }
+  return out;
+}
+
 export const BoardSchema = z.object({
   id: Id,
   spaceId: Id,
   name: z.string(),
   ticketPrefix: z.string(),
+  /** Repositories the board's work lives in, the default first when one is marked. */
+  repositories: z.array(BoardRepositorySchema),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -287,10 +349,15 @@ export const RenameBoardInput = z
   .object({
     name: z.string().trim().min(1).max(80).optional(),
     ticketPrefix: TicketPrefixSchema.optional(),
+    repositories: z.array(BoardRepositoryInputSchema).max(BOARD_MAX_REPOSITORIES).optional(),
   })
-  .refine((value) => value.name !== undefined || value.ticketPrefix !== undefined, {
-    message: "Provide a name or ticketPrefix",
-  });
+  .refine(
+    (value) =>
+      value.name !== undefined ||
+      value.ticketPrefix !== undefined ||
+      value.repositories !== undefined,
+    { message: "Provide a name or ticketPrefix" },
+  );
 export type RenameBoardInput = z.infer<typeof RenameBoardInput>;
 
 export const TicketCommentSchema = z.object({

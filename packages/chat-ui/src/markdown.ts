@@ -9,6 +9,10 @@ import { createContext, useContext, useEffect, useSyncExternalStore } from "reac
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
+import type { ChatReferenceContext } from "./references";
+import { planPlainChatReferences } from "./references";
+
+export { markdownTicketRef } from "./references";
 
 export type ChatMarkdownProps = {
   children: string;
@@ -17,6 +21,8 @@ export type ChatMarkdownProps = {
   renderMention?: (id: string, name: string) => ReactNode;
   /** Opens a page linked as `[title](page:<pageId>)`; without it the title stays plain text. */
   onOpenPage?: (pageId: string) => void;
+  /** Opens a ticket linked as `[TASK-1](rakazo-ticket:TASK-1)`; without it the ticket stays plain text. */
+  onOpenTicket?: (ticketRef: string) => void;
 };
 
 const PAGE_URL_PATTERN = /^page:([A-Za-z0-9_-]{1,64})$/;
@@ -216,7 +222,8 @@ const safeProtocols = new Set(["http", "https", "mailto", "tel"]);
 export type PlainTextPart =
   | { type: "text"; value: string }
   | { type: "link"; value: string; href: string }
-  | { type: "page"; value: string; pageId: string };
+  | { type: "page"; value: string; pageId: string }
+  | { type: "ticket"; value: string; ticketRef: string };
 
 // The link pageReply puts before a sent reply: `[title](page:<pageId>)`, title brackets escaped.
 // The bound fits any escaped title and keeps unclosed brackets from rescanning the message.
@@ -237,7 +244,8 @@ function appendPlainText(parts: PlainTextPart[], value: string) {
  * page as it does in bot messages. Links use the bot messages' autolinker, so a balanced
  * parenthesis stays inside the URL and one wrapping the prose does not.
  */
-export function plainTextLinkParts(text: string): PlainTextPart[] {
+export function plainTextLinkParts(text: string, context?: ChatReferenceContext): PlainTextPart[] {
+  if (context) return referenceLinkParts(text, context);
   const parts: PlainTextPart[] = [];
   let cursor = 0;
   for (const match of text.matchAll(PLAIN_PAGE_LINK)) {
@@ -249,6 +257,47 @@ export function plainTextLinkParts(text: string): PlainTextPart[] {
   if (cursor === 0) return urlLinkParts(text);
   if (cursor < text.length) parts.push(...urlLinkParts(text.slice(cursor)));
   return parts;
+}
+
+/** Pages, URLs, then tickets, pull requests and commit SHAs the context resolves; text stays exact. */
+function referenceLinkParts(text: string, context: ChatReferenceContext): PlainTextPart[] {
+  const pieces: { start: number; end: number; part: PlainTextPart }[] = [];
+  const skips: { start: number; end: number }[] = [];
+  for (const match of text.matchAll(PLAIN_PAGE_LINK)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    skips.push({ start, end });
+    const value = match[1]!.replace(/\\([\\[\]])/g, "$1");
+    pieces.push({ start, end, part: { type: "page", value, pageId: match[2]! } });
+  }
+  for (const match of plainTextLinkify.match(text) ?? []) {
+    if (match.lastIndex <= match.index) continue;
+    const start = match.index;
+    const end = match.lastIndex;
+    skips.push({ start, end });
+    const href = sanitizeMarkdownUrl(match.url);
+    if (!href || pieces.some((piece) => start < piece.end && end > piece.start)) continue;
+    pieces.push({ start, end, part: { type: "link", value: text.slice(start, end), href } });
+  }
+  for (const reference of planPlainChatReferences(text, skips, context)) {
+    const value = text.slice(reference.start, reference.end);
+    const part: PlainTextPart =
+      reference.kind === "ticket"
+        ? { type: "ticket", value, ticketRef: reference.ticketRef }
+        : { type: "link", value, href: reference.href };
+    pieces.push({ start: reference.start, end: reference.end, part });
+  }
+  pieces.sort((a, b) => a.start - b.start);
+  const parts: PlainTextPart[] = [];
+  let cursor = 0;
+  for (const piece of pieces) {
+    if (piece.start < cursor) continue;
+    appendPlainText(parts, text.slice(cursor, piece.start));
+    parts.push(piece.part);
+    cursor = piece.end;
+  }
+  appendPlainText(parts, text.slice(cursor));
+  return parts.length > 0 ? parts : [{ type: "text", value: text }];
 }
 
 function urlLinkParts(text: string): PlainTextPart[] {
