@@ -579,13 +579,15 @@ function jobCards() {
   return [...container.querySelectorAll<HTMLElement>('[data-testid="job-card"]')];
 }
 
-it("shows only a job's newest card, so its old one stops counting", () => {
+it("shows only a job's newest card, so its old one stops counting", async () => {
   render(
     baseProps([
       jobMessage("card-1", "job-1", "working"),
       jobMessage("card-2", "job-1", "finished"),
     ]),
   );
+  // The card's code loads on demand, so it is awaited before it is read.
+  await vi.waitFor(() => expect(jobCards()).toHaveLength(1));
 
   const cards = jobCards();
   expect(cards).toHaveLength(1);
@@ -596,13 +598,14 @@ it("shows only a job's newest card, so its old one stops counting", () => {
   expect(container.querySelector('[data-message-id="card-1"]')).toBeNull();
 });
 
-it("keeps a card for each job", () => {
+it("keeps a card for each job", async () => {
   render(
     baseProps([
       jobMessage("card-1", "job-1", "working"),
       jobMessage("card-2", "job-2", "finished", "billing-worker"),
     ]),
   );
+  await vi.waitFor(() => expect(jobCards()).toHaveLength(2));
 
   expect(jobCards().map((card) => card.textContent)).toEqual([
     expect.stringContaining("mcp-job-card"),
