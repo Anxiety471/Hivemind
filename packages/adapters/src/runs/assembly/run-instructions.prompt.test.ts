@@ -270,8 +270,9 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview).toContain('skill_mode({ name: "History" })');
     expect(preview.match(/10–20/g)?.length).toBe(1);
     expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
-    expect(preview.length).toBeLessThan(6_000);
-    const catalogAt = preview.indexOf("Available skills (7):");
+    // The skills catalog is injected on every turn, so its growth is bounded here on purpose.
+    expect(preview.length).toBeLessThan(6_200);
+    const catalogAt = preview.indexOf("Available skills (8):");
     expect(catalogAt).toBeGreaterThan(-1);
     expect(preview).toContain("- Computer: ");
     expect(catalogAt).toBeLessThan(preview.indexOf(PRIVATE_WORKSPACE_INSTRUCTION));

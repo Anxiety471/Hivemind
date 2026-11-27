@@ -14,6 +14,7 @@ import {
   BOARD_SKILL_NAME,
   BUILTIN_AGENT_SKILLS,
   COMPUTER_SKILL_NAME,
+  DOCUMENTS_SKILL_NAME,
   HISTORY_SKILL_NAME,
   ROUTINES_SKILL_NAME,
   SUBAGENTS_SKILL_NAME,
@@ -370,6 +371,7 @@ export function filterRunAgentSkills<T extends SkillRecord & { id?: string }>(
         (historyOffered || skill.name !== HISTORY_SKILL_NAME) &&
         (routinesOffered || skill.name !== ROUTINES_SKILL_NAME) &&
         (computerOffered || skill.name !== COMPUTER_SKILL_NAME) &&
+        (computerOffered || skill.name !== DOCUMENTS_SKILL_NAME) &&
         (subagentsOffered || skill.name !== SUBAGENTS_SKILL_NAME)),
   );
 }

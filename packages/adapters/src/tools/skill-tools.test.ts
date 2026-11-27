@@ -1,8 +1,10 @@
+import type { SkillRecord } from "@rakazo/core";
 import { buildSkillMd, formatSkillsCatalogInstruction, parseSkillMd } from "@rakazo/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinAgentTools } from "./builtin.tool-definition.js";
 import { BUILTIN_AGENT_SKILLS } from "./builtin-skills.prompt.js";
 import {
+  filterRunAgentSkills,
   listAgentSkillRecords,
   skillCreateFromTool,
   skillDeleteFromTool,
@@ -510,5 +512,18 @@ describe("skill tools", () => {
         },
       ],
     });
+  });
+});
+
+describe("built-in skill gating per run", () => {
+  const namesFor = (offered: string[]) =>
+    filterRunAgentSkills<SkillRecord>([], new Set(offered), true).map((skill) => skill.name);
+
+  it("offers Documents only where a shell or file tool is available", () => {
+    expect(namesFor(["drive_read", "attach_file"])).not.toContain("Documents");
+    expect(namesFor(["drive_read", "attach_file"])).not.toContain("Computer");
+    expect(namesFor(["shell", "attach_file"])).toContain("Documents");
+    expect(namesFor(["read_file"])).toContain("Documents");
+    expect(namesFor(["shell", "attach_file"])).toContain("Computer");
   });
 });

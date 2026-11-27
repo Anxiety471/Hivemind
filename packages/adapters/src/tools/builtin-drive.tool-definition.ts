@@ -46,7 +46,7 @@ export const driveTools: ConnectorTool[] = [
   {
     name: "drive_read",
     description:
-      "Read a text preview of a file in Space Drive by file_id, or copy any Drive file (including videos or large archives over 25 MiB) directly into your computer workspace via save_to_workspace.",
+      "Read a file in Space Drive by file_id: text files, and text previews of PDF, DOCX, XLSX and PPTX documents. Or copy any Drive file (including videos or large archives over 25 MiB) directly into your computer workspace via save_to_workspace.",
     readOnly: true,
     inputSchema: {
       type: "object",

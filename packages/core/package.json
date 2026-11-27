@@ -24,6 +24,11 @@
       "development": "./src/computers/screen-reconnect.ts",
       "default": "./src/computers/screen-reconnect.ts"
     },
+    "./documents": {
+      "types": "./src/documents/extract-document-text.ts",
+      "development": "./src/documents/extract-document-text.ts",
+      "default": "./src/documents/extract-document-text.ts"
+    },
     "./test-async": {
       "types": "./src/primitives/async.test-support.ts",
       "development": "./src/primitives/async.test-support.ts",

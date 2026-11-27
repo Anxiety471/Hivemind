@@ -210,6 +210,10 @@ describe("skill-search BM25F engine", () => {
       { prompt: "Create a recurring cron routine that skips empty runs", expectedTop3: "Routines" },
       { prompt: "Open Chrome browser and fill the login secret", expectedTop3: "Computer" },
       {
+        prompt: "Make a PDF report and an Excel sheet with formulas for the quarterly numbers",
+        expectedTop3: "Documents",
+      },
+      {
         prompt: "Delegate these three repo checks in parallel to helpers",
         expectedTop3: "Subagents",
       },
