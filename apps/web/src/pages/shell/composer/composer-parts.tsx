@@ -1,6 +1,11 @@
 import { useLingui } from "@lingui/react/macro";
 import type { AgentSkillCatalogEntry } from "@rakazo/contracts";
-import type { ComposerMention, SLASH_ACTIONS, SlashActionId } from "@rakazo/core";
+import type {
+  ComposerMention,
+  ComposerReferenceOption,
+  SLASH_ACTIONS,
+  SlashActionId,
+} from "@rakazo/core";
 import { mentionChipKey, truncateSlashDescription } from "@rakazo/core";
 import {
   Button,
@@ -21,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
+import { useTicketStatusLabels } from "../../space/ticket-status";
 import type { PendingAttachment } from "../chat/chat-shared";
 import { pendingAttachmentName } from "../chat/chat-shared";
 import { MentionOptionIcon, slashActionLabel } from "./composer-mentions";
@@ -170,6 +176,82 @@ export function MentionPicker({
                 </span>
               ) : null}
             </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The `#` list: Space tickets, then the pull requests they link to. */
+export function ReferencePicker({
+  listboxId,
+  options,
+  activeIndex,
+  onPick,
+  onHighlight,
+}: {
+  listboxId: string;
+  options: ComposerReferenceOption[];
+  activeIndex: number;
+  onPick: (option: ComposerReferenceOption) => void;
+  onHighlight: (key: string) => void;
+}) {
+  const { t } = useLingui();
+  const statusLabels: Partial<Record<string, string>> = useTicketStatusLabels();
+  const pullRequestLabels: Partial<Record<string, string>> = {
+    open: t`Open`,
+    merged: t`Merged`,
+    closed: t`Closed`,
+  };
+  return (
+    <div
+      id={listboxId}
+      role="listbox"
+      aria-label={t`Tasks and pull requests`}
+      data-testid="reference-picker"
+      className="mb-2 overflow-hidden rounded-[14px] border border-border bg-muted animate-in fade-in-0 slide-in-from-bottom-1 duration-150 motion-reduce:animate-none"
+    >
+      {options.map((option, index) => {
+        const highlighted = index === activeIndex;
+        const ticket = option.kind === "ticket" ? option : null;
+        const pullRequest = option.kind === "pull_request" ? option : null;
+        return (
+          <button
+            id={`${listboxId}-option-${index}`}
+            key={option.key}
+            type="button"
+            role="option"
+            aria-selected={highlighted}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onPick(option)}
+            // Opening the list under a stationary pointer must not steal the keyboard highlight.
+            onMouseMove={() => onHighlight(option.key)}
+            className={`flex w-full items-center gap-3 px-4 py-2.5 text-start hover:bg-accent ${
+              highlighted ? "bg-accent" : ""
+            }`}
+          >
+            <span className="shrink-0 font-mono text-body-sm text-foreground">
+              {ticket ? ticket.ref : pullRequest?.label}
+              {ticket?.pendingDecision ? (
+                <span
+                  aria-hidden
+                  className="ms-1.5 inline-block size-1.5 rounded-full bg-foreground align-middle"
+                />
+              ) : null}
+            </span>
+            <span dir="auto" className="min-w-0 flex-1 truncate text-body-sm text-muted-foreground">
+              {ticket ? ticket.title : pullRequest?.ticketTitle}
+            </span>
+            {ticket ? (
+              <span className="shrink-0 text-caption text-muted-foreground">
+                {statusLabels[ticket.status] ?? ticket.status}
+              </span>
+            ) : pullRequest?.state ? (
+              <span className="shrink-0 text-caption text-muted-foreground">
+                {pullRequestLabels[pullRequest.state] ?? pullRequest.state}
+              </span>
+            ) : null}
           </button>
         );
       })}

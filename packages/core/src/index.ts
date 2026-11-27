@@ -49,6 +49,7 @@ export * from "./calls/voice-response.js";
 export * from "./composer/composer-mention-bindings.js";
 export * from "./composer/composer-mention-picker.js";
 export * from "./composer/composer-mentions.js";
+export * from "./composer/composer-references.js";
 export * from "./composer/composer-slash.js";
 export * from "./composer/group-mentions.js";
 export * from "./computers/artifact-sandbox.js";

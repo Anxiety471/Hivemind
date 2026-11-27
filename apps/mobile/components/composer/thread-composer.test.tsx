@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import type { ChatTicketReference } from "@rakazo/chat-ui/native";
 import { buildComposerMentionOptions } from "@rakazo/core";
 import { MAX_FONT_SCALE } from "@rakazo/ui-tokens";
 import type { ComponentProps, ReactNode, Ref } from "react";
@@ -7,6 +8,7 @@ import { act, Children, createElement, createRef, isValidElement, useMemo } from
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatReferencesContext } from "../../lib/board/chat-references";
 import { settleComposer } from "../../lib/thread/send/thread-feedback";
 import { useThreadMentionCatalog } from "../../lib/thread/thread-mention-catalog";
 import type { ThreadComposerHandle } from "./thread-composer";
@@ -77,6 +79,14 @@ vi.mock("expo-file-system", () => {
   }
   return { Directory, File, Paths: { cache: "cache" } };
 });
+vi.mock("../../lib/board/chat-references", async () => {
+  const { createContext, useContext } = await import("react");
+  const ChatReferencesContext = createContext({});
+  return {
+    ChatReferencesContext,
+    useChatReferences: () => useContext(ChatReferencesContext),
+  };
+});
 vi.mock("../../lib/api/session", () => ({
   currentSessionGeneration: () => mentionApi.generation,
   subscribeSessionGeneration: () => () => {},
@@ -100,6 +110,7 @@ vi.mock("react-native", () => {
   }) =>
     createElement("div", { "data-testid": testID, "data-style": JSON.stringify(style) }, children);
   return {
+    Platform: { select: (options: Record<string, string>) => options.default },
     AppState: {
       addEventListener: (_type: string, listener: (state: string) => void) => {
         appState.listeners.add(listener);
@@ -264,11 +275,13 @@ describe("thread composer isolation", () => {
     threadKey?: string;
     userId?: string;
     apiBase?: string;
+    tickets?: ChatTicketReference[];
   };
   function ThreadHarness({
     threadKey = "bot-1",
     userId = "user-a",
     apiBase = "https://api.test",
+    tickets = [],
     ...changes
   }: HarnessProps) {
     threadRenders += 1;
@@ -276,14 +289,17 @@ describe("thread composer isolation", () => {
       () => ({ apiBase, userId, threadKey: `bot:${threadKey}` }),
       [apiBase, userId, threadKey],
     );
+    const references = useMemo(() => ({ referenceContext: { tickets } }), [tickets]);
     return (
-      <ThreadComposer
-        key={`${apiBase} ${userId} ${threadKey}`}
-        ref={composer}
-        {...props}
-        draftScope={draftScope}
-        {...changes}
-      />
+      <ChatReferencesContext.Provider value={references}>
+        <ThreadComposer
+          key={`${apiBase} ${userId} ${threadKey}`}
+          ref={composer}
+          {...props}
+          draftScope={draftScope}
+          {...changes}
+        />
+      </ChatReferencesContext.Provider>
     );
   }
   const catalogBots = [{ id: "bot-1", name: "Bot" }];
@@ -1275,6 +1291,60 @@ describe("thread composer isolation", () => {
     expect(container.querySelector('[data-testid="slash-picker"]')).toBeNull();
     press("Call");
     expect(props.startVoiceCall).toHaveBeenCalledOnce();
+  });
+
+  describe("# work-item references", () => {
+    const tickets: ChatTicketReference[] = [
+      { ref: "TASK-410", title: "Export usage", status: "todo" },
+      {
+        ref: "TASK-411",
+        title: "Pick a plan",
+        status: "review",
+        decision: { question: "Which plan?", options: [] },
+      },
+      {
+        ref: "TASK-418",
+        title: "Fix login",
+        status: "doing",
+        pullRequests: [{ url: "https://git.example.test/owner/repo/pull/249", state: "open" }],
+      },
+    ];
+    function typeWithTickets(value: string) {
+      render({ tickets });
+      type(value);
+    }
+    function pickerLabels() {
+      return Array.from(
+        container.querySelectorAll<HTMLButtonElement>('[data-testid="reference-picker"] button'),
+        (button) => button.getAttribute("aria-label"),
+      );
+    }
+
+    it("lists pending-decision tasks first, then open tasks, then linked pull requests", () => {
+      typeWithTickets("Look at #");
+      expect(pickerLabels()).toEqual([
+        "TASK-411 Pick a plan",
+        "TASK-418 Fix login",
+        "TASK-410 Export usage",
+        "owner/repo#249",
+      ]);
+    });
+
+    it("filters a task by its number and inserts its ref, closing the picker", () => {
+      typeWithTickets("Look at #418");
+      expect(pickerLabels()[0]).toBe("TASK-418 Fix login");
+      press("TASK-418 {name}");
+      expect(field().value).toBe("Look at TASK-418 ");
+      expect(container.querySelector('[data-testid="reference-picker"]')).toBeNull();
+    });
+
+    it("finds a linked pull request by its number and inserts its label", () => {
+      typeWithTickets("#249");
+      expect(pickerLabels()).toEqual(["owner/repo#249"]);
+      press("owner/repo#249");
+      expect(field().value).toBe("owner/repo#249 ");
+      expect(container.querySelector('[data-testid="reference-picker"]')).toBeNull();
+    });
   });
 
   it("adds dictated words after the draft, and drops them once the draft is edited", () => {

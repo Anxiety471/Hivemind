@@ -3,7 +3,6 @@ import { useTimeout } from "@rakazo/chat-ui/hooks";
 import type { AgentSkillCatalogEntry, DriveFile, ThreadMessage } from "@rakazo/contracts";
 import type { ComposerMention, ComposerMentionRange, SlashActionId } from "@rakazo/core";
 import {
-  composerMentionQuery,
   composerMentionsForPrompt,
   composerSelectedMentions,
   mentionChipKey,
@@ -60,6 +59,7 @@ import {
   ComposerActions,
   MentionPicker,
   PendingAttachmentChips,
+  ReferencePicker,
   SlashPicker,
 } from "./composer-parts";
 import { recordMessageSent } from "./github-star-prompt";
@@ -210,20 +210,26 @@ const ComposerBody = memo(function Composer({
   const pendingCaret = useRef<ComposerMentionRange | null>(null);
   const completedSelection = useRef<number | null>(null);
   const {
-    knownMentions,
     setMentionQuery,
     setMentionHighlightKey,
     setSlashQuery,
     selectedSkill,
     setSelectedSkill,
     updatePickers,
-    updateSlashQuery,
     insertMention,
     insertSkill,
     runSlashAction,
     removeSkill,
     mentionListboxId,
     slashListboxId,
+    setReferenceQuery,
+    referenceOptions,
+    referenceHighlightIndex,
+    setReferenceHighlightKey,
+    referenceListboxId,
+    showReferencePicker,
+    dismissReferencePicker,
+    insertReference,
     mentionOptions,
     activeMentionIndex,
     mentionPickerOpen,
@@ -234,6 +240,8 @@ const ComposerBody = memo(function Composer({
     setSlashHighlightKey,
     activeSlashIndex,
     activeOptionId,
+    activeListboxId,
+    keyPicker,
     pickSlashOption,
   } = useComposerTriggers({
     draft,
@@ -277,6 +285,7 @@ const ComposerBody = memo(function Composer({
           commitComposition({ text: "", bindings: [] }, false);
         setMentionQuery(null);
         setSlashQuery(null);
+        setReferenceQuery(null);
       }),
     [draftKey],
   );
@@ -496,6 +505,7 @@ const ComposerBody = memo(function Composer({
     setMentionQuery(null);
     setMentionHighlightKey(null);
     setSlashQuery(null);
+    setReferenceQuery(null);
     setSelectedSkill(null);
     try {
       const accepted =
@@ -711,6 +721,15 @@ const ComposerBody = memo(function Composer({
           onHighlight={(mention) => setMentionHighlightKey(mentionChipKey(mention))}
         />
       ) : null}
+      {showReferencePicker ? (
+        <ReferencePicker
+          listboxId={referenceListboxId}
+          options={referenceOptions}
+          activeIndex={referenceHighlightIndex}
+          onPick={insertReference}
+          onHighlight={setReferenceHighlightKey}
+        />
+      ) : null}
       {showSlashPicker ? (
         <SlashPicker
           listboxId={slashListboxId}
@@ -795,16 +814,7 @@ const ComposerBody = memo(function Composer({
                 )
                   return;
                 completedSelection.current = null;
-                setMentionQuery(
-                  composerMentionQuery(
-                    field.value,
-                    field.selectionStart,
-                    field.selectionEnd,
-                    knownMentions,
-                    mentionBindings,
-                  )?.query ?? null,
-                );
-                updateSlashQuery(
+                updatePickers(
                   field.value,
                   field.selectionStart,
                   field.selectionEnd,
@@ -827,9 +837,25 @@ const ComposerBody = memo(function Composer({
                   altKey: event.altKey,
                   enterToSend,
                   isComposing: event.nativeEvent.isComposing || event.keyCode === 229,
-                  optionCount: mentionPickerOpen ? mentionOptions.length : slashOptionKeys.length,
-                  highlightedIndex: mentionPickerOpen ? activeMentionIndex : activeSlashIndex,
+                  optionCount: keyPicker.count,
+                  highlightedIndex: keyPicker.index,
                 });
+                // A `#` list completes on Enter or Tab and dismisses on Escape; Ctrl/Cmd+Enter sends.
+                if (showReferencePicker && action.type !== "none" && action.type !== "send") {
+                  event.preventDefault();
+                  if (action.type === "complete") {
+                    const option = referenceOptions[referenceHighlightIndex];
+                    if (option) insertReference(option);
+                  } else if (action.type === "move") {
+                    setReferenceHighlightKey(referenceOptions[action.index]?.key ?? null);
+                  } else {
+                    // Escape closes only this list; a running reply keeps going.
+                    event.stopPropagation();
+                    completedSelection.current = event.currentTarget.selectionStart;
+                    dismissReferencePicker();
+                  }
+                  return;
+                }
                 // An open slash menu only sends once closed, so Ctrl/Cmd+Enter picks the row too.
                 if (showSlashPicker && action.type !== "none") {
                   event.preventDefault();
@@ -895,10 +921,8 @@ const ComposerBody = memo(function Composer({
               role="combobox"
               aria-autocomplete="list"
               aria-haspopup="listbox"
-              aria-expanded={mentionPickerOpen || showSlashPicker}
-              aria-controls={
-                mentionPickerOpen ? mentionListboxId : showSlashPicker ? slashListboxId : undefined
-              }
+              aria-expanded={activeListboxId !== undefined}
+              aria-controls={activeListboxId}
               aria-activedescendant={activeOptionId}
               name="chat-message"
               autoComplete="off"
