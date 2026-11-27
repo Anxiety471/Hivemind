@@ -122,6 +122,9 @@ export type Seeded = {
   activeSpace?: number;
 };
 
+/** The parts of one side's result that a retry predicate may inspect. */
+export type SideOutcome = { status: number; body?: any };
+
 export type Case = {
   name: string;
   procedure: string;
@@ -163,11 +166,19 @@ export type Case = {
   /**
    * Re-run this case (both sides, fresh seeds) when the comparison mismatches, up to this many
    * extra attempts. Only for a state one side answers nondeterministically; `retryReason` must
-   * name that nondeterminism, and the runner prints every retry as `RETRY <name>`.
+   * name that nondeterminism, `retryWhen` must name the exact failure signature, and the runner
+   * prints every retry as `RETRY <name>`.
    */
   retries?: number;
   /** Why this case may be retried. Required whenever `retries` is set. */
   retryReason?: string;
+  /**
+   * The only failure this case may re-run on, called with the failed comparison (always an
+   * AssertionError), the TypeScript result and the Go result. A comparison the predicate rejects,
+   * and any check or transport error, fails on the first attempt — so a deterministic regression
+   * cannot be absorbed by a lucky counterpart that happens to match once.
+   */
+  retryWhen?: (error: AssertionError, ts: SideOutcome, go: SideOutcome) => boolean;
   /**
    * Skip the realtime-signal comparison: a procedure that creates a board or ticket with a
    * database-generated id publishes a frame whose payload necessarily names different ids on
@@ -773,14 +784,21 @@ const cases: Case[] = [
   ...oStreamErrorCases(),
 ];
 
-// A retried case must say why: a comparison allowed to be rerun has to name the behaviour that is
-// nondeterministic, so the list cannot grow silently.
+// A retried case must say why and exactly which failure may be rerun: a comparison allowed to be
+// rerun has to name the behaviour that is nondeterministic and the pair of answers it produces,
+// so the list cannot grow silently and a real regression cannot ride along.
 for (const testCase of cases) {
-  if (testCase.retries === undefined) continue;
+  if (testCase.retries === undefined) {
+    if (testCase.retryWhen !== undefined)
+      throw new Error(`${testCase.name}: retryWhen requires retries`);
+    continue;
+  }
   if (!Number.isInteger(testCase.retries) || testCase.retries < 1)
     throw new Error(`${testCase.name}: retries must be a positive integer`);
   if (!testCase.retryReason?.trim())
     throw new Error(`${testCase.name}: retries requires a retryReason`);
+  if (typeof testCase.retryWhen !== "function")
+    throw new Error(`${testCase.name}: retries requires a retryWhen predicate`);
 }
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
@@ -8859,6 +8877,9 @@ let failures = 0;
 // Retries already used by the case at `position`. Kept across the retry's re-entry into the same
 // position; reset after a match or a final failure.
 let retryAttempts = 0;
+// The pass-level retry total, printed with the summary so a standalone run reports it too.
+let retryTotal = 0;
+const retriedCases = new Set<string>();
 for (let position = 0; position < cases.length; position += 1) {
   const testCase = cases[position]!;
   // CASE_FROM=<n> resumes a run at a case index after a timeout; cases keep their order.
@@ -9006,11 +9027,20 @@ for (let position = 0; position < cases.length; position += 1) {
     );
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {
-    // Only a comparison mismatch is retried, and only on a case that names its nondeterminism.
-    // The loop's `position += 1` cancels this decrement, so the same case runs again from the top,
-    // where seed() resets the fixture and re-seeds both sides.
-    if (error instanceof AssertionError && retryAttempts < (testCase.retries ?? 0)) {
+    // Only the failure signature the case declares is retried: the comparison itself must have
+    // failed (a check or transport error never is), and the per-case predicate must accept this
+    // exact pair of answers. Anything else fails on the first attempt, so the retry cannot hide a
+    // deterministic difference that merely happens to match once on the flaky side.
+    const retryable =
+      error instanceof AssertionError &&
+      retryAttempts < (testCase.retries ?? 0) &&
+      testCase.retryWhen?.(error, tsResult, goResult) === true;
+    if (retryable) {
+      // The loop's `position += 1` cancels this decrement, so the same case runs again from the
+      // top, where seed() resets the fixture and re-seeds both sides.
       retryAttempts += 1;
+      retryTotal += 1;
+      retriedCases.add(testCase.name);
       console.error(
         `RETRY ${testCase.name} (attempt ${retryAttempts}/${(testCase.retries ?? 0) + 1} failed): ${testCase.retryReason}`,
       );
@@ -9043,3 +9073,6 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(`contract: ${cases.length} cases match`);
+console.log(
+  `retries: ${retryTotal}${retryTotal > 0 ? ` (${[...retriedCases].join(", ")})` : ""}`,
+);
