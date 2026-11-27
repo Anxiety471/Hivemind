@@ -111,6 +111,9 @@ export async function handoffToGroupBot(
     });
     if (existing) {
       const nextRun = existing.sourceRuns[0];
+      if (!nextRun) {
+        return { error: "recorded handoff is incomplete: its source run is missing" } as const;
+      }
       const event = await tx.event.findFirst({
         where: {
           threadId: targetThreadId,
@@ -120,12 +123,13 @@ export async function handoffToGroupBot(
         orderBy: { seq: "desc" },
         select: { seq: true },
       });
-      if (!nextRun || !event) return { error: "recorded handoff is incomplete" } as const;
       return {
         ok: true,
         botId: nextRun.botId,
         runId: nextRun.id,
-        eventSeq: event.seq,
+        // Events retention can prune the handoff event. The delivered message and the run it
+        // started are the record that the handoff happened.
+        eventSeq: event?.seq ?? null,
         threadId: targetThreadId,
         inGroup,
         groupName: group.name,
@@ -226,9 +230,12 @@ export async function handoffToGroupBot(
     } as const;
   }, THREAD_LOCK_TRANSACTION_OPTIONS);
   if ("error" in committed) return committed;
-  await deps.events.notify(committed.threadId, committed.eventSeq).catch((error) => {
-    getLogger().error("group handoff realtime notification", error);
-  });
+  // A replayed handoff may have had its event pruned, so only a freshly created one is announced.
+  if (committed.eventSeq !== null) {
+    await deps.events.notify(committed.threadId, committed.eventSeq).catch((error) => {
+      getLogger().error("group handoff realtime notification", error);
+    });
+  }
   await wakeRun(deps.jobs, committed.runId);
   return {
     ok: true,

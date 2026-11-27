@@ -285,11 +285,20 @@ export async function compactHistory(
       }
       if (
         batch[batch.length - 1]!.seq !== previousCursor ||
-        batch.some((message, index) => message.seq !== firstSeq + index) ||
-        (!wasClearedBeforeGenerationTracking && firstSeq !== 0)
+        batch.some((message, index) => message.seq !== firstSeq + index)
       ) {
         logHistoryCompactPermanentFailure(threadId, "legacy_coverage_gap");
         return;
+      }
+      if (!wasClearedBeforeGenerationTracking && firstSeq !== 0) {
+        // Events retention pruned `thread.cleared` rows older than its window, so a missing clear
+        // event is not evidence that no clear happened: on clearance the message seq keeps
+        // counting, which is why kept coverage can start above zero. Bootstrap from the oldest
+        // kept message instead of refusing for good.
+        getLogger().warn("legacy_clear_event_missing", {
+          "thread.id": threadId,
+          "history.compact.first_seq": firstSeq,
+        });
       }
       fromSeqExclusive = previousCursor;
       bootstrappingLocalSummary = true;

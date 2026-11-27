@@ -52,7 +52,7 @@ function harness(
     },
     task: { create: vi.fn(async (_args: unknown) => ({ id: "task-b" })) },
     event: {
-      findFirst: vi.fn(async () => ({ seq: 1 })),
+      findFirst: vi.fn(async (): Promise<{ seq: number } | null> => ({ seq: 1 })),
       create: vi.fn(async () => ({ seq: 1 })),
     },
   };
@@ -464,6 +464,40 @@ describe("explicit group destinations", () => {
     expect(h.messageCreate).not.toHaveBeenCalled();
     expect(h.runCreate).not.toHaveBeenCalled();
     expect(h.deps.events.notify).toHaveBeenCalledWith("group-thread", 1);
+  });
+
+  it("replays a handoff whose event retention pruned", async () => {
+    const h = privateTurn();
+    h.tx.message.findUnique.mockResolvedValue({
+      id: "message-1",
+      sourceRuns: [{ id: "run-b", botId: "bot-b" }],
+    });
+    h.tx.event.findFirst.mockResolvedValue(null);
+    await expect(
+      handoffToGroupBot(h.deps as never, run, "group-1", {
+        bot_id: "bot-b",
+        message: "Continue",
+      }),
+    ).resolves.toMatchObject({ ok: true, runId: "run-b" });
+    expect(h.messageCreate).not.toHaveBeenCalled();
+    expect(h.runCreate).not.toHaveBeenCalled();
+    // Absence of the event leaves the replay with no sequence to announce.
+    expect(h.deps.events.notify).not.toHaveBeenCalled();
+  });
+
+  it("reports a replayed handoff whose source run is gone", async () => {
+    const h = privateTurn();
+    h.tx.message.findUnique.mockResolvedValue({ id: "message-1", sourceRuns: [] });
+    await expect(
+      handoffToGroupBot(h.deps as never, run, "group-1", {
+        bot_id: "bot-b",
+        message: "Continue",
+      }),
+    ).resolves.toEqual({
+      error: "recorded handoff is incomplete: its source run is missing",
+    });
+    expect(h.messageCreate).not.toHaveBeenCalled();
+    expect(h.runCreate).not.toHaveBeenCalled();
   });
 
   it("rejects unavailable or cross-space groups", async () => {
