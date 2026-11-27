@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@rakazo/db";
 import { RunHistoryWriteError } from "@rakazo/db";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { handoffToGroupBot, loadBotGroupDirectory } from "./group-handoff.js";
 
 const run = {
@@ -72,6 +72,8 @@ function harness(
 }
 
 describe("group handoff ownership", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("marks a new ownership transfer as a follow-up with a chain hop", async () => {
     const { deps, messageCreate, runCreate } = harness([{ kind: "text", text: "user request" }]);
 
@@ -185,7 +187,8 @@ describe("group handoff ownership", () => {
     expect(deps.jobs.enqueue).toHaveBeenCalledOnce();
   });
 
-  it("caps a coordinator and worker handing a stage back and forth", async () => {
+  it("caps a coordinator and worker handing a stage back and forth once the fuse is set", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const { deps, runCreate } = harness([
       { kind: "handoff", fromBotId: "bot-b", toBotId: "bot-a", text: "Revise again", hop: 6 },
     ]);
@@ -202,7 +205,8 @@ describe("group handoff ownership", () => {
     expect(runCreate).not.toHaveBeenCalled();
   });
 
-  it("caps longer multi-agent handoff chains", async () => {
+  it("caps longer multi-agent handoff chains once the fuse is set", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const { deps, runCreate } = harness([
       { kind: "handoff", fromBotId: "bot-b", toBotId: "bot-a", text: "Stage six", hop: 6 },
     ]);
@@ -363,6 +367,7 @@ describe("explicit group destinations", () => {
   );
 
   it("keeps the chain limit when a direct conversation continues in a group", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const h = privateTurn();
     h.tx.run.findFirst.mockResolvedValue({
       id: run.id,

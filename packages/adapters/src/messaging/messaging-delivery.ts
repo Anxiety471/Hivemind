@@ -1313,7 +1313,7 @@ export class MessagingDelivery {
     let current: string | null = sourceMessageId;
     const visited = new Set<string>();
     const maxHops = botMessageMaxHops();
-    for (let depth = 0; current && depth <= maxHops; depth += 1) {
+    for (let depth = 0; current && (maxHops === 0 || depth <= maxHops); depth += 1) {
       const source = await prisma.message.findUnique({
         where: { id: current },
         select: { replyTo: { select: { runId: true } } },

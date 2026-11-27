@@ -7,7 +7,6 @@ import {
   botMessageHopExhausted,
   botMessageMaxHops,
   clampBotMessage,
-  DEFAULT_BOT_MESSAGE_MAX_HOPS,
   nextBotMessageHop,
   resolveBotAddress,
 } from "./bot-messages.js";
@@ -85,43 +84,43 @@ describe("hop bounding", () => {
     expect(nextBotMessageHop(5)).toBe(6);
   });
 
-  it("refuses only past the limit", () => {
-    expect(botMessageHopExhausted(DEFAULT_BOT_MESSAGE_MAX_HOPS)).toBe(false);
-    expect(botMessageHopExhausted(DEFAULT_BOT_MESSAGE_MAX_HOPS + 1)).toBe(true);
+  it("is unlimited by default, so long chains are never refused", () => {
+    expect(botMessageMaxHops()).toBe(0);
+    expect(botMessageHopExhausted(6)).toBe(false);
+    expect(botMessageHopExhausted(100)).toBe(false);
   });
 
-  it("defaults to six hops when BOT_MESSAGE_MAX_HOPS is unset", () => {
-    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", undefined);
-    expect(botMessageMaxHops()).toBe(6);
-  });
+  it.each([undefined, "", " ", "0", "-1", "0.5", "NaN", "Infinity", "ten", "8hops"])(
+    "is unlimited for BOT_MESSAGE_MAX_HOPS=%j",
+    (value) => {
+      vi.stubEnv("BOT_MESSAGE_MAX_HOPS", value);
+      expect(botMessageMaxHops()).toBe(0);
+      expect(botMessageHopExhausted(100)).toBe(false);
+    },
+  );
 
   it.each([
     ["1", 1],
     ["10", 10],
     [" 12 ", 12],
-  ])("reads BOT_MESSAGE_MAX_HOPS=%j", (value, expected) => {
+    ["12.9", 12],
+    ["2.5", 2],
+  ])("caps chains at BOT_MESSAGE_MAX_HOPS=%j when set", (value, expected) => {
     vi.stubEnv("BOT_MESSAGE_MAX_HOPS", value);
     expect(botMessageMaxHops()).toBe(expected);
     expect(botMessageHopExhausted(expected)).toBe(false);
     expect(botMessageHopExhausted(expected + 1)).toBe(true);
   });
 
-  it.each(["", " ", "0", "-1", "2.5", "NaN", "Infinity", "ten", "8hops"])(
-    "falls back to the default for BOT_MESSAGE_MAX_HOPS=%j",
-    (value) => {
-      vi.stubEnv("BOT_MESSAGE_MAX_HOPS", value);
-      expect(botMessageMaxHops()).toBe(DEFAULT_BOT_MESSAGE_MAX_HOPS);
-    },
-  );
-
-  it("stops a two-bot volley in a bounded number of deliveries", () => {
+  it("stops a two-bot volley at the opt-in fuse", () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     let hop = nextBotMessageHop(undefined);
     let delivered = 0;
     while (!botMessageHopExhausted(hop)) {
       delivered += 1;
       hop = nextBotMessageHop(hop);
     }
-    expect(delivered).toBe(DEFAULT_BOT_MESSAGE_MAX_HOPS);
+    expect(delivered).toBe(6);
   });
 });
 

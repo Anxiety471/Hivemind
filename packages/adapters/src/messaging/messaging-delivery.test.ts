@@ -1458,6 +1458,8 @@ describe("applyMessagingOutboundStatus", () => {
 });
 
 describe("deliverRun to a group", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   function groupRun(
     world: World,
     replies: Reply[],
@@ -1753,7 +1755,17 @@ describe("deliverRun to a group", () => {
     expect(wakes(t)).toEqual([]);
   });
 
+  it("keeps peer bots answering past six hops by default", async () => {
+    const t = setup();
+    groupRun(t.world, [text("m-1", "@Helper again?")], { hop: 6 });
+    await t.delivery.deliverRun("run-1");
+
+    expect(peerContext(t)).toEqual([]);
+    expect(wakes(t)).toHaveLength(1);
+  });
+
   it("only gives peers context once the hop budget is spent", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const t = setup();
     groupRun(t.world, [text("m-1", "@Helper again?")], { hop: 6 });
     await t.delivery.deliverRun("run-1");
