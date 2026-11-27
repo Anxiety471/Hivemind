@@ -10,15 +10,14 @@ import {
 } from "@rakazo/contracts";
 import {
   AttachmentValidationError,
-  extractOfficeDocumentText,
   fileCategoryForMimeType,
   inferAttachmentMimeType,
-  isExtractableOfficeMimeType,
   normalizeFileSlug,
   redactSecrets,
   slugifyFileName,
   validateDriveName,
 } from "@rakazo/core";
+import { extractOfficeDocumentText, isExtractableOfficeMimeType } from "@rakazo/core/documents";
 import {
   ensureBotDriveFolder,
   isUniqueViolation,
