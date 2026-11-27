@@ -43,6 +43,7 @@ vi.mock("@rakazo/chat-ui/native", () => {
   return {
     ChatMarkdown: ({ children }: { children?: ReactNode }) => createElement("p", null, children),
     plainTextLinkParts,
+    withChatReferences: (text: string) => text,
     LinkifiedText: ({
       children,
       renderText,
@@ -67,6 +68,7 @@ vi.mock("../bots/bot-avatar", () => ({
   BotAvatar: ({ identity, size }: { identity?: string; size?: number }) =>
     createElement("img", { "data-avatar": identity, "data-size": size }),
 }));
+vi.mock("../../lib/board/chat-references", () => ({ useChatReferences: () => ({}) }));
 vi.mock("../native/native-symbol", () => ({
   NativeSymbol: ({ ios, size }: { ios: string; size?: number }) =>
     createElement("svg", { "data-symbol": ios, "data-size": size }),
