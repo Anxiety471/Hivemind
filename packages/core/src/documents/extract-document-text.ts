@@ -70,7 +70,7 @@ function parsePart(parts: Map<string, string>, name: string): XmlElement | null 
 }
 
 function escapeCell(text: string): string {
-  return text.replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
+  return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
 }
 
 /** Markdown pipe table from rows of cell text; ragged rows are padded to the widest row. */

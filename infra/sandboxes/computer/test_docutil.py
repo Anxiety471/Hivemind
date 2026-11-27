@@ -300,6 +300,10 @@ class MarkdownHelperTests(unittest.TestCase):
     def test_truncate_leaves_short_text_alone(self) -> None:
         self.assertEqual(docutil.truncate_markdown("short", 100), "short")
 
+    def test_cell_backslash_is_escaped_before_its_pipe(self) -> None:
+        table = docutil.markdown_table([["a\\b|c"]])
+        self.assertEqual(table, "| a\\\\b\\|c |\n| --- |")
+
     def test_table_escapes_pipes_and_pads_rows(self) -> None:
         table = docutil.markdown_table([["Item", "Price"], ["A|B"]])
         self.assertEqual(table, "| Item | Price |\n| --- | --- |\n| A\\|B |  |")

@@ -128,6 +128,12 @@ describe("extractOfficeDocumentText: DOCX", () => {
     expect(result?.metadata.tables).toBe(1);
   });
 
+  it("escapes a cell's own backslash before its pipe, so the backslash cannot escape the pipe", () => {
+    const table = `<w:tbl><w:tr><w:tc>${para("a\\b|c")}</w:tc></w:tr></w:tbl>`;
+    const result = extractOfficeDocumentText(docx(table), DOCX);
+    expect(result?.text).toBe("| a\\\\b\\|c |\n| --- |");
+  });
+
   it("decodes predefined and numeric entities, and reads tabs and line breaks", () => {
     const body =
       "<w:p><w:r><w:t>Tom &amp; Jerry &lt;3 &quot;x&quot; &#65;&#x42;</w:t><w:tab/><w:t>end</w:t><w:br/><w:t>next</w:t></w:r></w:p>";

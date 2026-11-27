@@ -112,7 +112,10 @@ def markdown_table(rows: list[list[str]]) -> str:
         return ""
     lines = []
     for row in rows:
-        cells = [(row[i] if i < len(row) else "").replace("|", "\\|").replace("\n", " ").strip() for i in range(width)]
+        cells = [
+            (row[i] if i < len(row) else "").replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip()
+            for i in range(width)
+        ]
         lines.append("| " + " | ".join(cells) + " |")
     lines.insert(1, "| " + " | ".join("---" for _ in range(width)) + " |")
     return "\n".join(lines)
