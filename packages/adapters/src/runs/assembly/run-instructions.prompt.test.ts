@@ -262,7 +262,7 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview).toContain("Kanban board is enabled");
     expect(preview).toContain("ticket_update");
     expect(preview).not.toContain("scratchpad_add");
-    expect(preview).toContain("Prefer tools over claiming you already did the work.");
+    expect(preview).toContain("Prefer tools over claiming you already did the work:");
     expect(preview).not.toContain("You run on Rakazo");
     expect(preview).toContain(
       "Only the latest 10–20 messages stay directly in your conversation window",
@@ -271,7 +271,8 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview.match(/10–20/g)?.length).toBe(1);
     expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
     // The skills catalog is injected on every turn, so its growth is bounded here on purpose.
-    expect(preview.length).toBeLessThan(6_200);
+    // Raised for the attachment and teammate-ownership guardrails, which every turn needs.
+    expect(preview.length).toBeLessThan(7_000);
     const catalogAt = preview.indexOf("Available skills (8):");
     expect(catalogAt).toBeGreaterThan(-1);
     expect(preview).toContain("- Computer: ");

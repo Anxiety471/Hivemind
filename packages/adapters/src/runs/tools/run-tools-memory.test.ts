@@ -1,7 +1,7 @@
 import { MEMORY_REVISION_CONFLICT_ERROR, MemoryRevisionConflictError } from "@rakazo/adapter-kit";
 import { HistoryReadInputSchema, HistorySearchInputSchema } from "@rakazo/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { memoryTools, withoutBlankFields } from "./run-tools-memory.js";
+import { memoryTools, preTurnMemorySearch, withoutBlankFields } from "./run-tools-memory.js";
 
 describe("history tool arguments", () => {
   it("treats blank and null optional fields as not given", () => {
@@ -190,5 +190,123 @@ describe("cold memory document tools", () => {
     expect(missing).toEqual({
       error: "Memory document not found. Call search_memory_docs to list available paths.",
     });
+  });
+});
+
+describe("pre-turn memory search", () => {
+  const makeCtx = (
+    offered: string[],
+    recall = vi.fn(
+      async (): Promise<{ ok: boolean; value?: unknown; error?: string }> => ({
+        ok: true,
+        value: [],
+      }),
+    ),
+  ) => ({
+    bot: { id: "bot-1" },
+    thread: { historyCompactedUpToSeq: null },
+    context: {},
+    secrets: ["super-secret-token"],
+    tools: { offered: offered.map((name) => ({ name })) },
+    state: { tainted: false },
+    memory: { scope: "bot", semantic: { recall } },
+    deps: {
+      memory: {
+        read: vi.fn(async ({ scope }: { scope: "bot" | "user" }) => ({
+          documents:
+            scope === "bot"
+              ? [
+                  {
+                    id: "b1",
+                    path: "notes/billing.md",
+                    content: "Billing migrated with super-secret-token",
+                    revision: 1,
+                    updatedAt: "2026-11-20T10:00:00.000Z",
+                  },
+                ]
+              : [],
+        })),
+      },
+    },
+  });
+
+  it("returns redacted recall and document hits and marks the run as reading outside content", async () => {
+    const recall = vi.fn(async () => ({
+      ok: true,
+      value: [{ memory: "Key is super-secret-token", score: 1, id: "m1", provenance: "chat" }],
+    }));
+    const ctx = makeCtx(["recall_memory", "search_memory_docs"], recall);
+
+    const result = await preTurnMemorySearch(ctx as never, {
+      semanticQuery: "billing key",
+      docQuery: "billing",
+    });
+
+    expect(result).toEqual({
+      recallHits: [{ memory: "Key is [redacted]", id: "m1", provenance: "chat" }],
+      docHits: [{ scope: "bot", path: "notes/billing.md", snippet: expect.any(String) }],
+    });
+    expect(JSON.stringify(result)).not.toContain("super-secret-token");
+    expect(recall).toHaveBeenCalledWith(expect.objectContaining({ query: "billing key" }), {});
+    expect(ctx.state.tainted).toBe(true);
+  });
+
+  it("stops the provider call when the caller's signal aborts", async () => {
+    const recall = vi.fn(async () => ({ ok: true, value: [] }));
+    const ctx = {
+      ...makeCtx(["recall_memory"], recall),
+      context: { signal: new AbortController().signal },
+    };
+    const controller = new AbortController();
+
+    const search = preTurnMemorySearch(ctx as never, {
+      semanticQuery: "billing key",
+      docQuery: "",
+      signal: controller.signal,
+    });
+    controller.abort();
+    await search;
+
+    const [, passed] = recall.mock.calls[0] as unknown as [unknown, { signal: AbortSignal }];
+    expect(passed.signal.aborted).toBe(true);
+  });
+
+  it("searches only the tools the run offers", async () => {
+    const ctx = makeCtx(["search_memory_docs"]);
+
+    const result = await preTurnMemorySearch(ctx as never, {
+      semanticQuery: "billing key",
+      docQuery: "billing",
+    });
+
+    expect(result.recallHits).toBeUndefined();
+    expect(ctx.memory.semantic.recall).not.toHaveBeenCalled();
+    expect(result.docHits).toHaveLength(1);
+  });
+
+  it("reports the search that failed as missing and keeps the one that ran", async () => {
+    const ctx = makeCtx(
+      ["recall_memory", "search_memory_docs"],
+      vi.fn(async () => ({ ok: false, error: "provider down" })),
+    );
+
+    const result = await preTurnMemorySearch(ctx as never, {
+      semanticQuery: "billing key",
+      docQuery: "billing",
+    });
+
+    expect(result.recallHits).toBeUndefined();
+    expect(result.docHits).toHaveLength(1);
+  });
+
+  it("rejects when every search it ran failed", async () => {
+    const ctx = makeCtx(
+      ["recall_memory"],
+      vi.fn(async () => ({ ok: false, error: "provider down" })),
+    );
+
+    await expect(
+      preTurnMemorySearch(ctx as never, { semanticQuery: "billing key", docQuery: "" }),
+    ).rejects.toThrow("provider down");
   });
 });

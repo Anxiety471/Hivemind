@@ -9,6 +9,7 @@ import {
   EMPTY_RESPONSE_REMINDER_PROMPT,
   SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
   SILENT_TOOL_CONTINUATION_PROMPT,
+  UNFINISHED_WORK_CONTINUATION_PROMPT,
 } from "../runs/assembly/continuation.prompt.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
@@ -29,6 +30,7 @@ describe("automated messages are labelled as not from the user", () => {
     expect(EMPTY_RESPONSE_REMINDER_PROMPT.startsWith(AUTOMATED_MESSAGE_LABEL)).toBe(true);
     expect(EMPTY_RESPONSE_REMINDER_PROMPT).toContain("ask them instead of guessing");
     expect(EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT.startsWith(AUTOMATED_MESSAGE_LABEL)).toBe(true);
+    expect(UNFINISHED_WORK_CONTINUATION_PROMPT.startsWith(AUTOMATED_MESSAGE_LABEL)).toBe(true);
   });
 
   it("relabels the screenshot message pi-ai adds after a tool result and keeps the images", () => {

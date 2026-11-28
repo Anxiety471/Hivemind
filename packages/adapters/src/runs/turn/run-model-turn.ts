@@ -28,6 +28,7 @@ import {
   offeredFleetTools,
 } from "../tools/run-tool-selection.js";
 import { applyTool } from "../tools/run-tools.js";
+import { preTurnMemorySearch } from "../tools/run-tools-memory.js";
 import { consumeRunEvents } from "./run-turn.js";
 import { claimRunSteering } from "./run-turn-images.js";
 import { appendToolCompletionAudit, toolCompletionOutcome } from "./tool-completion-audit.js";
@@ -295,6 +296,9 @@ function modelTurnRequest(
     ),
     tools: listedTools,
     ...(codeFirst ? { codeModeTools: codeModeCallableTools(tools).map((tool) => tool.name) } : {}),
+    ...(tools.some((tool) => tool.name === "recall_memory" || tool.name === "search_memory_docs")
+      ? { preTurnMemorySearch: (input) => preTurnMemorySearch(turn.ctx, input) }
+      : {}),
     // The live array: secrets learned later in the run redact too.
     secrets: runSecrets,
     model: mainRunModel,

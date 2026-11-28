@@ -1,0 +1,262 @@
+import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
+import { describe, expect, it } from "vitest";
+import {
+  EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
+  EMPTY_RESPONSE_REMINDER_PROMPT,
+  SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
+  SILENT_TOOL_CONTINUATION_PROMPT,
+  UNFINISHED_WORK_CONTINUATION_PROMPT,
+} from "../../runs/assembly/continuation.prompt.js";
+import type { PiPostTurnContext, PiPostTurnHook } from "./pi-post-turn-hooks.js";
+import {
+  createPostTurnHookRunner,
+  DEFAULT_PI_POST_TURN_HOOKS,
+  emptyResponseReminderHook,
+  silentToolContinuationHook,
+  unfinishedWorkContinuationHook,
+} from "./pi-post-turn-hooks.js";
+
+const premature = "Not checked yet: the release notes.\nNext I'll finish checking the commits.";
+
+/** A text-only final turn with nothing else going on. */
+const finalTurn = (overrides: Partial<PiPostTurnContext> = {}): PiPostTurnContext => ({
+  runId: "run-1",
+  turnIndex: 1,
+  messageText: "Done.",
+  finalTurnText: "Done.",
+  streamed: true,
+  hasToolCalls: false,
+  hasToolResults: false,
+  toolWorkPendingFinal: false,
+  hasTools: true,
+  allowSilentEmpty: false,
+  optionalReply: false,
+  pausePending: false,
+  aborted: false,
+  isAssistant: true,
+  stopReason: "stop",
+  hasProviderFailure: false,
+  hadThinking: false,
+  priorTriggers: 0,
+  ...overrides,
+});
+
+/** A turn that ended with nothing visible at all. */
+const emptyTurn = (overrides: Partial<PiPostTurnContext> = {}): PiPostTurnContext =>
+  finalTurn({ messageText: "", finalTurnText: "", streamed: false, ...overrides });
+
+/** A tool-narration turn that is still waiting for a final reply. */
+const pendingSilentTurn = (overrides: Partial<PiPostTurnContext> = {}): PiPostTurnContext =>
+  emptyTurn({ toolWorkPendingFinal: true, ...overrides });
+
+describe("silentToolContinuationHook", () => {
+  it("nudges a tool-narration turn that never reached a final reply", () => {
+    expect(silentToolContinuationHook.evaluate(pendingSilentTurn())).toEqual({
+      action: "follow_up",
+      prompt: SILENT_TOOL_CONTINUATION_PROMPT,
+    });
+  });
+
+  it("uses the allowed-silent prompt in a run allowed to stay silent", () => {
+    expect(
+      silentToolContinuationHook.evaluate(pendingSilentTurn({ allowSilentEmpty: true })),
+    ).toEqual({ action: "follow_up", prompt: SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT });
+  });
+
+  it.each([
+    ["no tool work is pending", emptyTurn()],
+    [
+      "the turn has final text",
+      pendingSilentTurn({ messageText: "Here it is.", finalTurnText: "Here it is." }),
+    ],
+    ["the turn has tool calls", pendingSilentTurn({ hasToolCalls: true, hasToolResults: true })],
+    ["the run is paused", pendingSilentTurn({ pausePending: true })],
+    ["the provider failed", pendingSilentTurn({ hasProviderFailure: true })],
+  ])("allows when %s", (_name, ctx) => {
+    expect(silentToolContinuationHook.evaluate(ctx)).toEqual({ action: "allow" });
+  });
+});
+
+describe("emptyResponseReminderHook", () => {
+  it("nudges an empty assistant turn with the standard reminder", () => {
+    expect(emptyResponseReminderHook.evaluate(emptyTurn())).toEqual({
+      action: "follow_up",
+      prompt: EMPTY_RESPONSE_REMINDER_PROMPT,
+      logEvent: "agent.empty_response_reminder",
+      meta: { optionalReply: false, hadThinking: false },
+    });
+  });
+
+  it("uses the optional-reply reminder and reports thinking", () => {
+    expect(
+      emptyResponseReminderHook.evaluate(emptyTurn({ optionalReply: true, hadThinking: true })),
+    ).toEqual({
+      action: "follow_up",
+      prompt: EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
+      logEvent: "agent.empty_response_reminder",
+      meta: { optionalReply: true, hadThinking: true },
+    });
+  });
+
+  it.each([
+    ["the reply has text", emptyTurn({ messageText: "Hi", finalTurnText: "Hi" })],
+    ["text was streamed", emptyTurn({ streamed: true })],
+    ["the run may stay silent", emptyTurn({ allowSilentEmpty: true })],
+    ["the turn was aborted", emptyTurn({ stopReason: "aborted" })],
+    ["the run signal aborted", emptyTurn({ aborted: true })],
+    ["the message is not an assistant's", emptyTurn({ isAssistant: false })],
+    ["the provider failed", emptyTurn({ hasProviderFailure: true })],
+    ["tool work is pending", pendingSilentTurn()],
+    ["the turn has tool calls", emptyTurn({ hasToolCalls: true, hasToolResults: true })],
+  ])("allows when %s", (_name, ctx) => {
+    expect(emptyResponseReminderHook.evaluate(ctx)).toEqual({ action: "allow" });
+  });
+});
+
+describe("unfinishedWorkContinuationHook", () => {
+  it("nudges a final reply that admits unfinished checks, and moves the boundary", () => {
+    expect(
+      unfinishedWorkContinuationHook.evaluate(
+        finalTurn({ messageText: premature, finalTurnText: premature }),
+      ),
+    ).toEqual({
+      action: "follow_up",
+      prompt: UNFINISHED_WORK_CONTINUATION_PROMPT,
+      logEvent: "agent.unfinished_work_continuation",
+      meta: { reason: expect.any(String) },
+      resetPendingFinalBoundary: true,
+    });
+  });
+
+  it("allows a final reply that is complete", () => {
+    expect(unfinishedWorkContinuationHook.evaluate(finalTurn())).toEqual({ action: "allow" });
+  });
+
+  it.each([
+    ["no tools are offered", { hasTools: false }],
+    ["the run may stay silent", { allowSilentEmpty: true }],
+    ["the run is optional-reply", { optionalReply: true }],
+    ["the stop reason is not stop", { stopReason: "length" }],
+    ["the provider failed", { hasProviderFailure: true }],
+    ["the run signal aborted", { aborted: true }],
+  ])("allows when %s", (_name, overrides) => {
+    expect(
+      unfinishedWorkContinuationHook.evaluate(
+        finalTurn({ messageText: premature, finalTurnText: premature, ...overrides }),
+      ),
+    ).toEqual({ action: "allow" });
+  });
+});
+
+describe("DEFAULT_PI_POST_TURN_HOOKS", () => {
+  it("runs the built-in guards in their order", () => {
+    expect(DEFAULT_PI_POST_TURN_HOOKS).toEqual([
+      silentToolContinuationHook,
+      emptyResponseReminderHook,
+      unfinishedWorkContinuationHook,
+    ]);
+  });
+});
+
+describe("createPostTurnHookRunner", () => {
+  const followUp = (name: string, prompt = name): PiPostTurnHook => ({
+    name,
+    maxTriggers: 1,
+    evaluate: () => ({ action: "follow_up", prompt }),
+  });
+
+  it("caps each hook at its maxTriggers", () => {
+    const runner = createPostTurnHookRunner([emptyResponseReminderHook]);
+
+    expect(runner.evaluate(finalTurn({ messageText: "", streamed: false }))).toMatchObject({
+      hookName: "empty_response_reminder",
+      attempt: 1,
+    });
+    expect(runner.evaluate(finalTurn({ messageText: "", streamed: false }))).toBeUndefined();
+    expect(runner.triggerCount("empty_response_reminder")).toBe(1);
+  });
+
+  it("clears a resetOnToolTurn hook's count on a tool turn", () => {
+    const runner = createPostTurnHookRunner([silentToolContinuationHook]);
+    const pending = finalTurn({
+      toolWorkPendingFinal: true,
+      messageText: "",
+      finalTurnText: "",
+      streamed: false,
+    });
+
+    for (let i = 1; i <= 3; i += 1) {
+      expect(runner.evaluate(pending)).toMatchObject({ attempt: i });
+    }
+    expect(runner.evaluate(pending)).toBeUndefined();
+
+    runner.onToolTurn();
+    expect(runner.triggerCount("silent_tool_continuation")).toBe(0);
+    expect(runner.evaluate(pending)).toMatchObject({ attempt: 1 });
+  });
+
+  it("keeps a count that does not opt into resetOnToolTurn", () => {
+    const runner = createPostTurnHookRunner([emptyResponseReminderHook]);
+    runner.evaluate(finalTurn({ messageText: "", streamed: false }));
+
+    runner.onToolTurn();
+
+    expect(runner.triggerCount("empty_response_reminder")).toBe(1);
+  });
+
+  it("lets the first hook that asks for a follow-up win", () => {
+    const runner = createPostTurnHookRunner([followUp("first", "one"), followUp("second", "two")]);
+
+    expect(runner.evaluate(finalTurn())).toMatchObject({
+      hookName: "first",
+      decision: { prompt: "one" },
+    });
+    expect(runner.triggerCount("second")).toBe(0);
+    expect(runner.evaluate(finalTurn())).toMatchObject({
+      hookName: "second",
+      decision: { prompt: "two" },
+    });
+  });
+
+  it("passes priorTriggers to each hook", () => {
+    const seen: number[] = [];
+    const counting: PiPostTurnHook = {
+      name: "counting",
+      maxTriggers: 2,
+      evaluate: (ctx) => {
+        seen.push(ctx.priorTriggers);
+        return { action: "follow_up", prompt: "again" };
+      },
+    };
+    const runner = createPostTurnHookRunner([counting]);
+
+    runner.evaluate(finalTurn());
+    runner.evaluate(finalTurn());
+    runner.evaluate(finalTurn());
+
+    expect(seen).toEqual([0, 1]);
+  });
+
+  it("logs a throwing hook and moves on to the next one", () => {
+    const sink = createTestSink();
+    installLogger(createLogger({ service: "rakazo-worker", sinks: [sink] }));
+    const broken: PiPostTurnHook = {
+      name: "broken",
+      maxTriggers: 1,
+      evaluate: () => {
+        throw new Error("boom");
+      },
+    };
+    const runner = createPostTurnHookRunner([broken, followUp("after")]);
+
+    expect(runner.evaluate(finalTurn())).toMatchObject({ hookName: "after" });
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        message: "agent.post_turn_hook_error",
+        runId: "run-1",
+        hook: "broken",
+      }),
+    ]);
+    expect(runner.triggerCount("broken")).toBe(0);
+  });
+});

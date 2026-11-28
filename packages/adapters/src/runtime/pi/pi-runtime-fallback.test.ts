@@ -24,7 +24,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
   EMPTY_RESPONSE_REMINDER_PROMPT,
+  UNFINISHED_WORK_CONTINUATION_PROMPT,
 } from "../../runs/assembly/continuation.prompt.js";
+import type { PiPostTurnContext, PiPostTurnHook } from "./pi-post-turn-hooks.js";
+import type { PiPreTurnContext, PiPreTurnHook } from "./pi-pre-turn-hooks.js";
 
 const providerState = vi.hoisted(() => ({
   models: new Map<string, Record<string, unknown>>(),
@@ -3598,6 +3601,268 @@ describe("Pi runtime empty replies", () => {
     expect(providerState.stream).toHaveBeenCalledOnce();
     expect(providerState.delay).toHaveBeenCalledOnce();
     expect(events).not.toContainEqual({ type: "text", text: "No response. Try again." });
+  });
+});
+
+describe("Pi runtime unfinished work continuation", () => {
+  const providers = (): string[] =>
+    providerState.stream.mock.calls.map(
+      ([target]) => (target as Model<"openai-completions">).provider,
+    );
+  /** The text of the last message the model was sent on its `index`-th call. */
+  const lastMessageText = (index: number): unknown => {
+    const context = providerState.stream.mock.calls[index]![1] as {
+      messages: Array<{ content: unknown }>;
+    };
+    const content = context.messages.at(-1)!.content;
+    return Array.isArray(content) ? content.map((part) => part.text).join("") : content;
+  };
+  const toolCall = (target: Model<"openai-completions">, value: string) =>
+    stream(
+      target,
+      message(
+        target,
+        [{ type: "toolCall", id: `call-${value}`, name: "write_effect", arguments: { value } }],
+        "toolUse",
+      ),
+    );
+  const text = (target: Model<"openai-completions">, reply: string) =>
+    stream(target, message(target, [{ type: "text", text: reply }], "stop"));
+  const premature = "Not checked yet: the release notes.\nNext I'll finish checking the commits.";
+
+  it("nudges once after tool work ends with a promised check, then finishes it", async () => {
+    providerState.stream
+      .mockImplementationOnce(() => toolCall(primary, "one"))
+      .mockImplementationOnce(() => text(primary, premature))
+      .mockImplementationOnce(() => toolCall(primary, "two"))
+      .mockImplementation(() => text(primary, "Commits match the release."));
+    const input = request();
+
+    const events = await run(input);
+
+    expect(providerState.stream).toHaveBeenCalledTimes(4);
+    expect(lastMessageText(2)).toBe(UNFINISHED_WORK_CONTINUATION_PROMPT);
+    expect(input.executeTool).toHaveBeenCalledTimes(2);
+    expect(events.filter((event) => event.type === "text")).toEqual([
+      { type: "text", text: premature },
+      { type: "text", text: "Commits match the release." },
+    ]);
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      text: `${premature}Commits match the release.`,
+    });
+  });
+
+  it("does not add a second nudge when the reply after the first still promises work", async () => {
+    providerState.stream
+      .mockImplementationOnce(() => toolCall(primary, "one"))
+      .mockImplementationOnce(() => text(primary, premature))
+      .mockImplementation(() => text(primary, premature));
+
+    const events = await run(request());
+
+    expect(providerState.stream).toHaveBeenCalledTimes(3);
+    expect(lastMessageText(2)).toBe(UNFINISHED_WORK_CONTINUATION_PROMPT);
+    expect(events.at(-1)).toEqual({ type: "done", text: `${premature}${premature}` });
+  });
+
+  it.each([
+    ["an allowSilentEmpty run", { allowSilentEmpty: true }, premature],
+    ["an optionalReply run", { optionalReply: true }, premature],
+    ["a user-gated reply", {}, "Once you confirm, I'll upload the final file."],
+  ])("does not nudge %s", async (_name, overrides, reply) => {
+    providerState.stream
+      .mockImplementationOnce(() => toolCall(primary, "one"))
+      .mockImplementation(() => text(primary, reply));
+
+    const events = await run({ ...request(), ...overrides });
+
+    expect(providerState.stream).toHaveBeenCalledTimes(2);
+    expect(events.at(-1)).toEqual({ type: "done", text: reply });
+  });
+
+  it("does not nudge a text-only run with no tools offered", async () => {
+    providerState.stream.mockImplementation(() => text(primary, premature));
+
+    const events = await run({ ...request(), tools: [] });
+
+    expect(providerState.stream).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toEqual({ type: "done", text: premature });
+  });
+
+  it("nudges a text-only reply that promises checks before any tool runs", async () => {
+    providerState.stream
+      .mockImplementationOnce(() => text(primary, "Next I'll reopen the ticket and check it."))
+      .mockImplementation(() => text(primary, "Reopened and verified."));
+
+    const events = await run(request());
+
+    expect(providers()).toHaveLength(2);
+    expect(lastMessageText(1)).toBe(UNFINISHED_WORK_CONTINUATION_PROMPT);
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      text: "Next I'll reopen the ticket and check it.Reopened and verified.",
+    });
+  });
+});
+
+describe("Pi runtime custom post-turn hooks", () => {
+  const replyText = (target: Model<"openai-completions">, reply: string) =>
+    stream(target, message(target, [{ type: "text", text: reply }], "stop"));
+
+  it("gives a custom hook the turn context and continues the run with its follow-up", async () => {
+    const seen: PiPostTurnContext[] = [];
+    const recap: PiPostTurnHook = {
+      name: "recap",
+      maxTriggers: 1,
+      evaluate: (ctx) => {
+        seen.push(ctx);
+        return ctx.priorTriggers === 0
+          ? { action: "follow_up", prompt: "Recap please." }
+          : { action: "allow" };
+      },
+    };
+    providerState.stream
+      .mockImplementationOnce((target: Model<"openai-completions">) => replyText(target, "First."))
+      .mockImplementation((target: Model<"openai-completions">) => replyText(target, "Second."));
+
+    const events = await run(request(), [], new PiAgentRuntime({ postTurnHooks: [recap] }));
+
+    expect(seen[0]).toMatchObject({
+      turnIndex: 1,
+      messageText: "First.",
+      finalTurnText: "First.",
+      hasToolCalls: false,
+      hasTools: true,
+      isAssistant: true,
+      stopReason: "stop",
+      priorTriggers: 0,
+    });
+    expect(providerState.stream).toHaveBeenCalledTimes(2);
+    const secondCall = providerState.stream.mock.calls[1]![1] as {
+      messages: Array<{ content: unknown }>;
+    };
+    expect(secondCall.messages.at(-1)!.content).toBe("Recap please.");
+    expect(events.at(-1)).toEqual({ type: "done", text: "First.Second." });
+  });
+
+  it("stops a custom hook at its maxTriggers and completes the run", async () => {
+    const recap: PiPostTurnHook = {
+      name: "again",
+      maxTriggers: 2,
+      evaluate: () => ({ action: "follow_up", prompt: "Again." }),
+    };
+    let step = 0;
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      replyText(target, `Step ${++step}.`),
+    );
+
+    const events = await run(request(), [], new PiAgentRuntime({ postTurnHooks: [recap] }));
+
+    expect(providerState.stream).toHaveBeenCalledTimes(3);
+    expect(events.at(-1)).toEqual({ type: "done", text: "Step 1.Step 2.Step 3." });
+  });
+});
+
+describe("Pi runtime pre-turn hooks", () => {
+  const replyText = (target: Model<"openai-completions">, reply: string) =>
+    stream(target, message(target, [{ type: "text", text: reply }], "stop"));
+  const memoryRequest = (
+    preTurnMemorySearch: AgentRunRequest["preTurnMemorySearch"],
+  ): AgentRunRequest => ({
+    ...request(),
+    tools: [
+      ...request().tools,
+      { name: "recall_memory", description: "Recall.", inputSchema: { type: "object" } },
+      { name: "search_memory_docs", description: "Search docs.", inputSchema: { type: "object" } },
+    ],
+    preTurnMemorySearch,
+  });
+  const firstCallText = () =>
+    JSON.stringify(
+      (providerState.stream.mock.calls[0]![1] as { messages: unknown[] }).messages.at(-1),
+    );
+
+  it("searches memory before the first model call and gives the hits and advisory to the model", async () => {
+    const search = vi.fn(async () => ({
+      recallHits: [{ memory: "Owner prefers metric units" }],
+      docHits: [{ path: "notes/units.md", snippet: "metric" }],
+    }));
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      replyText(target, "Metric."),
+    );
+
+    await run(memoryRequest(search), [], new PiAgentRuntime());
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(providerState.stream).toHaveBeenCalledTimes(1);
+    const text = firstCallText();
+    expect(text).toContain("<pre_turn_memory_search>");
+    expect(text).toContain("Owner prefers metric units");
+    expect(text).toContain("notes/units.md");
+    // The turn's own prompt follows the memory block, which the model reads as context.
+    expect(text.lastIndexOf("Write the requested result")).toBeGreaterThan(
+      text.indexOf("</pre_turn_memory_search>"),
+    );
+  });
+
+  it("searches when the memory tools are offered only as code-mode callables", async () => {
+    const search = vi.fn(async () => ({ recallHits: [{ memory: "Codefirst fact" }], docHits: [] }));
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      replyText(target, "Done."),
+    );
+
+    await run(
+      {
+        ...request(),
+        codeModeTools: ["recall_memory", "search_memory_docs"],
+        preTurnMemorySearch: search,
+      } as AgentRunRequest,
+      [],
+      new PiAgentRuntime(),
+    );
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(firstCallText()).toContain("Codefirst fact");
+  });
+
+  it("does not search when the run offers no memory search tool", async () => {
+    const search = vi.fn(async () => ({ recallHits: [], docHits: [] }));
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      replyText(target, "Done."),
+    );
+
+    await run(
+      { ...request(), preTurnMemorySearch: search } as AgentRunRequest,
+      [],
+      new PiAgentRuntime(),
+    );
+
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("runs custom pre-turn hooks after the built-in ones with the turn's tools", async () => {
+    const seen: PiPreTurnContext[] = [];
+    const note: PiPreTurnHook = {
+      name: "note",
+      run: (ctx) => {
+        seen.push(ctx);
+        return { contextMessages: ["Custom context for this turn."] };
+      },
+    };
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      replyText(target, "Noted."),
+    );
+
+    await run(request(), [], new PiAgentRuntime({ preTurnHooks: [note] }));
+
+    expect(seen[0]).toMatchObject({
+      runId: "run",
+      prompt: "Write the requested result",
+      isRestored: false,
+    });
+    expect([...seen[0]!.offeredToolNames]).toEqual(["write_effect"]);
+    expect(firstCallText()).toContain("Custom context for this turn.");
   });
 });
 

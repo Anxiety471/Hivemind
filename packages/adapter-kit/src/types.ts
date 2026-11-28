@@ -483,6 +483,32 @@ export interface SemanticMemoryCapabilities {
   purgesByThread?: true;
 }
 
+export interface PreTurnMemorySearchInput {
+  readonly semanticQuery: string;
+  readonly docQuery: string;
+  /** Aborts the searches' provider calls when the caller gives up (for example, a deadline). */
+  readonly signal?: AbortSignal;
+}
+
+export interface PreTurnRecallHit {
+  readonly memory: string;
+  readonly id?: string;
+  readonly provenance?: string;
+  readonly entity?: string;
+}
+
+export interface PreTurnDocHit {
+  readonly scope?: string;
+  readonly path: string;
+  readonly snippet?: string;
+}
+
+/** A search that was not run, or failed, has no hits list. */
+export interface PreTurnMemorySearchResult {
+  readonly recallHits?: readonly PreTurnRecallHit[];
+  readonly docHits?: readonly PreTurnDocHit[];
+}
+
 export interface SemanticMemoryResult {
   memory: string;
   score: number;
@@ -689,6 +715,11 @@ export interface AgentRunRequest {
    * model has lost.
    */
   codeModeTools?: readonly string[];
+  /**
+   * Searches this run's memory before its first model call, using the memory search tools it
+   * offers. Absent when it offers neither. Rejects when every search it ran failed.
+   */
+  preTurnMemorySearch?: (input: PreTurnMemorySearchInput) => Promise<PreTurnMemorySearchResult>;
   history: Array<{
     id?: string;
     createdAt?: string;

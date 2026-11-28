@@ -1,5 +1,6 @@
 export type { HistoryReach } from "./system-prompt.prompt.js";
 export {
+  ATTACHMENT_GROUNDING_INSTRUCTION,
   BOT_DIRECTORY_LIMIT,
   botEmailInstruction,
   builtinOffered,
@@ -11,6 +12,7 @@ export {
   dockerComputerToolInstruction,
   formatSharedSpaceNote,
   hostComputerInstruction,
+  OWNERSHIP_INSTRUCTION,
   PRIVATE_WORKSPACE_INSTRUCTION,
   PROACTIVE_POSTURE_INSTRUCTION,
   persistentComputerInstruction,

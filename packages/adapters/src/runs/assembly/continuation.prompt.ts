@@ -10,6 +10,10 @@ export const SILENT_TOOL_CONTINUATION_PROMPT = automated(
 export const EMPTY_RESPONSE_REMINDER_PROMPT = automated(
   "Your last turn ended without a visible response to the user. If you need tools to finish the task, call them now; if you need information or a decision from the user, ask them instead of guessing; otherwise write a concise, direct reply now.",
 );
+// Sent once when a text-only reply stopped with checks or reversible updates still undone.
+export const UNFINISHED_WORK_CONTINUATION_PROMPT = automated(
+  "Your last reply stopped with unfinished checks or unexecuted actions you can still complete with your tools. Do not narrate future steps or leave reversible checks undone: call the tools now to finish those remaining checks and state updates, then report only the new findings and final status without repeating what you already sent.",
+);
 // Sent on an unaddressed group turn that ended empty without saying NO_RESPONSE.
 export const EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT = automated(
   "Your last turn ended without a visible response. If this message is for you, use any tools needed and reply concisely; if another member should handle it and you intend to stay silent, reply with exactly NO_RESPONSE.",
