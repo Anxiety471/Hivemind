@@ -63,7 +63,8 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
       messages: [] as unknown[],
     };
     private readonly tools: typeof fakeAgentState.tools;
-    private readonly listeners: Array<(event: Record<string, unknown>) => void> = [];
+    private readonly listeners: Array<(event: Record<string, unknown>) => void | Promise<void>> =
+      [];
     private readonly prepareNextTurnWithContext?: (input: {
       context: { messages: unknown[] };
     }) => Promise<{ context?: { messages: unknown[] }; messages?: unknown[] } | undefined>;
@@ -189,17 +190,17 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
         const rawArgs = fakeAgentState.invoke.args;
         const args = target.prepareArguments?.(rawArgs) ?? rawArgs;
         const narration = "I will check the destination first.";
-        this.emit({
+        await this.emitAndAwait({
           type: "message_update",
           assistantMessageEvent: { type: "text_delta", delta: narration },
         });
-        this.emit({
+        await this.emitAndAwait({
           type: "tool_execution_start",
           toolName: target.name,
           args,
         });
         await target.execute("call-1", args);
-        this.emit({
+        await this.emitAndAwait({
           type: "turn_end",
           message: {
             role: "assistant",
@@ -215,7 +216,7 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
           },
           toolResults: [{ toolCallId: "call-1", result: { ok: true } }],
         });
-        this.emit({
+        await this.emitAndAwait({
           type: "turn_end",
           message: { role: "assistant", content: [] },
           toolResults: [],
@@ -460,6 +461,11 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
 
     private emit(event: Record<string, unknown>) {
       for (const listener of this.listeners) listener(event);
+    }
+
+    // pi-agent-core awaits async listeners before it checks the follow-up queue.
+    private async emitAndAwait(event: Record<string, unknown>) {
+      for (const listener of this.listeners) await listener(event);
     }
   },
 }));
