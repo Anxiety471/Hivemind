@@ -545,6 +545,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["boards/get"],
       ["boards/rename"],
       ["boards/subscribe"],
+      ["commitChecks/list", { commits: [], pullRequests: [] }],
       ["tickets/list"],
       ["tickets/get"],
       ["tickets/create"],
