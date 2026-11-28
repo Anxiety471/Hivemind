@@ -94,6 +94,8 @@ import {
   pauseRunForTakeover,
   releaseUserControl,
 } from "./thread-takeover.js";
+import type { TicketChatAnswer } from "./ticket-chat-answers.js";
+import { resolveTicketDecisionsFromChatAnswer } from "./ticket-chat-answers.js";
 
 export { THREAD_LOCK_TRANSACTION_OPTIONS };
 
@@ -141,6 +143,12 @@ export interface ThreadEvents {
   ): Promise<void>;
   followOrganizationChanges?(userId: string, signal?: AbortSignal): AsyncGenerator<void>;
   answerRunInput(input: AnswerRunInput): Promise<boolean>;
+  /** Resolves the board tickets a composer reply settled, once the reply's transaction has committed. */
+  resolveTicketAnswers(input: {
+    spaceId: string;
+    answeredByUserId: string;
+    answers: TicketChatAnswer[];
+  }): Promise<void>;
   append(input: AppendEventInput): Promise<ProductEvent>;
   claimSteering(input: ClaimSteeringInput): Promise<ClaimedSteeringMessage[]>;
   clearThread(input: ClearThreadInput): Promise<ClearThreadResult>;
@@ -290,6 +298,7 @@ export function createThreadEvents(
     publishOrganizationChange: (organizationId, alsoUserIds) =>
       publishOrganizationChange(prisma, realtime, organizationId, alsoUserIds),
     answerRunInput: (input) => answerRunInput(prisma, input, realtime, options.runSecretWriter),
+    resolveTicketAnswers: (input) => resolveTicketDecisionsFromChatAnswer(prisma, input, realtime),
     append: (input) => appendEvent(prisma, input, realtime, options.analytics),
     claimSteering: (input) => claimSteering(prisma, input),
     clearThread: (input) => clearThread(prisma, input, realtime),

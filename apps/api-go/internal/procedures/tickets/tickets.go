@@ -700,6 +700,7 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 	}
 	var ticket Ticket
 	var previousStatus string
+	var decisionCleared bool
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		// The ticketRow is held (FOR UPDATE) before it is read, so a concurrent move cannot interleave.
 		if _, err := tx.Exec(ctx, `SELECT id FROM tickets WHERE id = $1 AND "spaceId" = $2 FOR UPDATE`,
@@ -730,6 +731,7 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		if input.Status != "blocked" && input.Status != "review" {
 			if existing := readStoredDecision(current.Decision); existing != nil && existing.Answer == "" {
 				nextDecision = nil
+				decisionCleared = true
 			}
 		}
 		value, err := scanTicket(tx.QueryRow(ctx, `UPDATE tickets SET status = $2, "completedAt" = $3, "updatedAt" = $4,
@@ -751,6 +753,9 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 	}
 	if !ticketValid(ticket) || ticket.ID == "" {
 		return nil, shared.OutputInvalid()
+	}
+	if answer, settled := settledAnswer(ticket.Ref, previousStatus != ticket.Status, ticket.Status, decisionCleared); settled {
+		retireChatQuestions(ctx, database, deployment, actor, ticket.Ref, answer)
 	}
 	if deployment.Waker != nil && previousStatus != ticket.Status && wakesOnStatus(ticket.Status) {
 		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, ticket.ID, ticket.WorkerBotIDs,
@@ -1050,6 +1055,8 @@ func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	if !ticketValid(outTicket) || outTicket.ID == "" {
 		return nil, shared.OutputInvalid()
 	}
+	// The decision the person just answered settles the chat question it came from.
+	retireChatQuestions(ctx, database, deployment, actor, outTicket.Ref, answerText)
 	if deployment.Waker != nil && len(wakeBotIDs) > 0 {
 		note := strings.Replace(commentNote(answerText), "A person commented: ", "User answered decision: ", 1)
 		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, outTicket.ID, wakeBotIDs, note)
@@ -2066,10 +2073,11 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	}
 
 	var (
-		ticket        Ticket
-		addedWorkers  []string
-		mentionedBots []string
-		statusChanged bool
+		ticket          Ticket
+		addedWorkers    []string
+		mentionedBots   []string
+		statusChanged   bool
+		decisionCleared bool
 	)
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT id FROM tickets WHERE id = $1 AND "spaceId" = $2 FOR UPDATE`,
@@ -2184,11 +2192,12 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		completedAt := current.CompletedAt
 		if input.HasStatus || finished {
 			if input.HasStatus {
-				statusChanged = input.Status != current.Status
 				status = input.Status
 			} else {
 				status = "done"
 			}
+			// A merge that finishes the ticket counts as its status change, as ticket-tools.ts does.
+			statusChanged = status != current.Status
 			if completedStatus(status) {
 				if completedAt == nil {
 					at := now()
@@ -2214,6 +2223,7 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			// A finished ticket waits on nobody, so a question sent with the merge is dropped too.
 			if existing := readStoredDecision(current.Decision); existing != nil && existing.Answer == "" {
 				nextDecision = nil
+				decisionCleared = true
 			}
 		}
 
@@ -2255,6 +2265,12 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	}
 	if !ticketValid(ticket) || ticket.ID == "" {
 		return nil, shared.OutputInvalid()
+	}
+	// A closed or done ticket, or a cleared or explicitly removed decision, settles the chat
+	// questions about it.
+	decisionRemoved := input.HasDecision && input.Decision == nil
+	if answer, settled := settledAnswer(ticket.Ref, statusChanged, ticket.Status, decisionCleared || decisionRemoved); settled {
+		retireChatQuestions(ctx, database, deployment, actor, ticket.Ref, answer)
 	}
 	var statusWakes []string
 	if statusChanged && wakesOnStatus(ticket.Status) {

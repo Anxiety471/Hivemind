@@ -128,6 +128,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
       .optional(),
     detail: z.string().optional(),
     detailFormat: z.enum(["text", "code"]).optional(),
+    /** The board ticket this single decision is about; answering it resolves the ticket too. */
+    ticketRef: z.string().optional(),
     /** On a payment card, the order as the page shows it, drawn as a receipt in place of `detail`. */
     receipt: AskReceipt.optional(),
     input: z.enum(["text", "secret"]).optional(),

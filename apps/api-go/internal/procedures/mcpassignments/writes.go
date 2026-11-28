@@ -378,7 +378,7 @@ func CloseServerCards(
 		if !ok || !changed {
 			continue
 		}
-		if err := writeBlocks(ctx, tx, ring, message.id, message.threadID, stored); err != nil {
+		if err := messageblocks.Write(ctx, tx, ring, message.id, message.threadID, stored); err != nil {
 			return nil, err
 		}
 		eventBotID := ""

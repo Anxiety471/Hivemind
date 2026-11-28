@@ -93,12 +93,18 @@ export const conversationTools: ConnectorTool[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user and wait. One question: `options` (2-4) + `recommended`; put draft context in `detail`. Several independent decisions (a Still open digest): `items` instead, never with options.",
+      "Ask the user and wait. One question: `options` (2-4) + `recommended`; put draft context in `detail`. Several independent decisions (a Still open digest): `items` instead, never with options. Do not duplicate a decision already placed on a board ticket's `decision`.",
     inputSchema: {
       type: "object",
       properties: {
         question: { type: "string", maxLength: 240 },
         detail: { type: "string", maxLength: 4_000 },
+        ticketRef: {
+          type: "string",
+          maxLength: 32,
+          description:
+            "Ticket ref (e.g. TASK-42) when this decision is about a board ticket, so answering resolves both.",
+        },
         options: {
           type: "array",
           items: { type: "string", minLength: 1, maxLength: 80 },

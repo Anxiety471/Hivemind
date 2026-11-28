@@ -175,7 +175,11 @@ describe.skipIf(!enabled)("group reaction and clear lock order (PostgreSQL)", ()
     await bothCommitWithGroupWriter(() =>
       runAsTenant(actor, () =>
         reactToThreadMessage(
-          { prisma, jobs: { enqueue: vi.fn().mockResolvedValue(undefined) } as never },
+          {
+            prisma,
+            jobs: { enqueue: vi.fn().mockResolvedValue(undefined) } as never,
+            events: {} as never,
+          },
           actor,
           target,
           { messageId: parent.id, reaction: "👍", clientNonce: randomUUID(), mayStartTurn: false },

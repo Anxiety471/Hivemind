@@ -61,7 +61,6 @@ import { formatRelativeTime } from "../../lib/locale/relative-time";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
 import { errorText } from "../../lib/query/user-error";
 import {
-  deriveTicketDecision,
   OWNER_ME_VALUE,
   ownerOptionValue,
   ownerPayloadFromValue,
@@ -318,8 +317,8 @@ export function TicketDetailView({
     (primaryWorkerId ? bots.find((bot) => bot.id === primaryWorkerId) : undefined) ??
     (ticket.ownerBotId ? bots.find((bot) => bot.id === ticket.ownerBotId) : undefined);
 
-  const storedPendingDecision = hasPendingTicketDecision(ticket) ? ticket.decision : undefined;
-  const pendingDecision = storedPendingDecision ?? deriveTicketDecision(ticket, comments);
+  // Only a decision the board stored is shown; the UI never invents choices for a ticket.
+  const pendingDecision = hasPendingTicketDecision(ticket) ? ticket.decision : undefined;
   const answeredDecision = ticket.decision?.answer ? ticket.decision : undefined;
   const newestComments = [...comments].reverse();
   const busy = moving.pending || deciding.pending || commenting.pending;
@@ -451,11 +450,7 @@ export function TicketDetailView({
                         </span>
                       ) : undefined
                     }
-                    onClick={() =>
-                      storedPendingDecision
-                        ? deciding.run({ optionId: option.id })
-                        : deciding.run({ customAnswer: option.label })
-                    }
+                    onClick={() => deciding.run({ optionId: option.id })}
                   >
                     {option.label}
                   </OptionRow>

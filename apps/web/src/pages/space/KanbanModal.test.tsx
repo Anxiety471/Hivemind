@@ -485,35 +485,23 @@ it("renders 3-option + recommended + Other decision controls and submits both mo
   });
 });
 
-it("derives 3 choices (+ Recommended + Other) for legacy blocked tickets with side comment panel", async () => {
-  const legacyBlocked = makeTicket({
-    id: "t-legacy",
+it("shows no decision card for a blocked ticket without a stored decision, so no choices are invented", async () => {
+  const blocked = makeTicket({
+    id: "t-blocked",
     ref: "RAK-114",
     title: "Decide R2 overage after preserving archive",
     status: "blocked",
     description:
       "Decision on R2 overage: choose keep (accept overage) or delete before next snapshot.",
   });
-  api.tickets.list.mockResolvedValue({ tickets: [legacyBlocked] });
-  api.tickets.decide.mockResolvedValue({
-    ticket: { ...legacyBlocked, status: "todo" },
-    comment: {
-      id: "c-legacy",
-      ticketId: "t-legacy",
-      body: "Keep preserved archive (accept overage)",
-      authorUserId: "u-1",
-      authorBotId: null,
-      authorName: "User",
-      createdAt: new Date().toISOString(),
-    },
-  });
+  api.tickets.list.mockResolvedValue({ tickets: [blocked] });
 
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
         <KanbanModal
           open
-          target={legacyBlocked}
+          target={blocked}
           botId="bot-1"
           botName="Scout"
           bots={bots}
@@ -526,25 +514,8 @@ it("derives 3 choices (+ Recommended + Other) for legacy blocked tickets with si
     await flush();
   });
 
-  const decisionCard = host.querySelector('[data-testid="ticket-decision-card"]')!;
-  expect(decisionCard).not.toBeNull();
-  const commentPanel = host.querySelector('[data-testid="kanban-comment-panel"]')!;
-  expect(commentPanel).not.toBeNull();
-  expect(commentPanel.querySelector('textarea[aria-label="Comment"]')).not.toBeNull();
-  expect(host.textContent).not.toContain("Reply to unblock");
-  expect(decisionCard.textContent).toContain("Keep preserved archive (accept overage)");
-  expect(decisionCard.textContent).toContain("Recommended");
-  expect(decisionCard.textContent).toContain("Other");
-
-  const firstOption = Array.from(decisionCard.querySelectorAll("button")).find((button) =>
-    button.textContent?.includes("Keep preserved archive (accept overage)"),
-  )!;
-  await act(async () => firstOption.click());
-  await act(async () => {
-    await flush();
-  });
-  expect(api.tickets.decide).toHaveBeenCalledWith({
-    ticketId: "t-legacy",
-    customAnswer: "Keep preserved archive (accept overage)",
-  });
+  expect(host.querySelector('[data-testid="ticket-decision-card"]')).toBeNull();
+  expect(host.textContent).not.toContain("Keep preserved archive");
+  expect(host.textContent).not.toContain("Needs your decision");
+  expect(api.tickets.decide).not.toHaveBeenCalled();
 });

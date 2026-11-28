@@ -283,6 +283,7 @@ func askBlock(value any) (any, bool) {
 		)),
 		optional("detail", str),
 		optional("detailFormat", enum("text", "code")),
+		optional("ticketRef", str),
 		optional("receipt", askReceipt),
 		optional("input", enum("text", "secret")),
 		optional("purpose", enum("otp", "password", "api_key")),

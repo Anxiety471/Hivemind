@@ -440,6 +440,9 @@ function toAgentTool(
           ...(typeof raw.detail === "string" && raw.detail
             ? { detail: redactedAskUserDetail(raw.detail, host.request.secrets) }
             : {}),
+          ...(typeof raw.ticketRef === "string" && raw.ticketRef.trim()
+            ? { ticketRef: raw.ticketRef.trim() }
+            : {}),
           // Keep a missing/invalid options value as-is so schema minItems can reject it;
           // coercing to [] would look like a valid empty list upstream.
           options,
@@ -651,6 +654,7 @@ function toAgentTool(
                     );
                   }
                 }
+                const ticketRef = singleAskTicketRef(args.ticketRef);
                 host.pausePending = true;
                 host.queue.push({
                   type: "ask",
@@ -659,6 +663,7 @@ function toAgentTool(
                   ...(typeof args.detail === "string" && args.detail
                     ? { detail: args.detail }
                     : {}),
+                  ...(ticketRef ? { ticketRef } : {}),
                   actions: options.map((label, index) => ({
                     id: `choice-${index + 1}`,
                     label,
@@ -957,6 +962,16 @@ function prepareAskItemArguments(raw: unknown, secrets: readonly string[] | unde
       ? { recommended: item.recommended.trim() }
       : {}),
   };
+}
+
+/** The optional board ticket a single ask is about; trimmed, and the schema caps its length. */
+function singleAskTicketRef(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const ticketRef = raw.trim();
+  if (ticketRef.length > MAX_ASK_ITEM_TICKET_REF_LENGTH) {
+    throw new Error(`ask_user ticketRef is at most ${MAX_ASK_ITEM_TICKET_REF_LENGTH} characters`);
+  }
+  return ticketRef || undefined;
 }
 
 /** Validates ask_user `items` and builds the ask event's items; throws on a bad batch. */

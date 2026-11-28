@@ -908,6 +908,8 @@ export type AgentRuntimeEvent =
       executionId?: string;
       text: string;
       detail?: string;
+      /** The board ticket a single ask is about, when the bot named one. */
+      ticketRef?: string;
       actions?: Array<{ id: string; label: string; recommended?: boolean; description?: string }>;
       /** Batch triage: independent items, each with its own choices (FYI rows omit `actions`). */
       items?: Array<{

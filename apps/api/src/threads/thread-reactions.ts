@@ -1,7 +1,7 @@
 import type { JobPublisher } from "@rakazo/adapter-kit";
 import type { Actor, MessageBlock, MessageReaction } from "@rakazo/contracts";
 import { ACTIVE_RUN_STATUSES, messageReaction, QUEUE_HOLDING_RUN_STATUSES } from "@rakazo/core";
-import type { Prisma, PrismaClient } from "@rakazo/db";
+import type { Prisma, PrismaClient, ThreadEvents, TicketChatAnswer } from "@rakazo/db";
 import {
   answerWaitingRunWithTextInTransaction,
   appendEventInTransaction,
@@ -13,6 +13,7 @@ import {
   THREAD_LOCK_TRANSACTION_OPTIONS,
   touchGroupUpdatedAt,
 } from "@rakazo/db";
+import { bestEffort } from "@rakazo/logging";
 import type { ThreadTarget } from "./thread-target.js";
 import {
   cancelSupersededQueuedRuns,
@@ -31,7 +32,7 @@ const REACTION_TURN_COOLDOWN_MS = 30_000;
  * Approval and secret asks remain on their cards. Reactions are append-only.
  */
 export async function reactToThreadMessage(
-  deps: { prisma: PrismaClient; jobs: JobPublisher },
+  deps: { prisma: PrismaClient; jobs: JobPublisher; events: ThreadEvents },
   actor: Actor,
   target: ThreadTarget,
   input: {
@@ -43,6 +44,8 @@ export async function reactToThreadMessage(
   },
   releaseTakeover?: (runId: string) => Promise<void>,
 ) {
+  // Board tickets the reaction's answered ask settles; resolved once the reaction commits.
+  const ticketAnswers: TicketChatAnswer[] = [];
   const committed = await deps.prisma.$transaction(async (tx) => {
     // Group before thread, the order every group writer uses.
     const members =
@@ -91,10 +94,16 @@ export async function reactToThreadMessage(
       clientNonce: input.clientNonce,
     });
     const runs = replyBotId
-      ? await startReactionTurn(tx, actor, target.threadId, replyBotId, parent, message, {
-          ...input,
-          canReleaseTakeover: Boolean(releaseTakeover),
-        })
+      ? await startReactionTurn(
+          tx,
+          actor,
+          target.threadId,
+          replyBotId,
+          parent,
+          message,
+          { ...input, canReleaseTakeover: Boolean(releaseTakeover) },
+          ticketAnswers,
+        )
       : [];
     if (target.kind === "group") await touchGroupUpdatedAt(tx, target.groupId);
     const event = await appendEventInTransaction(tx, {
@@ -114,6 +123,15 @@ export async function reactToThreadMessage(
     });
     return { eventSeq: event.seq, runs };
   }, THREAD_LOCK_TRANSACTION_OPTIONS);
+  if (ticketAnswers.length)
+    await bestEffort(
+      "resolve ticket decisions from chat",
+      deps.events.resolveTicketAnswers({
+        spaceId: actor.spaceId,
+        answeredByUserId: actor.userId,
+        answers: ticketAnswers,
+      }),
+    );
   if (releaseTakeover) {
     for (const run of committed.runs) {
       if (run.status === "waiting_takeover") await releaseTakeover(run.id);
@@ -157,6 +175,7 @@ async function startReactionTurn(
   parent: { id: string; runId: string | null },
   message: { id: string; seq: number },
   input: { reaction: MessageReaction; clientNonce: string; canReleaseTakeover: boolean },
+  ticketAnswers: TicketChatAnswer[],
 ): Promise<Array<{ id: string; taskId: string; status: string }>> {
   const activeRuns = await tx.run.findMany({
     where: { threadId, botId, status: { in: [...ACTIVE_RUN_STATUSES] } },
@@ -209,6 +228,7 @@ async function startReactionTurn(
         messageId: parent.id,
       });
       if (answered) {
+        ticketAnswers.push(...answered.ticketAnswers);
         await tx.message.update({ where: { id: message.id }, data: { runId: active.id } });
         return [{ ...active, status: "queued" }];
       }
