@@ -36,6 +36,7 @@ export interface AppleContainerSandboxOptions {
   cpus?: string;
   memory?: string;
   readyTimeoutMs?: number;
+  packageMirrorUrl?: string;
 }
 
 interface ContainerRecord {
@@ -91,7 +92,7 @@ export class AppleContainerSandboxProvider extends ImageComputerSandbox {
   private readonly readyTimeoutMs: number;
 
   constructor(options: AppleContainerSandboxOptions = {}) {
-    super(KIND, "VM");
+    super(KIND, "VM", options.packageMirrorUrl);
     this.cli = options.cli?.trim() || "container";
     this.computerImage = options.computerImage?.trim() || DEFAULT_COMPUTER_IMAGE;
     this.cpus = options.cpus?.trim() || DEFAULT_CPUS;
@@ -144,7 +145,11 @@ export class AppleContainerSandboxProvider extends ImageComputerSandbox {
 
   /** The `container run` argv: a VM of its own on its own network, running as the image user. */
   runArgs(name: string, botId: string): string[] {
-    const environment = { ...COMPUTER_CACHE_ENV, VNC_RESOLUTION: "1280x800" };
+    const environment = {
+      ...COMPUTER_CACHE_ENV,
+      ...this.packageMirrorEnv,
+      VNC_RESOLUTION: "1280x800",
+    };
     return [
       "run",
       "--detach",

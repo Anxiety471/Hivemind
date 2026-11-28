@@ -188,12 +188,16 @@ export * from "./routines/strategic-initiative.js";
 export {
   CUT_REPLY_CONTINUATION_PROMPT,
   cutReplyAtLimitPrompt,
+  EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
+  EMPTY_RESPONSE_REMINDER_PROMPT,
   SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
   SILENT_TOOL_CONTINUATION_PROMPT,
 } from "./runs/assembly/continuation.prompt.js";
 export * from "./runs/assembly/current-time.prompt.js";
+export { operatorInstruction } from "./runs/assembly/operator-instructions.js";
 export * from "./runs/assembly/run-runtime.js";
 export { createRunTrustLoaders } from "./runs/assembly/run-trust.js";
+export { renderBaseSystemPromptPreview } from "./runs/assembly/system-prompt.prompt.js";
 export * from "./runs/executor/executor.js";
 export * from "./runs/labs-env.js";
 export { notifyMemberMessage } from "./runs/lifecycle/run-notifications.js";
@@ -281,6 +285,7 @@ export { TASK_CATALOG_GUIDANCE } from "./tasks/task-catalog.prompt.js";
 export * from "./tasks/task-detect.js";
 export * from "./tasks/ticket-archive.js";
 export * from "./tasks/ticket-changes.js";
+export * from "./tasks/ticket-links.js";
 export * from "./tasks/ticket-tools.js";
 export * from "./tools/builtin.tool-definition.js";
 export * from "./tools/builtin-skills.prompt.js";

@@ -281,6 +281,11 @@ export async function loadRunRecords(
     nonOwnerChat: nonOwnerChatRun,
   });
   const ticketBoardEnabled = hasLab(resolveLabs(ownerLabs, deps.deploymentLabs), "board");
+  const codeModeEnabled = hasLab(resolveLabs(ownerLabs, deps.deploymentLabs), "code");
+  // Code first only changes what a run lists once code mode is on, so it never hides a tool
+  // the script cannot reach.
+  const codeFirstEnabled =
+    codeModeEnabled && hasLab(resolveLabs(ownerLabs, deps.deploymentLabs), "codeFirst");
   const historySearchBeforeSeq =
     contextStrategy !== "current" && conversationRun.sourceMessageId
       ? (messages.find((message) => message.id === conversationRun.sourceMessageId)?.seq ??
@@ -344,6 +349,8 @@ export async function loadRunRecords(
     nonOwnerChatRun,
     replaysToolHistory,
     ticketBoardEnabled,
+    codeModeEnabled,
+    codeFirstEnabled,
     helperDepth,
     historySearchBeforeSeq,
     agentEnvironmentInstruction,

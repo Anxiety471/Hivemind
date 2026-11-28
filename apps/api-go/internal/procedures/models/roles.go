@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Roles is ModelRoleSchema.options.
@@ -259,7 +259,7 @@ func Role(
 		return nil
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return view, nil
 }
@@ -291,11 +291,7 @@ func SetRole(
 		}
 	}
 	if err != nil {
-		var domain *orpc.Error
-		if errors.As(err, &domain) {
-			return nil, domain
-		}
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	recordRoleAudit(ctx, deployment, actor, input)
 	return view, nil
@@ -404,10 +400,10 @@ func readRole(ctx context.Context, tx pgx.Tx, actor db.Actor, target, role strin
 // answered with the output failure.
 func storedChoice(provider, modelID string, thinkingLevel, credentialID *string) (RoleChoice, *orpc.Error) {
 	provider, modelID = validate.JSTrim(provider), validate.JSTrim(modelID)
-	if n := utf8.RuneCountInString(provider); n < 1 || n > maxProvider {
+	if !wtf8.Fits(provider, 1, maxProvider) {
 		return RoleChoice{}, shared.OutputInvalid()
 	}
-	if n := utf8.RuneCountInString(modelID); n < 1 || n > maxModelID {
+	if !wtf8.Fits(modelID, 1, maxModelID) {
 		return RoleChoice{}, shared.OutputInvalid()
 	}
 	choice := RoleChoice{Provider: provider, ModelID: modelID}
@@ -548,12 +544,12 @@ func insertRoleRow(ctx context.Context, tx pgx.Tx, actor db.Actor, target, role 
 	if target == "space" {
 		_, err := tx.Exec(ctx, `INSERT INTO space_model_role_choices ("userId", "spaceId", role, "position", provider, "modelId", "thinkingLevel", "credentialId")
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			actor.UserID, actor.SpaceID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)
+			db.Data(actor.UserID, actor.SpaceID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)...)
 		return err
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO user_model_role_choices ("userId", role, "position", provider, "modelId", "thinkingLevel", "credentialId")
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		actor.UserID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)
+		db.Data(actor.UserID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)...)
 	return err
 }
 

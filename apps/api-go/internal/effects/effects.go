@@ -74,6 +74,10 @@ var auditedProcedures = map[string]audited{
 	"approvalRules.set":         {Type: "approval.policy.changed", Fields: []string{"effect", "matchKind"}},
 	"spaceSettings.setOverride": {Type: "approval.policy.changed", Fields: []string{"setting", "enabled"}},
 	"bots.rotateWebhookSecret":  {Type: "credential.changed", Kind: "webhook", Fields: []string{"botId"}},
+	"mcp.assignments.approve":   {Type: "approval.decided", Kind: "mcp", Fields: []string{"botId", "serverId"}},
+	"mcp.assignments.dismiss":   {Type: "approval.decided", Kind: "mcp", Fields: []string{"botId", "serverId"}},
+	"mcp.servers.remove":        {Type: "credential.deleted", Kind: "mcp", Fields: []string{"id"}},
+	"mcp.oauth.disconnect":      {Type: "credential.deleted", Kind: "mcp_oauth", Fields: []string{"serverId"}},
 }
 
 // SecurityEventFor is procedureSecurityEvent: the event for a procedure that just
@@ -107,6 +111,13 @@ func SecurityEventFor(procedure string, input map[string]any, actor db.Actor) (S
 				metadata = append(metadata, Meta{Key: name, Value: nil})
 			}
 		}
+	}
+	// auth-audit.ts pins the decision the procedure made (security-audit.ts:161-162).
+	if procedure == "mcp.assignments.approve" {
+		metadata = append(metadata, Meta{Key: "decision", Value: "allow"})
+	}
+	if procedure == "mcp.assignments.dismiss" {
+		metadata = append(metadata, Meta{Key: "decision", Value: "deny"})
 	}
 	return SecurityEvent{Type: entry.Type, UserID: actor.UserID, SpaceID: actor.SpaceID, Metadata: metadata}, true
 }
@@ -214,13 +225,14 @@ func RosterChangeFor(procedure string, actor db.Actor, input map[string]any, out
 // spaceChangeProcedures is SPACE_CHANGE_PROCEDURES (space-change-procedures.ts).
 var spaceChangeProcedures = map[string][]string{
 	"routines.create": {"routines"}, "routines.update": {"routines"}, "routines.remove": {"routines"},
+	"routines.setPrepare":      {"routines"},
 	"routines.testRun":         {"runs"},
 	"threads.sendWithRoutines": {"runs"}, "threads.react": {"runs"}, "threads.endCall": {"runs"},
 	"threads.followUp": {"runs"}, "skills.testRun": {"runs"},
 	"bots.restore": {"runs", "routines"}, "bots.remove": {"runs", "routines"},
 	"files.createFolder": {"files"}, "files.renameFolder": {"files"}, "files.moveFolder": {"files"},
 	"files.trashFolder": {"files"}, "files.restoreFolder": {"files"}, "files.deleteFolder": {"files"},
-	"files.rename": {"files"}, "files.move": {"files"}, "files.trash": {"files"},
+	"files.rename": {"files"}, "files.update": {"files"}, "files.move": {"files"}, "files.trash": {"files"},
 	"files.restore": {"files"}, "files.deletePermanent": {"files"}, "files.emptyTrash": {"files"},
 	"artifacts.create": {"files"}, "artifacts.remove": {"files"},
 }

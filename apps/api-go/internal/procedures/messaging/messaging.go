@@ -31,17 +31,6 @@ const (
 
 var errNotFound = orpc.NotFound("Not Found")
 
-func asFailure(err error) *orpc.Error {
-	var failure *orpc.Error
-	if errors.As(err, &failure) {
-		return failure
-	}
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
-}
-
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 
 // inSystem is acrossChatIdentities: chat identities belong to the account and
@@ -141,6 +130,7 @@ func LinkStart(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 		}
 		expiresAt := now().Add(linkCodeTTL)
 		// One active code per user: a fresh request supersedes the previous one.
+		// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "messaging-link-code:"+actor.UserID); err != nil {
 			return err
 		}
@@ -148,7 +138,7 @@ func LinkStart(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO messaging_link_codes (id, code, "userId", "spaceId", "botId", "expiresAt", "createdAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`, effects.NewID(), code, actor.UserID, spaceID, botID, expiresAt, now()); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, db.Data(effects.NewID(), code, actor.UserID, spaceID, botID, expiresAt, now())...); err != nil {
 			return err
 		}
 		var members int
@@ -163,7 +153,7 @@ func LinkStart(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 		return nil
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -232,7 +222,8 @@ func SetBot(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 				return err
 			}
 			err = inner.QueryRow(ctx, `UPDATE messaging_identities SET "botId" = $1, "spaceId" = $2, "updatedAt" = $3 WHERE id = $4
-				RETURNING id, provider, address, "botId"`, botID, actor.SpaceID, now(), values["identityId"]).
+				RETURNING id, provider, address, "botId"`,
+				append(db.Data(botID, actor.SpaceID, now()), values["identityId"])...).
 				Scan(&result.ID, &result.Provider, &result.Address, &result.BotID)
 			if err != nil {
 				_ = inner.Rollback(ctx)
@@ -257,7 +248,7 @@ func SetBot(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		})
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -281,7 +272,7 @@ func Unlink(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		})
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -342,7 +333,7 @@ func ChannelsList(ctx context.Context, database *db.DB, actor db.Actor, _ orpc.I
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return memberships, nil
 }
@@ -381,7 +372,8 @@ func ChannelsRespond(ctx context.Context, database *db.DB, actor db.Actor, raw o
 		if accept {
 			status = "approved"
 		}
-		tag, err := tx.Exec(ctx, `UPDATE messaging_channel_members SET status = $1, "updatedAt" = $2 WHERE id = $3 AND status = 'invited'`, status, now(), membership.ID)
+		tag, err := tx.Exec(ctx, `UPDATE messaging_channel_members SET status = $1, "updatedAt" = $2 WHERE id = $3 AND status = 'invited'`,
+			append(db.Data(status, now()), membership.ID)...)
 		if err != nil {
 			return err
 		}
@@ -393,7 +385,7 @@ func ChannelsRespond(ctx context.Context, database *db.DB, actor db.Actor, raw o
 		return err
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -421,11 +413,12 @@ func ChannelsLeave(ctx context.Context, database *db.DB, actor db.Actor, raw orp
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE messaging_channel_members SET status = 'left', "updatedAt" = $1 WHERE id = $2`, now(), id)
+		_, err = tx.Exec(ctx, `UPDATE messaging_channel_members SET status = 'left', "updatedAt" = $1 WHERE id = $2`,
+			append(db.Data(now()), id)...)
 		return err
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -482,7 +475,7 @@ func ConnectionsList(ctx context.Context, database *db.DB, actor db.Actor, _ orp
 		return nil
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return connections, nil
 }
@@ -561,7 +554,7 @@ func ConnectionsRevoke(ctx context.Context, database *db.DB, actor db.Actor, raw
 		// reconnect waits until both the revoke and the invite delete finish.
 		return inSystem(ctx, database, tx, func() error {
 			tag, err := tx.Exec(ctx, `UPDATE agent_connections SET status = 'revoked', "updatedAt" = $1 WHERE id = $2 AND status = $3`,
-				now(), values["connectionId"], status)
+				append(db.Data(now()), values["connectionId"], status)...)
 			if err != nil {
 				return err
 			}
@@ -576,7 +569,7 @@ func ConnectionsRevoke(ctx context.Context, database *db.DB, actor db.Actor, raw
 		})
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }

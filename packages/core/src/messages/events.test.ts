@@ -1348,7 +1348,10 @@ describe("a reply's kept tool calls", () => {
 
 describe("timed live steps, cost, and checkpoint branches", () => {
   it("tracks running steps, completion durations, usage cost, and attempt branches", () => {
-    let blocks = appendToolCallSegment([], "shell", "pnpm test", { startedAtMs: 1_000, attempt: 1 });
+    let blocks = appendToolCallSegment([], "shell", "pnpm test", {
+      startedAtMs: 1_000,
+      attempt: 1,
+    });
     expect(blocks).toEqual([
       {
         kind: "steps",
@@ -1431,6 +1434,61 @@ describe("timed live steps, cost, and checkpoint branches", () => {
             durationMs: 900,
             attempt: 2,
             forkedFromStep: 0,
+            status: "done",
+            outcomes: { succeeded: 1 },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("updates running and final step detail when tool_completed or withToolStepOutcomes supplies it", () => {
+    let blocks = appendToolCallSegment([], "code_mode", undefined, {
+      startedAtMs: 1_000,
+    });
+    blocks = reduceLiveMessageBlocks(blocks, {
+      type: "tool_completed",
+      name: "code_mode",
+      durationMs: 250,
+      outcome: "succeeded",
+      detail: "board_tickets, cmd.weekly_report",
+    });
+    expect(blocks).toEqual([
+      {
+        kind: "steps",
+        steps: [
+          {
+            label: "Code mode",
+            count: 1,
+            detail: "board_tickets, cmd.weekly_report",
+            startedAtMs: 1_000,
+            durationMs: 250,
+            status: "done",
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      withToolStepOutcomes(blocks, [
+        {
+          label: "Code mode",
+          outcome: "succeeded",
+          durationMs: 250,
+          startedAtMs: 1_000,
+          detail: "board_tickets, cmd.weekly_report, list_fleet",
+        },
+      ]),
+    ).toEqual([
+      {
+        kind: "steps",
+        steps: [
+          {
+            label: "Code mode",
+            count: 1,
+            detail: "board_tickets, cmd.weekly_report, list_fleet",
+            startedAtMs: 1_000,
+            durationMs: 250,
             status: "done",
             outcomes: { succeeded: 1 },
           },

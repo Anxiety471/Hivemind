@@ -256,6 +256,9 @@ function applyUploadField(params: DriveUploadParams, name: string, raw: string):
     case "name":
       if (value) params.name = value;
       break;
+    case "slug":
+      params.slug = value || null;
+      break;
     case "description":
       params.description = value || null;
       break;
@@ -388,6 +391,7 @@ export function mountFileRoutes(app: Hono, deps: FileRouteDeps): void {
       runId: optQueryOrHeader(c, "runId", "X-File-Run-Id"),
       source: optQueryOrHeader(c, "source", "X-File-Source") ?? "upload",
       name: optQueryOrHeader(c, "name", "X-File-Name"),
+      slug: optQueryOrHeader(c, "slug", "X-File-Slug"),
       description: optQueryOrHeader(c, "description", "X-File-Description"),
       mimeType: optQueryOrHeader(c, "mimeType", "X-File-Mime-Type"),
       clientNonce: optQueryOrHeader(c, "clientNonce", "X-File-Nonce"),

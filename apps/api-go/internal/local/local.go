@@ -48,16 +48,51 @@ type Procedure struct {
 // re-check that the session is still the one that opened the stream.
 type Stream struct {
 	// Follow runs the procedure's own checks and starts listening. A failure is answered as an
-	// ordinary error before any stream starts. Each payload read from signals becomes a Frame;
-	// stop ends the listening.
-	Follow func(ctx context.Context, actor db.Actor, input orpc.Input) (signals <-chan string, stop func(), failure *orpc.Error)
+	// ordinary error before any stream starts.
+	Follow func(ctx context.Context, actor db.Actor, input orpc.Input) (*Follow, *orpc.Error)
 	// Frame is the event a signal's payload stands for. An empty payload is the fanout's
 	// catch-up after its listener reconnects: anything may have changed.
 	Frame func(actor db.Actor, payload string) any
-	// HeartbeatFrame is the frame sent after a quiet spell so a half-open stream is noticed and
-	// proxies keep the connection. Clients tell it apart from a change and do not read for it;
-	// without one, Frame(actor, "") stands in.
-	HeartbeatFrame func(actor db.Actor) any
+}
+
+// Follow is a started stream: what its source produces, how to stop it, and the frame a quiet
+// spell sends. The heartbeat belongs here rather than on Stream because it may name state only
+// the source resolved (a chat's thread and bot, say), which the actor alone cannot supply.
+type Follow struct {
+	// Signals carries each payload Frame turns into an event.
+	Signals <-chan string
+	// Stop ends the listening; the server calls it once when the stream ends. It must be safe to
+	// call while a source is blocked handing over a frame.
+	Stop func()
+	// Heartbeat is the frame sent after a quiet spell, so a half-open stream looks different
+	// from an idle one and proxies keep the connection. Clients tell it apart from a change and
+	// do not read for it.
+	Heartbeat func() any
+	// Failure, when set, is the error the source would raise at its first pull: the stream writes
+	// the opening comment, then that error as an `error` event, and ends.
+	Failure *orpc.Error
+	// Ending reportshow a stream whose Signals channel has closed finishes. Nil is a normal end
+	// (oRPC's controller.close(): the body simply stops); a Failure is one last `error` event
+	// before that close; Abort drops the connection with no terminating chunk, the way
+	// controller.error(err) does when a frame cannot even be written.
+	Ending func() Ending
+}
+
+// Ending is how a closed stream finishes on the wire.
+type Ending struct {
+	// Failure, when set, goes out as one `error` event before the body ends.
+	Failure *orpc.Error
+	// Abort closes the connection without the terminating chunk.
+	Abort bool
+}
+
+// Failed is a stream whose source raises before its first frame. oRPC discovers such a failure at
+// the first pull — after the 200 is on the wire — and answers with one `error` event: a target
+// that is not the caller's reaches a client as 200 then INTERNAL_SERVER_ERROR, not as a 404.
+func Failed(failure *orpc.Error) *Follow {
+	signals := make(chan string)
+	close(signals)
+	return &Follow{Signals: signals, Stop: func() {}, Failure: failure}
 }
 
 // StreamTiming sets how a stream paces itself; zero fields take the defaults the TypeScript
@@ -219,6 +254,40 @@ func (s *Server) ServeOrDecline(w http.ResponseWriter, r *http.Request, procedur
 	return s.serve(w, r, procedure)
 }
 
+// StatusClientClosedRequest is the status recorded for a request whose client went away before
+// the procedure answered. It is what nginx calls a 499 and what the TypeScript API's
+// markExpectedFailure stands for: a warn, no 5xx, and no body for a caller that is not there.
+const StatusClientClosedRequest = 499
+
+// fail answers a failed request, or records that nobody is left to answer a 5xx.
+//
+// A request whose own context is done has a client that disconnected. A failure that would
+// otherwise be a 5xx — context.Canceled, SQLSTATE 57014, a pool acquire under the canceled
+// context — has no one waiting for it, so it is logged as a disconnect and recorded as 499,
+// never as a 5xx that would blame the deployment for a browser navigating away
+// (rpc-errors.ts:147-155 suppresses every failure that is not an oRPC error). A 4xx under a
+// canceled request keeps its status and envelope, as TypeScript's own oRPC errors do. A failure
+// under a live context is unchanged.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, procedure string, failure *orpc.Error) {
+	if failure.Status >= 500 {
+		if r.Context().Err() != nil {
+			s.clientDisconnected(w, procedure, failure.Err())
+			return
+		}
+		s.config.Logger.Error(procedure+" failed", "error", failure.Err())
+	}
+	orpc.WriteError(w, failure)
+}
+
+// clientDisconnected records a request whose client went away before its 5xx could be answered:
+// a warn naming the cause, and status 499 with no body. The status is what nginx calls a closed
+// client request; writing it (headers only) is what makes the completion line here — and the
+// gateway's, through the same writer — count 499 instead of a 5xx.
+func (s *Server) clientDisconnected(w http.ResponseWriter, procedure string, cause error) {
+	s.config.Logger.Warn("client disconnected", "procedure", procedure, "error", cause)
+	w.WriteHeader(StatusClientClosedRequest)
+}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string) (declined bool) {
 	started := time.Now()
 	status := &statusWriter{ResponseWriter: w}
@@ -233,7 +302,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 	status.Header().Set("Cache-Control", "no-store")
 
 	if r.Method != http.MethodPost {
-		orpc.WriteError(status, orpc.New("METHOD_NOT_SUPPORTED", http.StatusMethodNotAllowed, "Method Not Supported"))
+		s.fail(status, r, procedure, orpc.New("METHOD_NOT_SUPPORTED", http.StatusMethodNotAllowed, "Method Not Supported"))
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -241,7 +310,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 		if s.config.BuildID != "" {
 			status.Header().Set("x-rakazo-build", s.config.BuildID)
 		}
-		orpc.WriteError(status, orpc.New("CLIENT_UPDATE_REQUIRED", 426, "Update required"))
+		s.fail(status, r, procedure, orpc.New("CLIENT_UPDATE_REQUIRED", 426, "Update required"))
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -251,13 +320,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 
 	session, renewal, failure := s.auth.Authenticate(r.Context(), r)
 	if failure != nil {
-		orpc.WriteError(status, failure)
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
 	actor, failure := s.auth.Actor(r.Context(), session, r.Header.Get("x-rakazo-space-id"))
 	if failure != nil {
-		orpc.WriteError(status, failure)
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -267,17 +336,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 
 	handler, ok := s.procs[procedure]
 	if !ok {
-		orpc.WriteError(status, orpc.New("NOT_IMPLEMENTED", http.StatusNotImplemented, "Not Implemented"))
+		s.fail(status, r, procedure, orpc.New("NOT_IMPLEMENTED", http.StatusNotImplemented, "Not Implemented"))
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
 	input, failure := orpc.DecodeInput(r, s.maxBody)
 	if failure != nil {
 		if failure.Status == 413 {
-			orpc.WriteError(status, orpc.TooLarge(fmt.Sprintf("Request body is too large. Upload limit: %s per file.", s.maxLabel)))
-		} else {
-			orpc.WriteError(status, failure)
+			failure = orpc.TooLarge(fmt.Sprintf("Request body is too large. Upload limit: %s per file.", s.maxLabel))
 		}
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -297,14 +365,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 		// Only a procedure marked MayDecline is run through a recorder the gateway can discard;
 		// anything else answering this is a bug, never a silent success.
 		if !handler.MayDecline {
-			orpc.WriteError(status, orpc.Internal())
+			s.fail(status, r, procedure, orpc.Internal())
+			s.log(r, procedure, status.Status(), started)
+			return false
+		}
+		if r.Context().Err() != nil {
+			// A request the client abandoned is not handed to the proxy: nothing would read the
+			// answer, and the proxy's failed upstream call would be logged as an outage and a 503.
+			s.clientDisconnected(status, procedure, r.Context().Err())
 			s.log(r, procedure, status.Status(), started)
 			return false
 		}
 		return true
 	}
 	if failure != nil {
-		orpc.WriteError(status, failure)
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}

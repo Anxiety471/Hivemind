@@ -9,6 +9,7 @@ import {
   TAKEOVER_COMPUTER_PENDING_STATE,
   TAKEOVER_COMPUTER_SKIPPED_STATE,
 } from "@rakazo/core";
+import { createLogger, createTestSink, getLogger, installLogger } from "@rakazo/logging";
 import { describe, expect, it, vi } from "vitest";
 import { installSecurityEventStore } from "../account/security-events.js";
 import { commitBotUpdate } from "../bots/bot-update.js";
@@ -285,6 +286,222 @@ describe("finalizeRun", () => {
     // Steering is settled before the kept reply exists, so the reply cannot count as its answer.
     expect(tx.message.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
       tx.message.create.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("preserves the turn checkpoint and emits resumable on failed runs when requested", async () => {
+    const deleteExternalEffect = vi.fn(async () => ({ count: 0 }));
+    const createEvent = vi.fn(async () => ({
+      id: "evt-1",
+      seq: 2,
+      threadId: "thread-1",
+      firstResponse: false,
+    }));
+    const tx = {
+      externalEffect: { deleteMany: deleteExternalEffect },
+      $executeRaw: vi.fn(async () => 0),
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({ status: "running", startedAt: null, userId: "user-1" })),
+        findUniqueOrThrow: vi.fn(async () => ({ sourceMessage: null })),
+        findFirst: vi.fn(async () => null),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      task: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      thread: { update: vi.fn(async () => ({ nextEventSeq: 3 })) },
+      secret: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      event: { create: createEvent, deleteMany: vi.fn(async () => ({ count: 0 })) },
+      steeringMessage: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        findMany: vi.fn(async () => []),
+      },
+      message: {
+        create: vi.fn(async () => ({ id: "msg-partial", seq: 5 })),
+        findFirst: vi.fn(async () => null),
+      },
+      bot: { update: vi.fn(async () => ({})) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await finalizeRun(prisma, {
+      spaceId: "space-1",
+      threadId: "thread-1",
+      botId: "bot-1",
+      runId: "run-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+      leaseOwner: "worker-1",
+      leaseFence: 2,
+      outcome: "failed",
+      error: "503 Service Unavailable",
+      partialReply: [{ kind: "text", text: "Halfway" }],
+      preserveTurnCheckpoint: true,
+    });
+
+    expect(deleteExternalEffect).not.toHaveBeenCalled();
+    expect(tx.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        clientNonce: partialReplyClientNonce("run-1", 2),
+      }),
+    });
+    expect(createEvent).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: "run.failed",
+        payload: { error: "503 Service Unavailable", resumable: true },
+      }),
+    });
+  });
+
+  it("ends an empty completed turn without a reply and records it as an empty response", async () => {
+    const create = vi.fn();
+    const createEvent = vi.fn(async ({ data }: { data: { type: string } }) => ({
+      ...data,
+      threadId: "thread-1",
+      seq: 1,
+      createdAt: new Date(),
+    }));
+    const tx = {
+      $executeRaw: vi.fn(async () => 0),
+      externalEffect: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({ status: "running", startedAt: null })),
+        findUniqueOrThrow: vi.fn(async () => ({ sourceMessage: null })),
+        findFirst: vi.fn(async () => null),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      task: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      thread: { update: vi.fn(async () => ({ nextEventSeq: 2, nextMessageSeq: 1 })) },
+      secret: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      event: {
+        create: createEvent,
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        findMany: vi.fn(async () => []),
+      },
+      steeringMessage: {
+        findMany: vi.fn(async () => []),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+      },
+      message: { findFirst: vi.fn(async () => null), create },
+      bot: { update: vi.fn(async () => ({})) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const sink = createTestSink();
+    const previous = getLogger();
+    installLogger(createLogger({ service: "test", level: "debug", sinks: [sink] }));
+    try {
+      await finalizeRun(prisma, {
+        spaceId: "space-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        leaseOwner: "worker-1",
+        leaseFence: 1,
+        outcome: "completed",
+        blocks: [],
+        markUnread: false,
+        emptyResponse: { reason: "thinking_only", hadThinking: true, thinkingChars: 42 },
+      });
+    } finally {
+      installLogger(previous);
+    }
+
+    expect(create).not.toHaveBeenCalled();
+    expect(createEvent.mock.calls.map(([{ data }]) => data)).toContainEqual(
+      expect.objectContaining({
+        type: "run.completed",
+        payload: { emptyResponse: true, emptyResponseReason: "thinking_only", hadThinking: true },
+      }),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        message: "run.finished",
+        "run.empty_response": true,
+        "run.empty_response_reason": "thinking_only",
+      }),
+    );
+  });
+
+  it("records the reminders an empty completed turn was given", async () => {
+    const createEvent = vi.fn(async ({ data }: { data: { type: string } }) => ({
+      ...data,
+      threadId: "thread-1",
+      seq: 1,
+      createdAt: new Date(),
+    }));
+    const tx = {
+      $executeRaw: vi.fn(async () => 0),
+      externalEffect: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({ status: "running", startedAt: null })),
+        findUniqueOrThrow: vi.fn(async () => ({ sourceMessage: null })),
+        findFirst: vi.fn(async () => null),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      task: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      thread: { update: vi.fn(async () => ({ nextEventSeq: 2, nextMessageSeq: 1 })) },
+      secret: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      event: {
+        create: createEvent,
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        findMany: vi.fn(async () => []),
+      },
+      steeringMessage: {
+        findMany: vi.fn(async () => []),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+      },
+      message: { findFirst: vi.fn(async () => null), create: vi.fn() },
+      bot: { update: vi.fn(async () => ({})) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const sink = createTestSink();
+    const previous = getLogger();
+    installLogger(createLogger({ service: "test", level: "debug", sinks: [sink] }));
+    try {
+      await finalizeRun(prisma, {
+        spaceId: "space-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        leaseOwner: "worker-1",
+        leaseFence: 1,
+        outcome: "completed",
+        blocks: [],
+        markUnread: false,
+        emptyResponse: { reason: "empty", reminders: 1 },
+      });
+    } finally {
+      installLogger(previous);
+    }
+
+    expect(createEvent.mock.calls.map(([{ data }]) => data)).toContainEqual(
+      expect.objectContaining({
+        type: "run.completed",
+        payload: { emptyResponse: true, emptyResponseReason: "empty", emptyResponseReminders: 1 },
+      }),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        message: "run.finished",
+        "run.empty_response_reminders": 1,
+      }),
     );
   });
 
@@ -5741,4 +5958,199 @@ it("checks cross-space peer permission inside the message transaction before cre
   ).rejects.toBeInstanceOf(CrossSpaceCommunicationBlockedError);
   expect(tx.task.create).not.toHaveBeenCalled();
   expect(tx.run.create).not.toHaveBeenCalled();
+});
+
+describe("answerRunInput batch asks", () => {
+  const batchBlocks = [
+    {
+      kind: "ask",
+      text: "Still open",
+      status: "pending",
+      items: [
+        {
+          id: "item-1",
+          question: "Ship the notes?",
+          ticketRef: "OPS-12",
+          actions: [
+            { id: "choice-1", label: "Ship [redacted]" },
+            { id: "choice-2", label: "Hold", recommended: true },
+          ],
+        },
+        {
+          id: "item-2",
+          question: "Where to meet?",
+          actions: [
+            { id: "choice-1", label: "Office" },
+            { id: "choice-2", label: "Cafe" },
+          ],
+        },
+        { id: "item-3", question: "Nightly build passed" },
+      ],
+    },
+  ];
+
+  const answerBatch = async ({
+    answer,
+    blocks = batchBlocks,
+    checkpoint = null,
+    trigger = "routine",
+  }: {
+    answer: string;
+    blocks?: unknown[];
+    checkpoint?: string | null;
+    trigger?: string;
+  }) => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
+      message: {
+        findFirst: vi.fn().mockResolvedValue({ id: "message-1", blocks }),
+        update: vi.fn().mockResolvedValue({ id: "message-1" }),
+      },
+      run: {
+        findFirst: vi.fn().mockResolvedValue({
+          botId: "bot-2",
+          userId: "user-1",
+          trigger,
+          checkpoint,
+          task: { prompt: "Triage the open items." },
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUnique: vi.fn().mockResolvedValue({
+          status: "queued",
+          createdAt: new Date("2026-08-16T12:00:00.000Z"),
+          threadId: "thread-1",
+        }),
+      },
+      task: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      thread: { update: vi.fn().mockResolvedValue({ nextEventSeq: 10 }) },
+      event: {
+        create: vi.fn(async ({ data }: { data: { seq: number; type: string } }) => ({
+          ...event(data.seq),
+          type: data.type,
+        })),
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const committed = await answerRunInput(prisma, {
+      spaceId: "workspace-1",
+      threadId: "thread-1",
+      runId: "run-1",
+      messageId: "message-1",
+      answeredByUserId: "user-1",
+      answer,
+    });
+    return { committed, tx };
+  };
+
+  it("decides every actionable item from one batch answer and resumes once with all lines", async () => {
+    const checkpoint = JSON.stringify({
+      kind: "batch_ask_v1",
+      items: [
+        {
+          id: "item-1",
+          actions: [
+            { id: "choice-1", label: "Ship the notes" },
+            { id: "choice-2", label: "Hold" },
+          ],
+        },
+        {
+          id: "item-2",
+          actions: [
+            { id: "choice-1", label: "Office" },
+            { id: "choice-2", label: "Cafe" },
+          ],
+        },
+      ],
+    });
+    const { committed, tx } = await answerBatch({
+      answer: JSON.stringify({
+        answers: { "item-1": "choice-1", "item-2": "  Rooftop, if free  " },
+      }),
+      checkpoint,
+    });
+
+    expect(committed).toBe(true);
+    expect(tx.task.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.task.updateMany).toHaveBeenCalledWith({
+      where: { runs: { some: { id: "run-1" } } },
+      data: {
+        prompt: [
+          "Triage the open items.",
+          [
+            "Still open\nAnswer: - Ship the notes?: Selected choice choice-1: Ship the notes",
+            "- Where to meet?: Rooftop, if free",
+          ].join("\n"),
+        ].join("\n\n"),
+      },
+    });
+    expect(tx.run.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "queued", checkpoint: null } }),
+    );
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: "message-1" },
+      data: {
+        blocks: [
+          {
+            ...batchBlocks[0],
+            status: "answered",
+            answer:
+              "- Ship the notes?: Selected choice choice-1: Ship the notes\n- Where to meet?: Rooftop, if free",
+            items: [
+              batchBlocks[0]!.items[0],
+              batchBlocks[0]!.items[1],
+              batchBlocks[0]!.items[2],
+            ].map((item, index) =>
+              index === 0
+                ? { ...item, answer: "choice-1" }
+                : index === 1
+                  ? { ...item, answer: "Rooftop, if free" }
+                  : item,
+            ),
+          },
+        ],
+      },
+    });
+  });
+
+  it("resumes a composer reply as plain text when the card is a batch", async () => {
+    const { committed, tx } = await answerBatch({
+      answer: "Sure, just do the first two.",
+      trigger: "user",
+    });
+
+    expect(committed).toBe(true);
+    expect(tx.task.updateMany).toHaveBeenCalledWith({
+      where: { runs: { some: { id: "run-1" } } },
+      data: { prompt: "Sure, just do the first two." },
+    });
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: "message-1" },
+      data: {
+        blocks: [
+          expect.objectContaining({
+            status: "answered",
+            answer: "Sure, just do the first two.",
+          }),
+        ],
+      },
+    });
+  });
+
+  it.each([
+    ["an unknown item", { answers: { "item-1": "choice-1", "item-2": "Office", "item-9": "x" } }],
+    ["an FYI row", { answers: { "item-1": "choice-1", "item-2": "Office", "item-3": "ok" } }],
+    ["an unanswered item", { answers: { "item-1": "choice-1" } }],
+    ["a blank answer", { answers: { "item-1": "choice-1", "item-2": "   " } }],
+    ["extra keys", { answers: { "item-1": "choice-1", "item-2": "Office" }, extra: true }],
+  ])("refuses a batch answer with %s without resuming", async (_label, payload) => {
+    const { committed, tx } = await answerBatch({ answer: JSON.stringify(payload) });
+
+    expect(committed).toBe(false);
+    expect(tx.run.updateMany).not.toHaveBeenCalled();
+    expect(tx.task.updateMany).not.toHaveBeenCalled();
+    expect(tx.message.update).not.toHaveBeenCalled();
+  });
 });

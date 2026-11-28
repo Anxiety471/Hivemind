@@ -125,7 +125,7 @@ func (d *DB) inTxWith(ctx context.Context, options pgx.TxOptions, settings []str
 	if err := setSettings(ctx, tx, settings); err != nil {
 		return err
 	}
-	if err := fn(tx); err != nil {
+	if err := fn(wireTx{Tx: tx}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -141,11 +141,13 @@ func (d *DB) InSystem(ctx context.Context, tx pgx.Tx, fn func() error) error {
 		coalesce(current_setting('app.rls_bypass_key', true), '')`).Scan(&space, &user, &bypass, &key); err != nil {
 		return err
 	}
+	// writeaudit:dynamic session GUC setup for the tenant; arguments are filters
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.rls_bypass', 'on', true),
 		set_config('app.rls_bypass_key', $1, true)`, d.bypassKey); err != nil {
 		return err
 	}
 	restore := func() error {
+		// writeaudit:dynamic restores the session GUCs; arguments are filters
 		_, err := tx.Exec(ctx, `SELECT set_config('app.space_id', $1, true),
 			set_config('app.user_id', $2, true),
 			set_config('app.rls_bypass', $3, true),
@@ -161,6 +163,7 @@ func (d *DB) InSystem(ctx context.Context, tx pgx.Tx, fn func() error) error {
 }
 
 func setSettings(ctx context.Context, tx pgx.Tx, settings []string) error {
+	// writeaudit:dynamic reapplies the session GUCs; arguments are filters
 	_, err := tx.Exec(ctx, `SELECT set_config('app.space_id', $1, true),
 		set_config('app.user_id', $2, true),
 		set_config('app.rls_bypass', $3, true),

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   answerableAskMessageIds,
   dismissableAskMessageIds,
+  formatBatchAskAnswer,
+  parseBatchAskAnswer,
   resolveAskChoice,
   selectedAskActionLabel,
 } from "./answerable-ask.js";
@@ -161,4 +163,29 @@ it("keeps another member's waiting approval disabled", () => {
   };
   expect(answerableAskMessageIds(snapshot, "owner")).toEqual(new Set(["approval"]));
   expect(answerableAskMessageIds(snapshot, "other")).toEqual(new Set());
+});
+
+describe("batch ask answers", () => {
+  it("parses a batch payload into trimmed answers", () => {
+    expect(parseBatchAskAnswer('{"answers":{"item-1":"choice-2","item-2":"  Rooftop  "}}')).toEqual(
+      { "item-1": "choice-2", "item-2": "Rooftop" },
+    );
+  });
+
+  it.each([
+    ["plain text", "Sure, go ahead"],
+    ["malformed JSON", '{"answers":'],
+    ["an empty object", '{"answers":{}}'],
+    ["an extra top-level key", '{"answers":{"item-1":"choice-1"},"note":"x"}'],
+    ["a blank value", '{"answers":{"item-1":"   "}}'],
+    ["a non-string value", '{"answers":{"item-1":1}}'],
+    ["a non-object payload", '["item-1"]'],
+  ])("returns null for %s", (_label, raw) => {
+    expect(parseBatchAskAnswer(raw)).toBeNull();
+  });
+
+  it("formats answers as the payload parseBatchAskAnswer reads back", () => {
+    const answers = { "item-1": "choice-1", "item-2": "Other text" };
+    expect(parseBatchAskAnswer(formatBatchAskAnswer(answers))).toEqual(answers);
+  });
 });

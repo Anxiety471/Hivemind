@@ -172,3 +172,40 @@ it("lists the latest payments, and the rest on request", async () => {
   expect(rows()).toHaveLength(7);
   expect(button(container, "Show all")).toBeUndefined();
 });
+
+it("reads the limit again when Approvals is reopened", async () => {
+  // The app keeps a read for 30s; a card saved in another section must still show the setting
+  // when the person comes back to Approvals.
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+  });
+  rpcMock.spendingLimit.get.mockResolvedValueOnce({ limit: null, spent: 0, shown: false });
+  const first = document.createElement("div");
+  document.body.append(first);
+  const firstRoot = createRoot(first);
+  await act(async () =>
+    firstRoot.render(
+      <QueryClientProvider client={client}>
+        <SpendingLimitSettings />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(rpcMock.spendingLimit.get).toHaveBeenCalledTimes(1));
+  expect(first.textContent).toBe("");
+  await act(async () => firstRoot.unmount());
+
+  rpcMock.spendingLimit.get.mockResolvedValue({ limit: null, spent: 0, shown: true });
+  const second = document.createElement("div");
+  document.body.append(second);
+  const secondRoot = createRoot(second);
+  await act(async () =>
+    secondRoot.render(
+      <QueryClientProvider client={client}>
+        <SpendingLimitSettings />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(second.textContent).toContain("Spending limitNone"));
+  await act(async () => secondRoot.unmount());
+  client.clear();
+});

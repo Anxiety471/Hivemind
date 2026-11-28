@@ -44,3 +44,25 @@
     transform: translateY(0);
   }
 }
+
+/* One cycle per class, so a single media query below can calm every beat at once. */
+.bui-pixel {
+  animation: bui-pixel-on 650ms ease-in-out infinite;
+}
+.bui-pop-in {
+  animation: bui-pop-in 300ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+.bui-fade-up {
+  animation: bui-fade-up 350ms cubic-bezier(0.23, 1, 0.32, 1) 100ms both;
+}
+
+/* Reduced motion keeps the states, not the movement: the pixel grid holds one calm frame and the
+   success beat appears at once. */
+@media (prefers-reduced-motion: reduce) {
+  .bui-pixel,
+  .bui-pixel-grid,
+  .bui-pop-in,
+  .bui-fade-up {
+    animation: none;
+  }
+}

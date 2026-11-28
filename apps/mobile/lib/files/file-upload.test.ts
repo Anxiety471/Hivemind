@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   fetch: vi.fn(),
   base64: vi.fn(async (_uri: string) => "aGk="),
   fileSize: 4,
+  noteServerReachable: vi.fn(),
 }));
 
 vi.mock("../api/api", () => ({
@@ -17,9 +18,11 @@ vi.mock("../api/api", () => ({
     headers: { authorization: "Bearer token-a", "x-rakazo-space-id": "space-1" },
   }),
   currentApiBase: () => "https://api.example.test",
+  noteServerReachable: state.noteServerReachable,
   selectedSpaceId: () => "space-1",
   rpc: state.rpc,
 }));
+vi.mock("../api/session", () => ({ currentSessionGeneration: () => 1 }));
 vi.mock("../api/server-headers", () => ({ fetchServer: state.fetch }));
 vi.mock("expo-file-system", () => {
   class Directory {
@@ -65,6 +68,7 @@ const driveFile: DriveFile = {
   folderId: null,
   source: "chat",
   name: "notes.txt",
+  slug: null,
   description: null,
   mimeType: "text/plain",
   size: 4,
@@ -82,6 +86,7 @@ beforeEach(() => {
   state.fetch.mockReset();
   state.base64.mockReset().mockResolvedValue("aGk=");
   state.fileSize = 4;
+  state.noteServerReachable.mockReset();
   vi.stubGlobal("FormData", OrderedFormData);
 });
 
@@ -185,6 +190,49 @@ describe("mobile Drive upload", () => {
       }),
     ).rejects.toMatchObject({ status: 413 });
     expect(state.base64).not.toHaveBeenCalled();
+  });
+
+  it("reports a gateway failure with the wait it asked for", async () => {
+    state.fetch.mockResolvedValue({
+      status: 503,
+      ok: false,
+      headers: { get: (name: string) => (name === "retry-after" ? "2" : null) },
+      json: async () => ({ message: "Server is restarting" }),
+    });
+    await expect(
+      uploadMobileFile({
+        uri: "file:///cache/notes.txt",
+        name: "notes.txt",
+        mimeType: "text/plain",
+      }),
+    ).rejects.toMatchObject({
+      message: "Server is restarting",
+      status: 503,
+      retryAfterMs: 2_000,
+    });
+    expect(state.noteServerReachable).toHaveBeenCalledWith(false);
+  });
+
+  it("reports a network failure as unreachable", async () => {
+    state.fetch.mockRejectedValue(new TypeError("Network request failed"));
+    await expect(
+      uploadMobileFile({
+        uri: "file:///cache/notes.txt",
+        name: "notes.txt",
+        mimeType: "text/plain",
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(state.noteServerReachable).toHaveBeenCalledWith(false);
+  });
+
+  it("reports a stored file as the server answering again", async () => {
+    state.fetch.mockResolvedValue({ status: 201, ok: true, json: async () => driveFile });
+    await uploadMobileFile({
+      uri: "file:///cache/notes.txt",
+      name: "notes.txt",
+      mimeType: "text/plain",
+    });
+    expect(state.noteServerReachable).toHaveBeenCalledWith(true);
   });
 
   it("builds a content URL with the Space and a download flag", () => {

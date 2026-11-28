@@ -104,7 +104,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return rules, nil
 }
@@ -149,7 +149,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (
 		return err
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return saved, nil
 }
@@ -169,6 +169,7 @@ func save(ctx context.Context, tx pgx.Tx, actor db.Actor, input setInput) (Rule,
 	}
 	value := jsLower(input.MatchValue)
 	var lock string
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	if err := tx.QueryRow(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))::text AS "lock"`,
 		"approval-rule:"+owner+":"+input.MatchKind+":"+value).Scan(&lock); err != nil {
 		return Rule{}, err
@@ -215,7 +216,7 @@ func save(ctx context.Context, tx pgx.Tx, actor db.Actor, input setInput) (Rule,
 	if account {
 		rule, err = scanRule(tx.QueryRow(ctx, `INSERT INTO user_action_approval_rules (id, "userId", effect, "matchKind", "matchValue", "createdAt")
 			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT ("userId", effect, "matchKind", "matchValue") DO NOTHING RETURNING `+columns,
-			effects.NewID(), actor.UserID, input.Effect, input.MatchKind, input.MatchValue, time.Now().UTC().Truncate(time.Millisecond)))
+			db.Data(effects.NewID(), actor.UserID, input.Effect, input.MatchKind, input.MatchValue, time.Now().UTC().Truncate(time.Millisecond))...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			rule, err = scanRule(tx.QueryRow(ctx, `SELECT `+columns+` FROM user_action_approval_rules
 				WHERE "userId" = $1 AND effect = $2 AND "matchKind" = $3 AND "matchValue" = $4`,
@@ -224,7 +225,7 @@ func save(ctx context.Context, tx pgx.Tx, actor db.Actor, input setInput) (Rule,
 	} else {
 		rule, err = scanRule(tx.QueryRow(ctx, `INSERT INTO action_approval_rules (id, "spaceId", "createdByUserId", effect, "matchKind", "matchValue", "createdAt")
 			VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT ("spaceId", "createdByUserId", effect, "matchKind", "matchValue") DO NOTHING RETURNING `+columns,
-			effects.NewID(), actor.SpaceID, actor.UserID, input.Effect, input.MatchKind, input.MatchValue, time.Now().UTC().Truncate(time.Millisecond)))
+			db.Data(effects.NewID(), actor.SpaceID, actor.UserID, input.Effect, input.MatchKind, input.MatchValue, time.Now().UTC().Truncate(time.Millisecond))...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			rule, err = scanRule(tx.QueryRow(ctx, `SELECT `+columns+` FROM action_approval_rules
 				WHERE "spaceId" = $1 AND "createdByUserId" = $2 AND effect = $3 AND "matchKind" = $4 AND "matchValue" = $5`,

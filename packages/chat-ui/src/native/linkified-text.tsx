@@ -6,7 +6,8 @@ import type { TextStyle } from "react-native";
 import { Text, View } from "react-native";
 import { commitCheckTarget } from "../commit-checks";
 import { linkFaviconOrigin, linkLabel, plainTextLinkParts } from "../markdown";
-import { MarkdownPageChip } from "./chips";
+import type { ChatReferenceContext } from "../references";
+import { MarkdownPageChip, MarkdownTicketChip } from "./chips";
 import { CommitChecksMark } from "./commit-checks-mark";
 import { contraryDirection } from "./direction";
 import { ISOLATE, LinkFavicon, POP_ISOLATE, useNativeLinkConfirm, WORD_JOINER } from "./links";
@@ -20,6 +21,9 @@ type LinkifiedTextProps = {
   /** Renders the runs between links, which are plain strings by default. */
   renderText?: (text: string) => ReactNode;
   onOpenPage?: (pageId: string) => void;
+  onOpenTicket?: (ticketRef: string) => void;
+  /** Resolves tickets, pull requests and commit SHAs in the text; without it only links and pages. */
+  referenceContext?: ChatReferenceContext;
 };
 
 const BLOCK_LENGTH = 1000;
@@ -60,6 +64,8 @@ export const LinkifiedText = memo(function LinkifiedText({
   palette,
   renderText,
   onOpenPage,
+  onOpenTicket,
+  referenceContext,
 }: LinkifiedTextProps) {
   const openLink = useNativeLinkConfirm();
   const labelStyle: TextStyle = {
@@ -72,7 +78,7 @@ export const LinkifiedText = memo(function LinkifiedText({
   const style = [{ color, ...typeScale.body }, contraryDirection(children) && layout.farSideText];
   const paragraph = (text: string, key?: number) => (
     <Text key={key} style={style}>
-      {plainTextLinkParts(text).map((part, index) => {
+      {plainTextLinkParts(text, referenceContext).map((part, index) => {
         if (part.type === "text") {
           return renderText ? (
             <Fragment key={index}>{renderText(part.value)}</Fragment>
@@ -90,6 +96,18 @@ export const LinkifiedText = memo(function LinkifiedText({
             >
               {part.value}
             </MarkdownPageChip>
+          );
+        }
+        if (part.type === "ticket") {
+          return (
+            <MarkdownTicketChip
+              key={index}
+              ticketRef={part.ticketRef}
+              titleStyle={{ textDecorationLine: "underline", textDecorationColor: linkColor }}
+              onOpenTicket={onOpenTicket}
+            >
+              {part.value}
+            </MarkdownTicketChip>
           );
         }
         const open = () => {

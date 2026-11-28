@@ -331,7 +331,8 @@ describe("messaging another bot", () => {
     expect(harness.enqueue).not.toHaveBeenCalled();
   });
 
-  it("stops a chain that has volleyed too many times", async () => {
+  it("stops a chain that has volleyed too many times once the fuse is set", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const harness = deps({
       hopBlocks: [
         { kind: "bot_message_received", fromBotId: "b", fromBotName: "B", text: "hi", hop: 6 },
@@ -348,6 +349,7 @@ describe("messaging another bot", () => {
   });
 
   it("allows a final result back through after the request hop limit", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const harness = deps({
       hopBlocks: [
         {
@@ -442,6 +444,7 @@ describe("messaging another bot", () => {
   });
 
   it("does not exempt a terminal reply to another terminal reply", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const harness = deps({
       hopBlocks: [
         {
@@ -466,6 +469,7 @@ describe("messaging another bot", () => {
   });
 
   it("does not let a result label bypass the hop limit toward an unrelated bot", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const harness = deps({
       bots: [
         { id: "bot-target", name: "Analyst", title: "", thread: { id: "thread-target" } },
@@ -493,6 +497,7 @@ describe("messaging another bot", () => {
   });
 
   it("keeps model-supplied status updates subject to the hop limit", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const harness = deps({
       hopBlocks: [
         {
@@ -514,11 +519,10 @@ describe("messaging another bot", () => {
     expect(sent.ok).toBe(false);
   });
 
-  it("raises the chain limit from BOT_MESSAGE_MAX_HOPS", async () => {
-    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "10");
+  it("keeps chains going past six hops by default", async () => {
     const harness = deps({
       hopBlocks: [
-        { kind: "bot_message_received", fromBotId: "b", fromBotName: "B", text: "hi", hop: 6 },
+        { kind: "bot_message_received", fromBotId: "b", fromBotName: "B", text: "hi", hop: 100 },
       ],
     });
     const sent = await messageBot(

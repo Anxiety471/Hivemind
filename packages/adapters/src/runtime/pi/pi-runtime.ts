@@ -30,7 +30,7 @@ import {
   MODEL_OUTPUT_CUT_ERROR,
   modelFallbackFailure,
 } from "@rakazo/core";
-import { getLogger } from "@rakazo/logging";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import {
   isTerminatingReplyResult,
   terminatingReplyText,
@@ -42,8 +42,6 @@ import { withCloudflareAuth } from "../../models/endpoints/cloudflare-ai-gateway
 import {
   CUT_REPLY_CONTINUATION_PROMPT,
   cutReplyAtLimitPrompt,
-  SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
-  SILENT_TOOL_CONTINUATION_PROMPT,
 } from "../../runs/assembly/continuation.prompt.js";
 import {
   midTaskMessageFromPrompt,
@@ -64,6 +62,14 @@ import { attachRejectedRequests, rejectedRequestsOf } from "../provider-request-
 import { fallbackSystemPrompt } from "../runtime.prompt.js";
 import { withoutThinkingFrom } from "../thinking-signatures.js";
 import { estimatePiImageTokens } from "./pi-image-context.js";
+import type { PiPostTurnHook } from "./pi-post-turn-hooks.js";
+import {
+  createPostTurnHookRunner,
+  DEFAULT_PI_POST_TURN_HOOKS,
+  emptyResponseReminderHook,
+} from "./pi-post-turn-hooks.js";
+import type { PiPreTurnHook } from "./pi-pre-turn-hooks.js";
+import { DEFAULT_PI_PRE_TURN_HOOKS, runPreTurnHooks } from "./pi-pre-turn-hooks.js";
 import {
   continuationRepeat,
   MAX_CONTINUATION_MARKER,
@@ -81,6 +87,7 @@ import type { FallbackStreamState } from "./pi-runtime-fallback.js";
 import { fallbackAwareModelStream, MAX_SELF_RECOVERIES_PER_RUN } from "./pi-runtime-fallback.js";
 import {
   isHistoryReply,
+  scriptToolMap,
   speakerText,
   toHistory,
   toPiImages,
@@ -125,15 +132,24 @@ import { observedPiStream } from "./usage/pi-usage.js";
 const MAX_REJECTED_REQUESTS = 5;
 const ANSWERED_ON_RESUME = new Set(["ask_user", "request_takeover"]);
 const running = new Map<string, { controller: AbortController; work: Promise<void> }>();
-// Some OpenAI-compatible models return EOS immediately after a tool result
-// instead of taking another assistant turn. A bounded internal follow-up keeps
-// that provider quirk from making a long task look complete after one step.
-const MAX_SILENT_TOOL_CONTINUATIONS = 3;
 
 // Shown as a failed-run error, not an assistant message. Asking the user to
 // continue stores that sentence as the reply, and the next "continue" runs
 // tools and misses a final answer again.
 export { MISSING_TOOL_FINAL_RESPONSE_ERROR } from "@rakazo/core";
+
+export {
+  DEFAULT_PI_POST_TURN_HOOKS,
+  type PiPostTurnContext,
+  type PiPostTurnDecision,
+  type PiPostTurnHook,
+} from "./pi-post-turn-hooks.js";
+export {
+  DEFAULT_PI_PRE_TURN_HOOKS,
+  type PiPreTurnContext,
+  type PiPreTurnHook,
+  type PiPreTurnResult,
+} from "./pi-pre-turn-hooks.js";
 
 export interface PiAgentRuntimeOptions {
   /** Directory where Pi JSONL sessions are written. Omit to disable recording. */
@@ -141,6 +157,10 @@ export interface PiAgentRuntimeOptions {
   /** Explicit transport for tests and synthetic wire diagnostics. */
   modelFetch?: typeof globalThis.fetch;
   modelCallObserver?: ModelCallObserver;
+  /** Extra turn-end hooks, run after the built-in ones. */
+  postTurnHooks?: readonly PiPostTurnHook[];
+  /** Extra pre-turn hooks, run after the built-in ones. */
+  preTurnHooks?: readonly PiPreTurnHook[];
   /** Sanitized per-call selection telemetry; never includes prompt or credentials. */
   onContextDecision?: (
     decision: RuntimeContextDecision & {
@@ -156,11 +176,15 @@ export class PiAgentRuntime implements AgentRuntime {
   private readonly modelFetch?: typeof globalThis.fetch;
   private readonly modelCallObserver?: ModelCallObserver;
   private readonly onContextDecision?: PiAgentRuntimeOptions["onContextDecision"];
+  private readonly extraPostTurnHooks: readonly PiPostTurnHook[];
+  private readonly extraPreTurnHooks: readonly PiPreTurnHook[];
 
   constructor(options: PiAgentRuntimeOptions = {}) {
     this.modelFetch = options.modelFetch;
     this.modelCallObserver = options.modelCallObserver;
     this.onContextDecision = options.onContextDecision;
+    this.extraPostTurnHooks = options.postTurnHooks ?? [];
+    this.extraPreTurnHooks = options.preTurnHooks ?? [];
     this.sessionRecorder = options.sessionRoot
       ? new PiJsonlSessionRecorder(options.sessionRoot)
       : undefined;
@@ -249,6 +273,7 @@ export class PiAgentRuntime implements AgentRuntime {
           });
         });
       let resumeHost: ToolHost | undefined;
+      let captureFailureCheckpoint: (() => string | undefined) | undefined;
       try {
         const saved = request.turnCheckpoint
           ? restoreTurnCheckpoint(request.turnCheckpoint, request.model)
@@ -324,6 +349,7 @@ export class PiAgentRuntime implements AgentRuntime {
         const toolsByAgentName = agentToolDefinitions(toolDefs);
         // Replayed calls to tools the model no longer has say so in their results.
         const offeredToolNames = new Set(allTools.map((tool) => tool.name));
+        const scriptToolNames = scriptToolMap(request.codeModeTools);
         let tools = allTools;
         const seenSteeringIds: string[] = [];
         const initialSteering = request.claimSteering ? await request.claimSteering([]) : [];
@@ -347,7 +373,9 @@ export class PiAgentRuntime implements AgentRuntime {
             request.prompt,
             request.sourceMessageId,
             offeredToolNames,
+            scriptToolNames,
           );
+        const initialMessageCount = history.length;
         const representedHistoryIds = new Set(
           restored
             ? (restored.historyMessageIds ??
@@ -466,7 +494,9 @@ export class PiAgentRuntime implements AgentRuntime {
           backupOutcomes: new Map(),
           selfRecoveries: 0,
           cutReplies: new WeakMap(),
-          retriesEmptyReply: wouldEndEmpty,
+          // A reminded turn runs once: the stream's own retries already ran before the reminder.
+          retriesEmptyReply: () =>
+            wouldEndEmpty() && postTurnHooks.triggerCount(emptyResponseReminderHook.name) === 0,
           stream: (target, ctx, options) => {
             let accepted = false;
             if (hasCurrentImages && !target.model.input.includes("image")) {
@@ -842,6 +872,45 @@ export class PiAgentRuntime implements AgentRuntime {
             });
           }, executionId);
         };
+        captureFailureCheckpoint = () => {
+          if (signal.aborted || host.pausePending || yielded || host.toolCallBudget.exceeded) {
+            return undefined;
+          }
+          const checkpoint = turnCheckpointAt("");
+          while (checkpoint.messages.at(-1)?.role === "assistant") {
+            const tail = checkpoint.messages.at(-1)!;
+            if (tail.role !== "assistant") break;
+            if (
+              tail.stopReason === "error" ||
+              tail.stopReason === "aborted" ||
+              (tail.stopReason === "length" && messageHasToolCall(tail)) ||
+              (assistantText(tail).trim().length === 0 && !messageHasToolCall(tail))
+            ) {
+              checkpoint.messages.pop();
+              continue;
+            }
+            break;
+          }
+          const progressMessages = restored
+            ? checkpoint.messages
+            : checkpoint.messages.slice(initialMessageCount);
+          const hasToolResults = progressMessages.some((message) => message.role === "toolResult");
+          const hasStreamedText = streamed.trim().length > 0;
+          if (!hasToolResults && !hasStreamedText) return undefined;
+          const last = checkpoint.messages.at(-1);
+          if (last?.role === "assistant" && !messageHasToolCall(last)) {
+            checkpoint.messages[checkpoint.messages.length - 1] = {
+              ...last,
+              stopReason: "stop",
+            };
+            checkpoint.messages.push({
+              role: "user",
+              content: CUT_REPLY_CONTINUATION_PROMPT,
+              timestamp: Date.now(),
+            });
+          }
+          return serializeTurnCheckpoint(checkpoint);
+        };
 
         const onAbort = () => {
           agent.abort();
@@ -857,7 +926,11 @@ export class PiAgentRuntime implements AgentRuntime {
         let currentMessageStreamed = "";
         let toolCalls = 0;
         let toolActivityShowing = false;
-        let silentToolContinuations = 0;
+        let turnIndex = 0;
+        const postTurnHooks = createPostTurnHookRunner([
+          ...DEFAULT_PI_POST_TURN_HOOKS,
+          ...this.extraPostTurnHooks,
+        ]);
         // A reply cut off by a dropped connection continues in the same bubble: no turn break,
         // and a continuation that starts by repeating the end of the cut text loses that repeat.
         let joinCutReply: { tail: string; held: string; requested: boolean } | undefined;
@@ -963,6 +1036,7 @@ export class PiAgentRuntime implements AgentRuntime {
             if (delta) queue.push({ type: "thinking_delta", text: delta });
           }
           if (event.type === "turn_end") {
+            turnIndex += 1;
             const messageText =
               event.message.role === "assistant" ? assistantText(event.message) : "";
             const hasToolCalls = messageHasToolCall(event.message);
@@ -972,35 +1046,61 @@ export class PiAgentRuntime implements AgentRuntime {
             // response. Keep the run alive until a later text-only turn answers the user.
             if (hasToolCalls && hasToolResults && !host.pausePending) {
               toolWorkPendingFinal = true;
-              silentToolContinuations = 0;
+              postTurnHooks.onToolTurn();
               streamedBeforePendingFinal = streamed.length;
             } else if (toolWorkPendingFinal && !hasToolCalls && !hasToolResults) {
               const streamedFinal = streamed.slice(streamedBeforePendingFinal).trim();
               if (messageText.trim() || streamedFinal) {
                 toolWorkPendingFinal = false;
-                silentToolContinuations = 0;
+                postTurnHooks.onToolTurn();
                 // A provider can put the answer only on the completed message after
                 // narration already filled `streamed`, so message_end will not emit it.
                 if (messageText.trim() && !streamedFinal) {
                   streamed += messageText;
                   queue.push({ type: "text", text: messageText });
                 }
-              } else if (
-                // A provider failure is not an empty success. Do not schedule
-                // another model turn that would hide the error.
-                !providerFailureText(event.message) &&
-                !host.pausePending &&
-                silentToolContinuations < MAX_SILENT_TOOL_CONTINUATIONS
-              ) {
-                silentToolContinuations += 1;
-                agent.followUp({
-                  role: "user",
-                  content: request.allowSilentEmpty
-                    ? SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT
-                    : SILENT_TOOL_CONTINUATION_PROMPT,
-                  timestamp: Date.now(),
-                });
               }
+            }
+            // Built-in and custom hooks decide here whether the turn needs a follow-up.
+            const finalTurnText =
+              messageText.trim() || streamed.slice(streamedBeforePendingFinal).trim();
+            const followUp = await postTurnHooks.evaluate({
+              runId: request.runId,
+              turnIndex,
+              messageText,
+              finalTurnText,
+              streamed: streamed.trim() !== "",
+              hasToolCalls,
+              hasToolResults,
+              toolWorkPendingFinal,
+              hasTools: allTools.length > 0,
+              allowSilentEmpty: Boolean(request.allowSilentEmpty),
+              optionalReply: Boolean(request.optionalReply),
+              pausePending: host.pausePending,
+              aborted: signal.aborted,
+              isAssistant: event.message.role === "assistant",
+              stopReason: event.message.role === "assistant" ? event.message.stopReason : undefined,
+              hasProviderFailure: Boolean(providerFailureText(event.message)),
+              hadThinking:
+                event.message.role === "assistant" &&
+                event.message.content.some((part) => part.type === "thinking"),
+              finalReplyJudge: request.finalReplyJudge,
+            });
+            if (followUp) {
+              const { decision } = followUp;
+              // The nudged reply is a new stretch of text: match it only against what follows.
+              if (decision.resetPendingFinalBoundary) streamedBeforePendingFinal = streamed.length;
+              getLogger().info(decision.logEvent ?? "agent.post_turn_hook_follow_up", {
+                runId: request.runId,
+                hook: followUp.hookName,
+                attempt: followUp.attempt,
+                ...decision.meta,
+              });
+              agent.followUp({
+                role: "user",
+                content: decision.prompt,
+                timestamp: Date.now(),
+              });
             }
           }
           if (event.type === "message_end" && event.message.role === "assistant") {
@@ -1172,7 +1272,13 @@ export class PiAgentRuntime implements AgentRuntime {
               const addedHistory = withoutSteeringMessages(request.history, initialSteering).filter(
                 (message) => message.id && !representedHistoryIds.has(message.id),
               );
-              const replayed = toHistory(addedHistory, "", undefined, offeredToolNames);
+              const replayed = toHistory(
+                addedHistory,
+                "",
+                undefined,
+                offeredToolNames,
+                scriptToolNames,
+              );
               for (const id of runToolCallIds(replayed as Message[]).used) toolCallIds.used.add(id);
               agent.state.messages.push(...replayed);
               for (const message of addedHistory)
@@ -1202,17 +1308,36 @@ export class PiAgentRuntime implements AgentRuntime {
               await agent.continue();
             }
           } else {
+            const preTurnMessages = await runPreTurnHooks(
+              [...DEFAULT_PI_PRE_TURN_HOOKS, ...this.extraPreTurnHooks],
+              {
+                runId: request.runId,
+                prompt: request.prompt,
+                allowSilentEmpty: Boolean(request.allowSilentEmpty),
+                optionalReply: Boolean(request.optionalReply),
+                isRestored: false,
+                signal,
+                offeredToolNames: new Set([
+                  ...toolDefs.map((tool) => tool.name),
+                  ...(request.codeModeTools ?? []),
+                ]),
+                preTurnMemorySearch: request.preTurnMemorySearch,
+              },
+            );
             // Only the person's messages go under their label; anyone else's is framed by origin.
+            const turnPrompt = promptWithSteering(
+              (item) =>
+                item.origin === "user"
+                  ? steeringText(item)
+                  : midTaskMessageFromPrompt(steeringText(item), item.origin),
+              request.promptSpeaker
+                ? speakerText(request.promptSpeaker, request.prompt)
+                : request.prompt,
+            );
+            // Pre-turn context leads the same user message: a separate adjacent user message is
+            // not accepted by every provider.
             await agent.prompt(
-              promptWithSteering(
-                (item) =>
-                  item.origin === "user"
-                    ? steeringText(item)
-                    : midTaskMessageFromPrompt(steeringText(item), item.origin),
-                request.promptSpeaker
-                  ? speakerText(request.promptSpeaker, request.prompt)
-                  : request.prompt,
-              ),
+              preTurnMessages.length ? [...preTurnMessages, turnPrompt].join("\n\n") : turnPrompt,
               images?.length ? images : undefined,
             );
           }
@@ -1304,6 +1429,7 @@ export class PiAgentRuntime implements AgentRuntime {
             }
           }
         }
+        let emptyResponse = false;
         if (budgetExceeded) {
           const budgetMessage = toolCallBudgetExceededMessage(host.toolCallBudget.limit);
           if (streamed.trim()) {
@@ -1341,13 +1467,41 @@ export class PiAgentRuntime implements AgentRuntime {
           } else if (toolWorkPendingFinal && !request.allowSilentEmpty) {
             throw new ModelOutputError(MISSING_TOOL_FINAL_RESPONSE_ERROR);
           } else if (wouldEndEmpty()) {
-            streamed = request.emptyResponseText?.trim() || "No response. Try again.";
-            queue.push({ type: "text", text: streamed });
+            const contextual = request.emptyResponseText?.trim();
+            if (contextual) {
+              streamed = contextual;
+              queue.push({ type: "text", text: streamed });
+            } else {
+              emptyResponse = true;
+            }
           }
         }
-        queue.push(streamed.trim() ? { type: "done", text: streamed } : { type: "done" });
+        queue.push(
+          streamed.trim()
+            ? { type: "done", text: streamed }
+            : emptyResponse
+              ? {
+                  type: "done",
+                  emptyResponse: true,
+                  ...(postTurnHooks.triggerCount(emptyResponseReminderHook.name) > 0
+                    ? {
+                        emptyResponseReminders: postTurnHooks.triggerCount(
+                          emptyResponseReminderHook.name,
+                        ),
+                      }
+                    : {}),
+                }
+              : { type: "done" },
+        );
       } catch (error) {
         span?.setStatus({ status: "error" });
+        const failureCheckpoint = captureFailureCheckpoint?.();
+        if (failureCheckpoint && request.onFailureCheckpoint) {
+          await bestEffort(
+            "capture failure turn checkpoint",
+            request.onFailureCheckpoint(failureCheckpoint),
+          );
+        }
         const message = sanitizeError(error instanceof Error ? error.message : String(error));
         queue.fail(
           error instanceof TransientModelError

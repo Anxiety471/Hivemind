@@ -9,6 +9,7 @@ package runs
 import (
 	"context"
 	"encoding/json"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"math"
 	"strconv"
 	"strings"
@@ -59,6 +60,10 @@ var runTriggers = map[string]bool{
 // intents is BotMessageIntent (packages/contracts/src/threads/message-blocks.ts:16).
 var intents = map[string]bool{"request": true, "result": true, "question": true, "status": true, "fyi": true}
 
+// agentMessageKinds is RunActivityRowSchema's agentMessage union (runs.ts:129-138): update and
+// request carry fromBotName and text, unknown carries only its kind.
+var agentMessageKinds = map[string]bool{"update": true, "request": true, "unknown": true}
+
 // AgentMessage is RunActivityRowSchema's agentMessage (packages/contracts/src/runs/runs.ts:129).
 type AgentMessage struct {
 	FromBotName string
@@ -72,7 +77,7 @@ func (m AgentMessage) MarshalJSON() ([]byte, error) {
 	if m.Kind == "unknown" {
 		return []byte(`{"kind":"unknown"}`), nil
 	}
-	return json.Marshal(struct {
+	return wtf8.Marshal(struct {
 		FromBotName string `json:"fromBotName"`
 		Kind        string `json:"kind"`
 		Text        string `json:"text"`
@@ -478,13 +483,10 @@ func validateRow(row Row) *orpc.Error {
 		return shared.OutputInvalid()
 	}
 	if row.AgentMessage != nil {
-		if row.AgentMessage.Kind == "unknown" {
-			return nil
-		}
-		if row.AgentMessage.Kind != "update" && row.AgentMessage.Kind != "request" {
+		if !agentMessageKinds[row.AgentMessage.Kind] {
 			return shared.OutputInvalid()
 		}
-		if len(mdtext.Units(row.AgentMessage.Text)) > maxSnippet {
+		if row.AgentMessage.Kind != "unknown" && len(mdtext.Units(row.AgentMessage.Text)) > maxSnippet {
 			return shared.OutputInvalid()
 		}
 	}

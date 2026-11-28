@@ -231,6 +231,77 @@
   margin: 0;
 }
 
+/* A block of code is a card: a quiet header carrying the fence's language and its controls,
+   then the code, which keeps the shape the author wrote. */
+.rk-chat-markdown-code {
+  border: 1px solid var(--border);
+  border-radius: 0.75em;
+  background: var(--secondary);
+  overflow: hidden;
+}
+
+.rk-chat-markdown-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  min-height: 2.1em;
+  padding: 0.15em 0.35em 0.15em 0.85em;
+}
+
+.rk-chat-markdown-code-language {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.rk-chat-markdown-code-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.15em;
+}
+
+.rk-chat-markdown-code-more {
+  border: 0;
+  border-radius: 0.4em;
+  background: transparent;
+  padding: 0.3em 0.45em;
+  color: var(--muted-foreground);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+
+.rk-chat-markdown-code-more:hover,
+.rk-chat-markdown-code-more:focus-visible {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.rk-chat-markdown .rk-chat-markdown-code pre {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0.9em 0.8em;
+}
+
+.rk-chat-markdown .rk-chat-markdown-code[data-prose] pre {
+  padding-top: 0.8em;
+}
+
+/* A long block folds, and still scrolls sideways: one paste does not push the reply away. */
+.rk-chat-markdown .rk-chat-markdown-code pre[data-collapsed] {
+  max-height: 24em;
+  overflow-y: hidden;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
+}
+
 /* A Mermaid diagram sits on the same card a code block uses. A wide one scrolls sideways. */
 .rk-chat-markdown-diagram {
   margin: 0;
@@ -264,6 +335,16 @@
 
 .rk-chat-markdown-pre-wrap:hover .rk-chat-markdown-copy,
 .rk-chat-markdown-copy:focus-visible {
+  opacity: 1;
+}
+
+/* The copy control inside a code block's header holds its place, out of the code's way. */
+.rk-chat-markdown-copy-inline {
+  position: static;
+  width: 1.6em;
+  height: 1.6em;
+  border-color: transparent;
+  background: transparent;
   opacity: 1;
 }
 
@@ -352,6 +433,13 @@
 @keyframes rkMarkdownCursor {
   50% {
     opacity: 0;
+  }
+}
+
+/* Reading comes first: the caret stays lit instead of blinking for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .rk-chat-markdown-cursor {
+    animation: none;
   }
 }
 
@@ -460,4 +548,179 @@ a.rk-chat-link:hover .rk-chat-link-label {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
   border-radius: 2px;
+}
+
+/* A ticket named in a message: its ref, underlined like a page title, opening the ticket. */
+.rk-chat-ticket-chip {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2.5px;
+  text-decoration-color: color-mix(in srgb, currentColor 30%, transparent);
+  cursor: pointer;
+}
+
+.rk-chat-ticket-chip {
+  transition:
+    text-decoration-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.rk-chat-ticket-chip:hover {
+  text-decoration-color: color-mix(in srgb, currentColor 50%, transparent);
+  background-color: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 3px;
+}
+
+.rk-chat-ticket-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* A calm dot after a ticket whose board decision still waits for an answer. */
+.rk-chat-ticket-chip-pending::after {
+  content: "";
+  display: inline-block;
+  width: 0.3rem;
+  height: 0.3rem;
+  margin-inline-start: 0.2rem;
+  border-radius: 999px;
+  background: var(--foreground);
+  vertical-align: middle;
+}
+
+/* Code inside a link (a commit SHA) reads as the link's own text, not as a second box. */
+.rk-chat-markdown a.rk-chat-link code {
+  border: 0;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-weight: inherit;
+  transition: background-color 120ms ease;
+}
+
+.rk-chat-markdown a.rk-chat-link:hover code {
+  background-color: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 3px;
+}
+
+/* A reference's preview card: a monochrome surface, not the tooltip's inverted ink bubble. */
+[data-slot="tooltip-content"].rk-chat-ref-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  max-width: 19rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--foreground) 22%, transparent);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  text-align: start;
+  white-space: normal;
+}
+
+.rk-chat-ref-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.45rem;
+  min-width: 0;
+}
+
+.rk-chat-ref-card-mono {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.rk-chat-ref-card-muted {
+  color: var(--muted-foreground);
+}
+
+.rk-chat-ref-card-pill {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.rk-chat-ref-card-title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-weight: 500;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.rk-chat-ref-card-sha {
+  margin: 0;
+  word-break: break-all;
+}
+
+/* A pending ticket decision: its question, then one button per option. */
+.rk-chat-ref-card-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border);
+}
+
+.rk-chat-ref-card-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.rk-chat-ref-card-choice:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+.rk-chat-ref-card-choice:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.rk-chat-ref-card-choice:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.rk-chat-ref-card-choice[data-pending] {
+  border-color: var(--ring);
+  opacity: 1;
 }

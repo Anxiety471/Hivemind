@@ -23,11 +23,24 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // MemoryIndexPath is MEMORY_INDEX_PATH (packages/contracts/src/domain.ts:885): the index
 // cannot be deleted, only edited.
 const MemoryIndexPath = "MEMORY.md"
+
+// UserMemoryPath is USER_MEMORY_PATH (packages/contracts/src/bots/bot-memory.ts).
+const UserMemoryPath = "USER.md"
+
+// MemoryArchivePrefix is MEMORY_ARCHIVE_PREFIX (packages/contracts/src/bots/bot-memory.ts):
+// cold archive documents under this prefix are excluded from automatic prompt injection.
+const MemoryArchivePrefix = "archive/"
+
+// IsArchivePath reports whether path lives in the cold archive tier.
+func IsArchivePath(path string) bool {
+	return strings.HasPrefix(path, MemoryArchivePrefix)
+}
 
 // conflictMessage is MEMORY_REVISION_CONFLICT_ERROR (packages/adapter-kit/src/types.ts:409).
 const conflictMessage = "Shared memory changed since it was read. Read the latest version and save again."
@@ -114,6 +127,9 @@ func openDocuments(ctx context.Context, ring *contentcrypto.KeyRing, rows []*sto
 // looks like ciphertext gains a leading zero-width space so it is never read as a value under a
 // missing key (content-encryption.ts:458-485).
 func written(ring *contentcrypto.KeyRing, content string) string {
+	// The store returns the document content after the write; Node's UTF-8
+	// encoder turned every unpaired surrogate into U+FFFD on the way to the row.
+	content = wtf8.ToUTF8(content)
 	if ring == nil || ring.EncryptWrites {
 		return content
 	}
@@ -217,6 +233,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, ring *contentcry
 			args = append(args, *scope)
 			query += fmt.Sprintf(` AND scope = $%d`, len(args))
 		}
+		// writeaudit:dynamic read: botId/scope clauses are fixed fragments; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -274,6 +291,7 @@ func ExportMarkdown(ctx context.Context, database *db.DB, actor db.Actor, ring *
 			args = append(args, *botID)
 			query += fmt.Sprintf(` AND "botId" = $%d`, len(args))
 		}
+		// writeaudit:dynamic read: the botId clause is a fixed fragment; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -377,63 +395,8 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, ring *contentc
 		return nil, shared.Failure(err)
 	}
 	var result Document
-	err = shared.Serializable(ctx, database, actor, func(tx pgx.Tx) error {
-		existing, err := findNaturalKey(ctx, tx, actor.SpaceID, doc.Scope, doc.BotID, doc.Path)
-		if err != nil {
-			return err
-		}
-		if input.ExpectedRevision != nil {
-			var live int64
-			if existing != nil {
-				live = int64(existing.Revision)
-			}
-			if live != *input.ExpectedRevision {
-				return orpc.Conflict(conflictMessage)
-			}
-		}
-		at := time.Now().UTC().Truncate(time.Millisecond)
-		id := doc.ID
-		var revision int32
-		if existing != nil {
-			content, err := sealDocument(ctx, ring, existing.ID, existing.SpaceID, existing.UserID, input.Content)
-			if err != nil {
-				return err
-			}
-			if err := tx.QueryRow(ctx, `UPDATE memory_documents SET content = $1, revision = revision + 1, "updatedAt" = $2
-				WHERE id = $3 RETURNING revision`, content, at, existing.ID).Scan(&revision); err != nil {
-				return err
-			}
-			id = existing.ID
-		} else {
-			id = effects.NewID()
-			content, err := sealDocument(ctx, ring, id, actor.SpaceID, actor.UserID, input.Content)
-			if err != nil {
-				return err
-			}
-			if err := tx.QueryRow(ctx, `INSERT INTO memory_documents
-				(id, "spaceId", "userId", "botId", scope, path, content, revision, "createdAt", "updatedAt")
-				VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8) RETURNING revision`,
-				id, actor.SpaceID, actor.UserID, doc.BotID, doc.Scope, doc.Path, content, at).Scan(&revision); err != nil {
-				return err
-			}
-		}
-		revisionID := effects.NewID()
-		content, err := sealRevision(ctx, ring, revisionID, id, input.Content)
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO memory_revisions
-			(id, "documentId", revision, content, "sourceRunId", "sourceThreadId", "createdAt")
-			VALUES ($1, $2, $3, $4, NULL, NULL, $5)`, revisionID, id, revision, content, at)
-		if err != nil {
-			return err
-		}
-		result = Document{
-			ID: id, Scope: doc.Scope, BotID: doc.BotID, Path: doc.Path,
-			Content: written(ring, input.Content), Revision: revision, UpdatedAt: shared.ISO(at),
-		}
-		return nil
-	})
+	result, err = commitDocument(ctx, database, actor, ring, doc.Scope, doc.BotID, doc.Path,
+		input.Content, input.ExpectedRevision)
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
@@ -441,6 +404,99 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, ring *contentc
 		return nil, shared.OutputInvalid()
 	}
 	return result, nil
+}
+
+// CommitInput is MarkdownMemoryStore.commit's request
+// (packages/memory/src/index.ts:73-116): a scope and natural key, the complete
+// new content, and the revision the caller read.
+type CommitInput struct {
+	Scope            string
+	BotID            *string
+	Path             string
+	Content          string
+	ExpectedRevision *int64
+}
+
+// Commit is MarkdownMemoryStore.commit without a run or thread source: it creates
+// a missing document or replaces one, appends the revision row, and refuses a
+// stale expectedRevision with CONFLICT. The roamer uses it to seed and consolidate
+// memory outside a chat run.
+func Commit(ctx context.Context, database *db.DB, actor db.Actor, ring *contentcrypto.KeyRing, input CommitInput) (Document, error) {
+	if input.Scope != "bot" && input.Scope != "user" {
+		return Document{}, fmt.Errorf("memory scope must be bot or user")
+	}
+	if (input.Scope == "bot") != (input.BotID != nil) {
+		return Document{}, fmt.Errorf("bot memory needs a bot id and shared memory must omit it")
+	}
+	if input.Path == "" {
+		return Document{}, fmt.Errorf("memory path is required")
+	}
+	return commitDocument(ctx, database, actor, ring, input.Scope, input.BotID, input.Path,
+		input.Content, input.ExpectedRevision)
+}
+
+// commitDocument is the serializable write Update and Commit share. The caller
+// has already resolved the natural key; expectedRevision nil writes without one.
+func commitDocument(ctx context.Context, database *db.DB, actor db.Actor, ring *contentcrypto.KeyRing,
+	scope string, botID *string, path, content string, expectedRevision *int64) (Document, error) {
+	var result Document
+	err := shared.Serializable(ctx, database, actor, func(tx pgx.Tx) error {
+		existing, err := findNaturalKey(ctx, tx, actor.SpaceID, scope, botID, path)
+		if err != nil {
+			return err
+		}
+		if expectedRevision != nil {
+			var live int64
+			if existing != nil {
+				live = int64(existing.Revision)
+			}
+			if live != *expectedRevision {
+				return orpc.Conflict(conflictMessage)
+			}
+		}
+		at := time.Now().UTC().Truncate(time.Millisecond)
+		id := ""
+		var revision int32
+		if existing != nil {
+			sealed, err := sealDocument(ctx, ring, existing.ID, existing.SpaceID, existing.UserID, content)
+			if err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `UPDATE memory_documents SET content = $1, revision = revision + 1, "updatedAt" = $2
+				WHERE id = $3 RETURNING revision`, append(db.Data(sealed, at), existing.ID)...).Scan(&revision); err != nil {
+				return err
+			}
+			id = existing.ID
+		} else {
+			id = effects.NewID()
+			sealed, err := sealDocument(ctx, ring, id, actor.SpaceID, actor.UserID, content)
+			if err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `INSERT INTO memory_documents
+				(id, "spaceId", "userId", "botId", scope, path, content, revision, "createdAt", "updatedAt")
+				VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8) RETURNING revision`,
+				db.Data(id, actor.SpaceID, actor.UserID, botID, scope, path, sealed, at)...).Scan(&revision); err != nil {
+				return err
+			}
+		}
+		revisionID := effects.NewID()
+		sealedRevision, err := sealRevision(ctx, ring, revisionID, id, content)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO memory_revisions
+			(id, "documentId", revision, content, "sourceRunId", "sourceThreadId", "createdAt")
+			VALUES ($1, $2, $3, $4, NULL, NULL, $5)`, db.Data(revisionID, id, revision, sealedRevision, at)...); err != nil {
+			return err
+		}
+		result = Document{
+			ID: id, Scope: scope, BotID: botID, Path: path,
+			Content: written(ring, content), Revision: revision, UpdatedAt: shared.ISO(at),
+		}
+		return nil
+	})
+	return result, err
 }
 
 // Remove implements memory.remove: the index may not be deleted, any other document of the

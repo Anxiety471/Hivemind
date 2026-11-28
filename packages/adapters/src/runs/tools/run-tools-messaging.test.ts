@@ -60,8 +60,9 @@ function callWith(name: string, args: Record<string, unknown>) {
 }
 
 function context(servoComputerId: string) {
+  // A Team Computer has one shared workspace, so a bot's files sit at the root under their own path.
   const listFiles = vi.fn(async (_computer: unknown, path: string) =>
-    path === "bots/bot-coder" ? [{ path: "bots/bot-coder/site", kind: "directory" }] : [],
+    path === "" ? [{ path: "site", kind: "directory" }] : [],
   );
   const findMany = vi.fn(async (..._args: unknown[]) => [
     { id: "bot-coder", name: "Coder", computerId: "computer-team", computerSwitching: false },
@@ -115,7 +116,7 @@ describe("sending files to another bot", () => {
       expect.anything(),
       expect.anything(),
       expect.objectContaining({
-        message: "deploy this\n\nFiles on our shared computer:\n- bots/bot-coder/site",
+        message: "deploy this\n\nFiles on our shared computer:\n- site",
         files: [],
       }),
     );
@@ -134,7 +135,7 @@ describe("sending files to another bot", () => {
       expect.anything(),
       "group-1",
       expect.objectContaining({
-        message: "deploy this\n\nFiles on our shared computer:\n- bots/bot-coder/site",
+        message: "deploy this\n\nFiles on our shared computer:\n- site",
         files: [],
       }),
     );
@@ -239,9 +240,7 @@ describe("sending files to another bot", () => {
 
   it("refuses to share a path that holds a secret", async () => {
     const { ctx, listFiles } = context("computer-team");
-    listFiles.mockResolvedValueOnce([
-      { path: "bots/bot-coder/sk-live-1234567890", kind: "directory" },
-    ]);
+    listFiles.mockResolvedValueOnce([{ path: "sk-live-1234567890", kind: "directory" }]);
     (ctx as { secrets: string[] }).secrets = ["sk-live-1234567890"];
     await expect(
       messagingTools.message_bot!(ctx, callWith("message_bot", { files: ["sk-live-1234567890"] })),
@@ -306,7 +305,7 @@ describe("sending files to another bot", () => {
 
   it("refuses a message the shared file list would push over the limit", async () => {
     const { ctx } = context("computer-team");
-    const list = "\n\nFiles on our shared computer:\n- bots/bot-coder/site";
+    const list = "\n\nFiles on our shared computer:\n- site";
     const room = 8_000 - list.length;
     await expect(
       messagingTools.message_bot!(

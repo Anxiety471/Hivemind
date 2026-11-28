@@ -3,13 +3,21 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
 import type { AppContract, ProductEvent } from "@rakazo/contracts";
 import { CLIENT_BUILD_HEADER, formatClientBuild } from "@rakazo/contracts";
-import { displayIdentityEvent, displayIdentityResult } from "@rakazo/core";
+import {
+  deadlineSignal,
+  displayIdentityEvent,
+  displayIdentityResult,
+  isServerUnreachable,
+  isUnreachableStatus,
+  parseRetryAfter,
+} from "@rakazo/core";
 import { clientCorrelationHeaders, responseCorrelation } from "@rakazo/logging/monitoring";
 import { authClient } from "../auth/auth";
 import { identityLabels } from "../bots/identity-display";
 import { i18n } from "../locale/i18n";
 import { CLIENT_BUILD } from "../platform/client-build";
 import { reportClientError } from "../platform/monitoring";
+import { noteServerReachable } from "./connection-state";
 
 const SPACE_STORAGE_KEY = "rakazo:space-id";
 export const ORGANIZATION_SPACES_STORAGE_KEY = "rakazo:org-spaces";
@@ -18,7 +26,50 @@ type RpcClientContext = {
   spaceId?: string | null;
   /** Finish the call even if the page is closing. */
   keepalive?: boolean;
+  /**
+   * How long the request may take before it is abandoned and retried. `null` leaves it open, as
+   * streams and long mutations need; a call that names none gets {@link RPC_TIMEOUT_MS}.
+   */
+  timeoutMs?: number | null;
+  /** Filled by the link so a failure keeps the status and Retry-After the server sent. */
+  responseMeta?: { status?: number; retryAfterMs?: number };
 };
+
+/** How long a unary call may stay silent before it is treated as a stalled connection. */
+export const RPC_TIMEOUT_MS = 30_000;
+
+const OPEN_PROCEDURES = new Set([
+  "threads/subscribe",
+  "threads/helperSubscribe",
+  "notifications/subscribe",
+  "notifications/subscribeCalls",
+  "boards/subscribe",
+]);
+
+/**
+ * A stream stays open for as long as the server has something to say; a sandbox boot, update or
+ * reset, a delete that runs through everything a space holds, and a fallback upload that carries a
+ * whole file can take minutes. A deadline would cut those off; every other call gets one.
+ */
+function openForLonger(procedure: string): boolean {
+  return (
+    OPEN_PROCEDURES.has(procedure) ||
+    procedure === "computer/boot" ||
+    procedure === "computer/update" ||
+    procedure === "computer/reset" ||
+    procedure === "computer/recover" ||
+    procedure === "spaces/remove" ||
+    procedure === "organizations/remove" ||
+    procedure === "artifacts/create"
+  );
+}
+
+/** A request that ran out of time, retryable and reported as a timeout rather than a cancellation. */
+function rpcTimeoutError(): Error {
+  const error = new Error("The server took too long to answer.");
+  error.name = "TimeoutError";
+  return error;
+}
 
 export function selectedSpaceId(): string | null {
   if (typeof window === "undefined") return null;
@@ -90,6 +141,10 @@ const link = new RPCLink<RpcClientContext>({
     const headers = withSpaceHeaders(request.headers, spaceId);
     if (CLIENT_BUILD) headers.set(CLIENT_BUILD_HEADER, formatClientBuild("web", CLIENT_BUILD));
     for (const [key, value] of Object.entries(correlation)) headers.set(key, value);
+    const timeoutMs =
+      options.context.timeoutMs === null ? null : (options.context.timeoutMs ?? RPC_TIMEOUT_MS);
+    // The deadline rides along with the caller's cancellation, so either one ends the request.
+    const signal = timeoutMs === null ? options.signal : deadlineSignal(timeoutMs, options.signal);
     let response: Response;
     try {
       response = await fetch(request, {
@@ -97,12 +152,24 @@ const link = new RPCLink<RpcClientContext>({
         credentials: "include",
         keepalive: options.context.keepalive,
         // Keep cancellation attached directly to fetch rather than only a cloned Request.
-        signal: options.signal,
+        signal,
       });
     } catch (error) {
+      // The caller still holds the request; only our own deadline ran out. That stall is
+      // retryable, and it does not mean the server is gone, so reachability is left alone.
+      if (timeoutMs !== null && !options.signal?.aborted && signal?.aborted)
+        throw rpcTimeoutError();
+      if (!options.signal?.aborted && isServerUnreachable(error)) noteServerReachable(false);
       if (!options.signal?.aborted)
         reportClientError(error, "rpc.transport", responseCorrelation(new Headers(correlation)));
       throw error;
+    }
+    noteServerReachable(!isUnreachableStatus(response.status));
+    if (options.context.responseMeta) {
+      options.context.responseMeta.status = response.status;
+      options.context.responseMeta.retryAfterMs = parseRetryAfter(
+        response.headers.get("retry-after"),
+      );
     }
     // Server exceptions are reported by the API; do not report every HTTP failure twice.
     recheckSessionOnUnauthorized(response.status);
@@ -158,11 +225,64 @@ export function leaveUnavailableSpace(spaceId: string): Promise<void> {
 
 export type RpcClient = ContractRouterClient<AppContract, RpcClientContext>;
 
+function defineResponseMeta(error: object, key: "status" | "retryAfterMs", value: number): void {
+  try {
+    Object.defineProperty(error, key, { value, writable: true, configurable: true });
+  } catch {
+    // An error that refuses new fields keeps only the ones it already had.
+  }
+}
+
+/**
+ * Keep the HTTP status and Retry-After of a failure oRPC could not decode, such as a proxy's
+ * HTML 502 or 429, so retry and copy decisions still see them.
+ */
+function attachResponseMeta(
+  error: unknown,
+  meta: { status?: number; retryAfterMs?: number },
+): void {
+  if (typeof error !== "object" || error === null) return;
+  const target = error as { status?: unknown; retryAfterMs?: unknown };
+  if (target.status === undefined && meta.status !== undefined)
+    defineResponseMeta(target, "status", meta.status);
+  if (target.retryAfterMs === undefined && meta.retryAfterMs !== undefined)
+    defineResponseMeta(target, "retryAfterMs", meta.retryAfterMs);
+}
+
+async function callWithResponseMeta<T>(
+  call: () => Promise<T>,
+  meta: { status?: number; retryAfterMs?: number },
+): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    attachResponseMeta(error, meta);
+    throw error;
+  }
+}
+
 const displayLink = {
   call: async (...args: Parameters<typeof link.call>) => {
     const [path, input, options] = args;
-    const result = await link.call(path, input, options);
     const procedure = path.join("/");
+    const responseMeta: { status?: number; retryAfterMs?: number } = {};
+    const result = await callWithResponseMeta(
+      () =>
+        link.call(path, input, {
+          ...options,
+          context: {
+            ...options.context,
+            responseMeta,
+            timeoutMs:
+              options.context.timeoutMs !== undefined
+                ? options.context.timeoutMs
+                : openForLonger(procedure)
+                  ? null
+                  : RPC_TIMEOUT_MS,
+          },
+        }),
+      responseMeta,
+    );
     if (procedure === "threads/subscribe" || procedure === "threads/helperSubscribe") {
       return (async function* () {
         for await (const event of result as AsyncIterable<ProductEvent>) {

@@ -200,7 +200,12 @@ export async function querySpaceSearch(
       spaceId: actor.spaceId,
       groupId: null,
       botId: { not: null },
-      name: { contains: likeQuery, mode: "insensitive" },
+      trashedAt: null,
+      OR: [
+        { name: { contains: likeQuery, mode: "insensitive" } },
+        { description: { contains: likeQuery, mode: "insensitive" } },
+        { slug: { contains: likeQuery, mode: "insensitive" } },
+      ],
       bot: { archivedAt: null },
       ...LISTED_ARTIFACT,
     },
@@ -226,7 +231,12 @@ export async function querySpaceSearch(
         botId: artifact.botId,
         botName: artifact.bot.name,
         title: artifact.name,
-        snippet: `${artifact.mimeType}, ${artifact.size} bytes`,
+        snippet: [
+          artifact.description || artifact.slug,
+          `${artifact.mimeType}, ${artifact.size} bytes`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
         artifactId: artifact.id,
         messageId: message.id,
         seq: message.seq,
@@ -242,7 +252,12 @@ export async function querySpaceSearch(
     where: {
       spaceId: actor.spaceId,
       groupId: { in: openableGroupIds },
-      name: { contains: likeQuery, mode: "insensitive" },
+      trashedAt: null,
+      OR: [
+        { name: { contains: likeQuery, mode: "insensitive" } },
+        { description: { contains: likeQuery, mode: "insensitive" } },
+        { slug: { contains: likeQuery, mode: "insensitive" } },
+      ],
       ...LISTED_ARTIFACT,
     },
     include: { group: { select: { name: true } } },
@@ -267,7 +282,12 @@ export async function querySpaceSearch(
         groupId: artifact.groupId,
         groupName: artifact.group.name,
         title: artifact.name,
-        snippet: `${artifact.mimeType}, ${artifact.size} bytes`,
+        snippet: [
+          artifact.description || artifact.slug,
+          `${artifact.mimeType}, ${artifact.size} bytes`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
         artifactId: artifact.id,
         messageId: message.id,
         seq: message.seq,

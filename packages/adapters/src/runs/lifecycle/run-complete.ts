@@ -4,6 +4,7 @@ import {
   memoryRetainTurnJob,
   taskDetectJob,
 } from "@rakazo/adapter-kit";
+import type { MessageBlock } from "@rakazo/contracts";
 import {
   BACKGROUND_HELPER_TRIGGER,
   containsSecret,
@@ -18,7 +19,7 @@ import {
   answeredSteeringMessageIds,
   retainsConversationTurn,
 } from "../../memory/conversation-memory.js";
-import { returnBotMessageOutcome } from "../../messaging/bot-messages.js";
+import { reportBotMessageWait, returnBotMessageOutcome } from "../../messaging/bot-messages.js";
 import { clearRoutineBackoff } from "../../routines/routine-backoff.js";
 import { isStrategicInitiativeRun } from "../../routines/strategic-initiative.js";
 import {
@@ -26,9 +27,13 @@ import {
   HISTORY_WINDOW_SIZE,
   shouldEnqueueCompaction,
 } from "../../runtime/context/history-compaction.js";
+import { scheduleRunSecretsExpiry } from "../../secrets/run-secrets-expiry.js";
 import { returnHelperOutcome } from "../../tasks/background-helpers.js";
 import { shouldEnqueueTaskDetect } from "../../tasks/task-detect.js";
+import { detectEmptyResponse } from "../assembly/empty-response.js";
+import { extractProseChoiceQuestion } from "../assembly/prose-choice-question.js";
 import type { RunContext } from "../assembly/run-context.js";
+import { persistTurnCheckpoint } from "../assembly/run-context.js";
 import { redactBlocks } from "../assembly/run-messages.js";
 import {
   completionMessageSegments,
@@ -44,6 +49,7 @@ import {
   stripNoResponseReply,
   stripStrayNoResponse,
 } from "../assembly/silent-reply.js";
+import { appendTicketFactCheckIfNeeded } from "../assembly/ticket-fact-check.js";
 import { saveLatestStepScreenshot } from "../turn/tool-step-calls.js";
 import { enqueueSteeringContinuation, renewRunLease } from "./run-lifecycle.js";
 import {
@@ -156,22 +162,40 @@ export async function completeRun(ctx: RunContext) {
 
   // A provider that ended while still reasoning keeps what it thought before the reply.
   await closeThinkingSegment(ctx);
-  const { blocks, text, groupSilentEnd } = await finalReply(ctx);
+  const { blocks, text, groupSilentEnd, emptyResponse } = await finalReply(ctx);
   if (!(await renewRunLease(deps, runId, ctx.workerId, ctx.fence))) return;
+  // The board note is appended as its own block, so a prose choice can place it before its ask card.
+  const boardCheck =
+    !groupSilentEnd &&
+    !emptyResponse &&
+    !isBackgroundRunTrigger(run.trigger) &&
+    run.trigger !== BACKGROUND_HELPER_TRIGGER &&
+    !ctx.state.handedOff &&
+    !ctx.source.peerMessage
+      ? await appendTicketFactCheckIfNeeded(deps, run.spaceId, blocks)
+      : { blocks, mismatches: [] };
+  if (boardCheck.mismatches.length > 0) {
+    getLogger().warn("agent.ticket_fact_mismatch", {
+      "run.id": runId,
+      count: boardCheck.mismatches.length,
+      refs: boardCheck.mismatches.map((mismatch) => mismatch.ref),
+    });
+  }
+  const boardNote = boardCheck.blocks.slice(blocks.length);
+  const finalBlocks = boardCheck.blocks;
   const botMessageOutcome =
     run.trigger === "bot_message"
       ? botMessageOutcomeFromMidTurn(text, reply.midTurnUserTexts)
       : null;
-  const marksUnread = completionMarksUnread(
-    run.trigger,
-    text,
-    ctx.source.peerMessage?.repliesToRequest === true,
-  );
+  const marksUnread = emptyResponse
+    ? false
+    : completionMarksUnread(run.trigger, text, ctx.source.peerMessage?.repliesToRequest === true);
   await ctx.settleRunningHelpers();
   const [answeredMessageIds, taskDetectMessageIds] = await Promise.all([
     conversationRetentionMessages(ctx),
     taskDetectMessages(ctx),
   ]);
+  if (!emptyResponse && (await pauseForProseChoice(ctx, blocks, groupSilentEnd, boardNote))) return;
   const completed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
     threadId: thread.id,
@@ -182,8 +206,9 @@ export async function completeRun(ctx: RunContext) {
     leaseOwner: ctx.workerId,
     leaseFence: ctx.fence,
     outcome: "completed",
-    blocks,
-    markUnread: !groupSilentEnd && marksUnread,
+    blocks: finalBlocks,
+    markUnread: !groupSilentEnd && !emptyResponse && marksUnread,
+    ...(emptyResponse ? { emptyResponse } : {}),
   });
   if (!completed) return;
   ctx.stopHeartbeatAfterCompletion();
@@ -236,6 +261,77 @@ export async function completeRun(ctx: RunContext) {
   await enqueueConversationRetention(ctx, answeredMessageIds);
   await enqueueTaskDetection(ctx, taskDetectMessageIds);
   await enqueueHistoryCompaction(ctx);
+}
+
+/**
+ * A reply that ends in a short option list the bot wrote out as prose becomes an ask card, so the
+ * user answers with a tap. Returns true when the run paused or lost its lease, so completion stops.
+ */
+async function pauseForProseChoice(
+  ctx: RunContext,
+  blocks: MessageBlock[],
+  groupSilentEnd: boolean,
+  boardNote: MessageBlock[],
+): Promise<boolean> {
+  const { deps, run, runId, bot, thread, workerId, fence } = ctx;
+  const last = blocks.at(-1);
+  if (
+    groupSilentEnd ||
+    isBackgroundRunTrigger(run.trigger) ||
+    run.trigger === BACKGROUND_HELPER_TRIGGER ||
+    run.trigger === "routine" ||
+    run.trigger === "bot_message" ||
+    ctx.state.handedOff ||
+    ctx.source.peerMessage ||
+    blocks.some((block) => block.kind === "ask") ||
+    last?.kind !== "text"
+  ) {
+    return false;
+  }
+  const choice = extractProseChoiceQuestion(last.text);
+  if (!choice) return false;
+  const safeQuestion = redactSecrets(choice.question, ctx.secrets);
+  const askBlock: MessageBlock = {
+    kind: "ask",
+    text: safeQuestion,
+    status: "pending",
+    actions: choice.actions,
+  };
+  // The bot's words before the question stay a text block, so markdown and links render as written.
+  const preamble = choice.preamble
+    ? [{ kind: "text" as const, text: redactSecrets(choice.preamble, ctx.secrets) }]
+    : [];
+  const hasRecommended = choice.actions.some((action) => action.recommended === true);
+  getLogger().info("agent.prose_choice_promoted", {
+    runId,
+    optionCount: choice.actions.length,
+    hasRecommended,
+  });
+  await persistTurnCheckpoint(ctx, undefined);
+  const paused = await deps.events.pauseRunForInput({
+    spaceId: run.spaceId,
+    threadId: run.threadId,
+    botId: run.botId,
+    runId,
+    attemptId: ctx.attempt.id,
+    leaseOwner: workerId,
+    leaseFence: fence,
+    onPaused: scheduleRunSecretsExpiry(deps.jobs, runId),
+    blocks: [...blocks.slice(0, -1), ...preamble, ...boardNote, askBlock],
+    offeredActions: choice.actions,
+  });
+  if (!paused) return true;
+  await enqueueSteeringContinuation(deps, paused.continuationRunId);
+  await reportBotMessageWait(deps, run, bot, safeQuestion, ctx.attempt.id);
+  await notifyRun(deps, run, {
+    kind: "help",
+    title: `${displayName(bot.name, "Bot")} needs an answer`,
+    body: safeQuestion,
+    botId: bot.id,
+    threadId: thread.id,
+  });
+  ctx.stopHeartbeatAfterCompletion();
+  return true;
 }
 
 /** A scripted runtime's turns carry the files and memory it writes. */
@@ -347,6 +443,38 @@ async function finalReply(ctx: RunContext) {
           !reply.publishedMidTurnUserMessage
         ? peerReplyWithoutSentinel(reply.assembled, reply.messageSegments)
         : stripStrayNoResponse(reply.assembled, reply.messageSegments);
+  const emptyResponse = detectEmptyResponse({
+    assembled: silentReply.assembled,
+    blocks: silentReply.blocks,
+    sourceBlocks: reply.messageSegments,
+    runtimeEmptyResponse: Boolean(reply.emptyResponse),
+    emptyResponseReminders: reply.emptyResponseReminders,
+    emptyResponseText: ctx.emptyResponseText,
+    allowSilentEmpty: ctx.allowSilentEmptyRun,
+    groupSilentEnd,
+    handedOff: ctx.state.handedOff,
+    backgroundRun: isBackgroundRunTrigger(run.trigger),
+    publishedMidTurnUserMessage: reply.publishedMidTurnUserMessage,
+    publishedTerminalSubagent: reply.publishedTerminalSubagent,
+    explicitNoResponse: reply.explicitNoResponse,
+  });
+  if (emptyResponse) {
+    // Metadata only: never the user's or the model's prose, nor its reasoning.
+    getLogger().warn("run.empty_response", {
+      "run.id": ctx.runId,
+      "space.id": run.spaceId,
+      "thread.id": ctx.thread.id,
+      "bot.id": ctx.bot.id,
+      "run.trigger": run.trigger,
+      ...(run.modelProvider ? { "model.provider": run.modelProvider } : {}),
+      ...(run.modelId ? { "model.id": run.modelId } : {}),
+      reason: emptyResponse.reason,
+      hadThinking: emptyResponse.hadThinking,
+      thinkingChars: emptyResponse.thinkingChars,
+      reminders: emptyResponse.reminders,
+    });
+    return { blocks: [], text: "", groupSilentEnd, emptyResponse };
+  }
   let completionBlocks = silentReply.blocks;
   if (!silentReply.assembled || isBackgroundRunTrigger(run.trigger)) {
     // Mid-turn progress already posted durable chat messages; skip the empty
@@ -381,7 +509,7 @@ async function finalReply(ctx: RunContext) {
   ) {
     throw new Error(TOOL_STEPS_WITHOUT_RESPONSE);
   }
-  return { blocks, text, groupSilentEnd };
+  return { blocks, text, groupSilentEnd, emptyResponse: null };
 }
 
 // Last, and never fatal: the run is already finalized, so a failure here must not reach

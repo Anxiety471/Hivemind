@@ -20,6 +20,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -30,18 +31,6 @@ var Settings = []string{"models", "voice", "confirmations", "credentials"}
 var Scopes = []string{"account", "space"}
 
 const maxTransactionTries = 3
-
-// Failure turns a database error into the response the API gives for it.
-func Failure(err error) *orpc.Error {
-	var failure *orpc.Error
-	if errors.As(err, &failure) {
-		return failure
-	}
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
-}
 
 // ParseScope reads the optional `scope` of settingsScopeInput: "" when omitted.
 func ParseScope(object *validate.Object) (string, []validate.Issue) {
@@ -129,7 +118,7 @@ func Overrides(ctx context.Context, database *db.DB, actor db.Actor) ([]string, 
 		return err
 	})
 	if err != nil {
-		return nil, Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return found, nil
 }
@@ -179,7 +168,7 @@ func SetOverride(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.
 		}
 	}
 	if err != nil {
-		return nil, Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -220,7 +209,7 @@ func setOverride(ctx context.Context, tx pgx.Tx, actor db.Actor, input setInput)
 			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO space_setting_overrides ("spaceId", "userId", setting, "createdAt") VALUES ($1, $2, $3, $4)`,
-			actor.SpaceID, actor.UserID, input.Setting, now()); err != nil {
+			db.Data(actor.SpaceID, actor.UserID, input.Setting, now())...); err != nil {
 			return nil, err
 		}
 	} else if _, err := tx.Exec(ctx, `DELETE FROM space_setting_overrides WHERE "spaceId" = $1 AND "userId" = $2 AND setting = $3`,
@@ -248,6 +237,7 @@ func clearSpaceCopy(ctx context.Context, tx pgx.Tx, actor db.Actor, setting stri
 		}
 	}
 	for _, statement := range statements {
+		//writeaudit:dynamic every statement in this list is a DELETE whose arguments are filters
 		if _, err := tx.Exec(ctx, statement, actor.SpaceID, actor.UserID); err != nil {
 			return err
 		}
@@ -264,8 +254,8 @@ func copyAccountIntoSpace(ctx context.Context, tx pgx.Tx, actor db.Actor, settin
 		return nil
 	case "models":
 		_, err := tx.Exec(ctx, `INSERT INTO space_model_role_choices ("spaceId", "userId", role, "position", provider, "modelId", "thinkingLevel", "credentialId")
-			SELECT $1, $2, role, "position", provider, "modelId", "thinkingLevel", "credentialId" FROM user_model_role_choices WHERE "userId" = $2`,
-			actor.SpaceID, actor.UserID)
+			SELECT $1, $2, role, "position", provider, "modelId", "thinkingLevel", "credentialId" FROM user_model_role_choices WHERE "userId" = $3`,
+			append(db.Data(actor.SpaceID, actor.UserID), actor.UserID)...)
 		return err
 	case "voice":
 		type preference struct {
@@ -293,7 +283,7 @@ func copyAccountIntoSpace(ctx context.Context, tx pgx.Tx, actor db.Actor, settin
 		for _, row := range found {
 			if _, err := tx.Exec(ctx, `INSERT INTO space_voice_preferences (id, "spaceId", "userId", "credentialId", "voiceId", "speechModel", "isDefault", "createdAt", "updatedAt")
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-				effects.NewID(), actor.SpaceID, actor.UserID, row.credentialID, row.voiceID, row.speechModel, row.isDefault, at); err != nil {
+				db.Data(effects.NewID(), actor.SpaceID, actor.UserID, row.credentialID, row.voiceID, row.speechModel, row.isDefault, at)...); err != nil {
 				return err
 			}
 		}
@@ -325,13 +315,13 @@ func copyAccountIntoSpace(ctx context.Context, tx pgx.Tx, actor db.Actor, settin
 	}
 	for _, row := range rules {
 		if _, err := tx.Exec(ctx, `INSERT INTO action_approval_rules (id, "spaceId", "createdByUserId", effect, "matchKind", "matchValue", "createdAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`, effects.NewID(), actor.SpaceID, actor.UserID, row.effect, row.kind, row.value, at); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, db.Data(effects.NewID(), actor.SpaceID, actor.UserID, row.effect, row.kind, row.value, at)...); err != nil {
 			return err
 		}
 	}
 	if hasReview {
 		if _, err := tx.Exec(ctx, `INSERT INTO action_auto_review_preferences (id, "spaceId", "userId", enabled, "skipApprovals", "createdAt", "updatedAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $6)`, effects.NewID(), actor.SpaceID, actor.UserID, enabled, skip, at); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $6)`, db.Data(effects.NewID(), actor.SpaceID, actor.UserID, enabled, skip, at)...); err != nil {
 			return err
 		}
 	}

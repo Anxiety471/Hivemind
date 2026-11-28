@@ -6,7 +6,7 @@ import {
   ticketWaitingOnBotIds,
   updateTicket,
 } from "@rakazo/adapters";
-import { parseTicketRef } from "@rakazo/contracts";
+import { normalizeBoardRepositories, parseTicketRef } from "@rakazo/contracts";
 import { escapeSearchWildcards } from "@rakazo/core";
 import type { Board as BoardRow, Prisma, PrismaClient } from "@rakazo/db";
 import {
@@ -66,6 +66,13 @@ export function boardsRoutes(ctx: RouterContext) {
         const data = {
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(changesPrefix ? { ticketPrefix: nextPrefix } : {}),
+          ...(input.repositories !== undefined
+            ? {
+                repositories: normalizeBoardRepositories(
+                  input.repositories,
+                ) as Prisma.InputJsonValue,
+              }
+            : {}),
         };
         let row: BoardRow;
         if (changesPrefix) {

@@ -12,6 +12,7 @@ import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import tls from "node:tls";
 import { pathToFileURL } from "node:url";
+import { DRIVE_OPEN_PATH } from "@rakazo/contracts/drive-open";
 import { createServiceLogger } from "@rakazo/logging";
 import { forwardsToApi, hostAllowed } from "./api-proxy.js";
 import { appendForwardedFor } from "./forwarded-for.js";
@@ -116,7 +117,9 @@ function forwardRequests(api: string, rpcApi?: string): Middleware {
         req.url.startsWith("/rpc?") ||
         req.url === "/api/v1/files" ||
         req.url.startsWith("/api/v1/files/") ||
-        req.url.startsWith("/api/v1/files?"));
+        req.url.startsWith("/api/v1/files?") ||
+        req.url === DRIVE_OPEN_PATH ||
+        req.url.startsWith(`${DRIVE_OPEN_PATH}?`));
     const target = toRpc ? rpcDest : apiDest;
     const transport = toRpc ? rpcTransport : apiTransport;
     const agent = toRpc ? rpcAgent : apiAgent;

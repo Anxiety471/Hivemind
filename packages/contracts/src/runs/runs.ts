@@ -159,6 +159,8 @@ export const RunSchema = z.object({
   modelId: z.string().nullable(),
   costUsd: z.number().nonnegative().nullable().optional(),
   error: z.string().nullable(),
+  /** True when a failed run saved mid-turn progress so Continue resumes from its checkpoint. */
+  resumable: z.boolean().optional(),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
   createdAt: z.string(),

@@ -23,6 +23,8 @@ import {
   AccountExportManifestSchema,
   AccountExportRecordSchema,
   attachmentSizeLabel,
+  BoardRepositoryInputSchema,
+  normalizeBoardRepositories,
   resolveBotAvatarSet,
 } from "@rakazo/contracts";
 import { organicAvatarFamily, STOPPED_HELPER_RESULT } from "@rakazo/core";
@@ -836,6 +838,7 @@ class AccountImporter implements ArchiveSink {
             spaceId,
             name: record.name,
             ticketPrefix: record.ticketPrefix,
+            repositories: boardRepositories(record.repositories),
           },
         });
         return;
@@ -1109,6 +1112,13 @@ function parseManifest(bytes: Uint8Array): AccountExportManifest {
   if (version !== ACCOUNT_EXPORT_VERSION)
     throw new AccountImportError("This export is from a newer version of Rakazo.");
   throw unreadable();
+}
+
+/** An export's board repositories go through the same link rules as a live rename. */
+function boardRepositories(value: unknown): Prisma.InputJsonValue {
+  const parsed = BoardRepositoryInputSchema.array().safeParse(value);
+  if (!parsed.success) throw unreadable();
+  return normalizeBoardRepositories(parsed.data) as Prisma.InputJsonValue;
 }
 
 function date(value: string | null): Date | null {

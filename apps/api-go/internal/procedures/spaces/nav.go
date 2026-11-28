@@ -396,6 +396,7 @@ func countBots(ctx context.Context, tx pgx.Tx, spaceIDs []string) (map[string]in
 }
 
 func distinctSpaces(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]string, error) {
+	//writeaudit:dynamic callers pass SELECT statements; every argument is a filter
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err

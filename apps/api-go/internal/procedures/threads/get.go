@@ -3,7 +3,6 @@ package threads
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"math"
 	"slices"
 	"time"
@@ -29,9 +28,10 @@ const messagePageSize = 30
 
 // Background runs (BACKGROUND_RUN_TRIGGERS) and the helper trigger (BACKGROUND_HELPER_TRIGGER).
 const (
-	backgroundTrigger = "tickets"
-	helperTrigger     = "helper"
-	peerTrigger       = "bot_message"
+	backgroundTrigger     = "tickets"
+	helperTrigger         = "helper"
+	peerTrigger           = "bot_message"
+	runTurnCheckpointKind = "runtime_checkpoint"
 )
 
 var (
@@ -66,11 +66,9 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 		return err
 	})
 	if err != nil {
-		var failure *orpc.Error
-		if !errors.As(err, &failure) {
-			slog.Default().Error("threads.get failed", "error", err)
-		}
-		return nil, asFailure(err)
+		// The router logs a 5xx with its cause ("<procedure> failed"), so a raw database error
+		// here is not logged twice.
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -180,6 +178,13 @@ func (s snapshotReader) bot(actor db.Actor, botID string) (map[string]any, error
 		return nil, err
 	}
 	applyRunCosts(activeRuns, current, costs)
+	if current != nil && current.Status == "failed" {
+		resumable, err := s.hasTurnCheckpoint(current.ID)
+		if err != nil {
+			return nil, err
+		}
+		current.Resumable = resumable
+	}
 	run, err := optionalRun(current, withRoutine)
 	if err != nil {
 		return nil, err
@@ -289,6 +294,13 @@ func (s snapshotReader) group(actor db.Actor, groupID string) (map[string]any, e
 		return nil, err
 	}
 	applyRunCosts(activeRuns, current, costs)
+	if current != nil && current.Status == "failed" {
+		resumable, err := s.hasTurnCheckpoint(current.ID)
+		if err != nil {
+			return nil, err
+		}
+		current.Resumable = resumable
+	}
 	run, err := optionalRun(current, withRoutine)
 	if err != nil {
 		return nil, err
@@ -349,8 +361,18 @@ type runRow struct {
 	RoutineID, RoutineName                               *string
 	ModelProvider, ModelID, Error                        *string
 	CostUSD                                              *float64
+	Resumable                                            bool
 	StartedAt, CompletedAt                               *time.Time
 	CreatedAt, UpdatedAt                                 time.Time
+}
+
+func (s snapshotReader) hasTurnCheckpoint(runID string) (bool, error) {
+	var exists bool
+	err := s.tx.QueryRow(s.ctx,
+		`SELECT EXISTS(SELECT 1 FROM external_effects WHERE "runId" = $1 AND kind = $2 AND status = $2)`,
+		runID, runTurnCheckpointKind,
+	).Scan(&exists)
+	return exists, err
 }
 
 func collectRunIDs(runs []runRow, extra *runRow) []string {
@@ -408,6 +430,7 @@ func applyRunCosts(runs []runRow, extra *runRow, costs map[string]float64) {
 
 // runs reads runs matching where (which may use alias r and the routine as ro).
 func (s snapshotReader) runs(where string, args ...any) ([]runRow, error) {
+	// writeaudit:dynamic read: callers pass fixed WHERE tails; args are filters
 	rows, err := s.tx.Query(s.ctx, `SELECT r.id, r."userId", r."botId", r."threadId", r."taskId", r.status, r.trigger,
 		r."routineId", ro.name, r."modelProvider", r."modelId", r.error, r."startedAt", r."completedAt", r."createdAt", r."updatedAt"
 		FROM runs r LEFT JOIN routines ro ON ro.id = r."routineId" WHERE `+where, args...)
@@ -580,6 +603,9 @@ func runView(run runRow, withRoutine bool) (map[string]any, bool) {
 	// The same display clamp as live run.failed events, so a huge stored error cannot bypass it.
 	if run.Status == "failed" {
 		view["error"] = routines.RunFailureError(run.Status, run.Error)
+		if run.Resumable {
+			view["resumable"] = true
+		}
 	} else {
 		view["error"] = run.Error
 	}

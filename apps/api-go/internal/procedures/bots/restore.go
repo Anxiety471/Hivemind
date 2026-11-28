@@ -47,7 +47,7 @@ func Restore(ctx context.Context, database *db.DB, actor db.Actor, deployment sh
 				return shared.RestoreBotUnderComputerQuota(ctx, database, tx, limit, *bot.ComputerUserID, bot.ID, *bot.ComputerID, at)
 			}
 			tag, err := tx.Exec(ctx, `UPDATE bots SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2 AND "spaceId" = $3`,
-				at, bot.ID, actor.SpaceID)
+				append(db.Data(at), bot.ID, actor.SpaceID)...)
 			if err != nil {
 				return err
 			}

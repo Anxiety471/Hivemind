@@ -27,6 +27,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/gateway"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/push"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
@@ -206,6 +207,14 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		AuthURL:         deployment.AuthURL,
 		SignupAllowlist: deployment.SignupAllowlist,
 		OIDCBypass:      deployment.OIDCBypass,
+		CookieDomain:    deployment.CookieDomain,
+		// afterDeleteSession (apps/api/src/app.ts:616-624): a deleted session takes
+		// its push registrations and call devices with it.
+		AfterDeleteSession: func(ctx context.Context, userID, sessionID string) {
+			if err := push.EndSession(ctx, database, userID, sessionID); err != nil {
+				logger.Error("push token removal failed", "error", err, "userId", userID, "sessionId", sessionID)
+			}
+		},
 	})
 	ring, closeRing, err := contentRing(startup, database, deployment, logger)
 	if err != nil {
@@ -222,30 +231,20 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 	// startup failure otherwise, and a proxy-only table must start without it (Lane F).
 	var vault *shared.SecretVault
 	if wantsVault {
-		provider := strings.TrimSpace(os.Getenv("SECRET_STORE"))
-		if provider != "" && provider != "encrypted" {
-			closeRing()
-			database.Close()
-			return nil, nil, nil, nil, nil, fmt.Errorf(
-				"SECRET_STORE %q is not supported by the Go credential store: only \"encrypted\"", provider)
-		}
-		key, err := secretstore.ResolveEncryptionKey(os.Getenv)
+		builtVault, err := buildSecretVault(database, logger)
 		if err != nil {
 			closeRing()
 			database.Close()
 			return nil, nil, nil, nil, nil, err
 		}
-		store, err := secretstore.NewStore(key)
-		if err != nil {
-			closeRing()
-			database.Close()
-			return nil, nil, nil, nil, nil, err
-		}
-		writer := secretstore.NewWriter(store, secretstore.NewNotifier(
-			&secretstore.PGPublisher{DB: database, Logger: logger}))
-		vault = &shared.SecretVault{
-			Writer:      writer,
-			Persistence: secretstore.NewPersistence(database, writer),
+		vault = builtVault
+	}
+	organizerVault := vault
+	if organizerVault == nil {
+		if optionalVault, optErr := buildSecretVault(database, logger); optErr != nil {
+			logger.Debug("drive upload organizer vault unavailable", "error", optErr)
+		} else {
+			organizerVault = optionalVault
 		}
 	}
 	// One runner per process: the middleware publishes its own roster/Space signals through
@@ -260,6 +259,13 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		deployment.MaxUploadBytes,
 		logger,
 	)
+	driveSvc.SetOrganizer(drive.NewOrganizer(
+		driveSvc,
+		database,
+		blobStore,
+		newMainModelResolver(database, shared.Deployment{Vault: organizerVault}),
+		logger,
+	))
 	driveHTTP := drive.NewHTTPHandler(driveSvc, sessions, drive.HTTPConfig{
 		WebOrigin:      deployment.WebOrigin,
 		TrustedOrigins: deployment.TrustedOrigins,
@@ -323,9 +329,11 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 			DeploymentModelConfigured:             deployment.DefaultModelConfigured,
 			DeploymentModelHostCredentials:        deployment.DeploymentModelHostCredentials,
 			DeploymentModelHostCredentialsUnknown: deployment.DeploymentModelHostCredentialsUnknown,
-			DeploymentLabs:                        deploymentLabs(deployment.BoardLab),
+			DeploymentLabs:                        deploymentLabs(deployment.BoardLab, deployment.CodeModeLab, deployment.CodeFirstLab),
 			NavLinks:                              navLinks(deployment.MeEnv.NavLinks),
 			NavLinksUnknown:                       deployment.MeEnv.NavLinksUnknown,
+			DriveURL:                              deployment.MeEnv.DriveURL,
+			AppURL:                                driveAppURL(deployment.MeEnv.DriveURL, deployment.WebOrigin),
 			ComputerSettingsEnabled:               deployment.MeEnv.ComputerSettingsEnabled,
 			DesktopHostChoiceEnabled:              deployment.MeEnv.DesktopHostChoiceEnabled,
 			SandboxProvider:                       deployment.MeEnv.SandboxProvider,
@@ -357,11 +365,40 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		Waker:    queueSvc,
 		Logger:   logger,
 	}
-	return server, driveHTTP, detector, queueSvc, func() {
+	driveRoutes := http.NewServeMux()
+	driveRoutes.Handle("/api/v1/files", driveHTTP)
+	driveRoutes.Handle("/api/v1/files/", driveHTTP)
+	if deployment.MeEnv.DriveURL != "" {
+		driveRoutes.Handle(auth.DriveOpenPath, sessions.DriveOpen(deployment.MeEnv.DriveURL))
+	}
+	return server, driveRoutes, detector, queueSvc, func() {
+		driveSvc.Wait()
 		_ = queueSvc.Close()
 		realtime.Close()
 		closeRing()
 		database.Close()
+	}, nil
+}
+
+func buildSecretVault(database *db.DB, logger *slog.Logger) (*shared.SecretVault, error) {
+	provider := strings.TrimSpace(os.Getenv("SECRET_STORE"))
+	if provider != "" && provider != "encrypted" {
+		return nil, fmt.Errorf(
+			"SECRET_STORE %q is not supported by the Go credential store: only \"encrypted\"", provider)
+	}
+	key, err := secretstore.ResolveEncryptionKey(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	store, err := secretstore.NewStore(key)
+	if err != nil {
+		return nil, err
+	}
+	writer := secretstore.NewWriter(store, secretstore.NewNotifier(
+		&secretstore.PGPublisher{DB: database, Logger: logger}))
+	return &shared.SecretVault{
+		Writer:      writer,
+		Persistence: secretstore.NewPersistence(database, writer),
 	}, nil
 }
 
@@ -398,12 +435,19 @@ func deploymentModel(provider, model string, configured bool) *shared.ModelSelec
 }
 
 // deploymentLabs is deploymentLabsFromEnv: LAB_FEATURES this deployment turns on for every
-// account. Only "board" exists (packages/contracts/src/labs.ts:4).
-func deploymentLabs(board bool) []string {
+// account, in the order of packages/contracts/src/labs.ts.
+func deploymentLabs(board, code, codeFirst bool) []string {
+	labs := []string{}
 	if board {
-		return []string{"board"}
+		labs = append(labs, "board")
 	}
-	return []string{}
+	if code {
+		labs = append(labs, "code")
+	}
+	if codeFirst {
+		labs = append(labs, "codeFirst")
+	}
+	return labs
 }
 
 // navLinks converts the parsed RAKAZO_NAV_LINKS to the wire shape `me` returns.
@@ -415,4 +459,12 @@ func navLinks(links []config.NavLink) []shared.NavLink {
 		}
 	}
 	return converted
+}
+
+// driveAppURL is the web origin the Drive app links back to; it is sent only where a Drive app runs.
+func driveAppURL(driveURL, webOrigin string) string {
+	if driveURL == "" {
+		return ""
+	}
+	return strings.TrimRight(webOrigin, "/")
 }

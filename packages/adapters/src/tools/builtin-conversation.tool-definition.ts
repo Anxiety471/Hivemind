@@ -93,7 +93,7 @@ export const conversationTools: ConnectorTool[] = [
   {
     name: "ask_user",
     description:
-      "Ask a short choice question and wait. Give 3 options with recommended set to one (UI adds Other); put draft context in `detail`.",
+      "Ask the user and wait. One question: `options` (2-4) + `recommended`; put draft context in `detail`. Several independent decisions (a Still open digest): `items` instead, never with options.",
     inputSchema: {
       type: "object",
       properties: {
@@ -111,8 +111,32 @@ export const conversationTools: ConnectorTool[] = [
           maxLength: 80,
           description: "Recommended option from options.",
         },
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          description:
+            "Multiple independent items for batch triage (e.g. a Still open digest). Include options (2-4) + recommended on items needing the user's decision; omit options for FYI rows.",
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string", minLength: 1, maxLength: 200 },
+              detail: { type: "string", maxLength: 600 },
+              ticketRef: { type: "string", maxLength: 32 },
+              options: {
+                type: "array",
+                items: { type: "string", minLength: 1, maxLength: 80 },
+                minItems: 2,
+                maxItems: 4,
+                uniqueItems: true,
+              },
+              recommended: { type: "string", maxLength: 80 },
+            },
+            required: ["question"],
+          },
+        },
       },
-      required: ["question", "options"],
+      required: ["question"],
     },
   },
   {
@@ -203,7 +227,7 @@ export const conversationTools: ConnectorTool[] = [
         },
         path: {
           type: "string",
-          description: "Output PNG path in this bot's home. Default charts/plot-<n>.png.",
+          description: "Output PNG path in the workspace. Default charts/plot-<n>.png.",
         },
         attach: {
           type: "boolean",
@@ -271,7 +295,7 @@ export const conversationTools: ConnectorTool[] = [
   },
   {
     name: "remember",
-    description: `Save one short new fact to your memory, one call per fact. To change or drop a fact, pass old_text from its entry with new or empty content. Holds ${BOT_MEMORY_MAX_BYTES / 1024} KB.`,
+    description: `Save one short, outcome-focused fact to your memory, one call per fact. Prefix time-sensitive status with [YYYY-MM-DD]. Never save raw logs or temporary chatter. To change or drop a fact, pass old_text from its entry with new or empty content. Holds ${BOT_MEMORY_MAX_BYTES / 1024} KB.`,
     inputSchema: {
       type: "object",
       properties: {

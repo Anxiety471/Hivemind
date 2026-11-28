@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -22,8 +23,10 @@ type NavLink struct {
 // meEnv is the deployment configuration `me` answers from beyond the model defaults:
 // what env.ts (apps/api/src/env.ts) reads for the same fields on the TypeScript side.
 type meEnv struct {
-	NavLinks                 []NavLink
-	NavLinksUnknown          bool
+	NavLinks        []NavLink
+	NavLinksUnknown bool
+	// DriveURL is env.driveUrl: the origin of the Drive app, from DRIVE_URL.
+	DriveURL                 string
 	ComputerSettingsEnabled  bool
 	DesktopHostChoiceEnabled bool
 	// SandboxProvider is resolveSandboxProvider (packages/adapters/src/computers/sandbox/
@@ -69,6 +72,7 @@ func loadMeEnv(lookup func(string) (string, bool)) meEnv {
 		env.AgentRuntime = "pi"
 	}
 	env.NavLinks, env.NavLinksUnknown = parseNavLinks(lookupValue(lookup, "RAKAZO_NAV_LINKS"))
+	env.DriveURL = driveURL(lookupValue(lookup, "DRIVE_URL"))
 	env.MaxAttachmentsPerMessage, env.AttachmentsUnknown = attachmentCount(lookupValue(lookup, "MAX_ATTACHMENTS_PER_MESSAGE"))
 	return env
 }
@@ -305,3 +309,25 @@ func simpleNavPath(path string) bool {
 // errMeEnv is unused by Load; kept here so a caller that wants to refuse startup can
 // tell an unknown menu-link configuration apart.
 var errMeEnv = errors.New("unsupported navigation link configuration")
+
+// driveURL is parseExtraAuthOrigins' acceptance for DRIVE_URL: a bare https origin, or http on a
+// private or loopback host. Anything else is ignored, as the TypeScript side does.
+func driveURL(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return ""
+	}
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		host := parsed.Hostname()
+		addr, addrErr := netip.ParseAddr(host)
+		if host != "localhost" && (addrErr != nil || !(addr.IsPrivate() || addr.IsLoopback())) {
+			return ""
+		}
+	default:
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}

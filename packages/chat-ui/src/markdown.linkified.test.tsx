@@ -41,3 +41,21 @@ describe("web user message links", () => {
     expect(plain).not.toContain("page:pg_1");
   });
 });
+
+describe("web user message ticket chips", () => {
+  it("draws a ticket as a button that opens it, or as its text without a handler", () => {
+    const context = { ticketPrefix: "TASK" };
+    const chip = renderToStaticMarkup(
+      <LinkifiedText onOpenTicket={() => {}} referenceContext={context}>
+        {"see TASK-397"}
+      </LinkifiedText>,
+    );
+    expect(chip).toMatch(/<button [^>]*class="rk-chat-ticket-chip"[^>]*>TASK-397<\/button>/);
+
+    const plain = renderToStaticMarkup(
+      <LinkifiedText referenceContext={context}>{"see TASK-397"}</LinkifiedText>,
+    );
+    expect(plain).toContain(">TASK-397</span>");
+    expect(plain).not.toContain("<button");
+  });
+});

@@ -110,6 +110,8 @@ export interface StreamedPortableFile {
 export interface WorkspaceExportLimits {
   maxBytes: number;
   maxFiles: number;
+  /** The largest single file a save keeps; larger ones are left out. Defaults to 100 MiB. */
+  maxFileBytes?: number;
 }
 
 export interface ComputerRef {
@@ -481,6 +483,32 @@ export interface SemanticMemoryCapabilities {
   purgesByThread?: true;
 }
 
+export interface PreTurnMemorySearchInput {
+  readonly semanticQuery: string;
+  readonly docQuery: string;
+  /** Aborts the searches' provider calls when the caller gives up (for example, a deadline). */
+  readonly signal?: AbortSignal;
+}
+
+export interface PreTurnRecallHit {
+  readonly memory: string;
+  readonly id?: string;
+  readonly provenance?: string;
+  readonly entity?: string;
+}
+
+export interface PreTurnDocHit {
+  readonly scope?: string;
+  readonly path: string;
+  readonly snippet?: string;
+}
+
+/** A search that was not run, or failed, has no hits list. */
+export interface PreTurnMemorySearchResult {
+  readonly recallHits?: readonly PreTurnRecallHit[];
+  readonly docHits?: readonly PreTurnDocHit[];
+}
+
 export interface SemanticMemoryResult {
   memory: string;
   score: number;
@@ -681,6 +709,17 @@ export interface AgentRunRequest {
    */
   promptSpeaker?: string;
   instructions: string;
+  /**
+   * Tools the model does not have listed but reaches from a code_mode script, as
+   * `codemode.<name>`. Earlier direct calls to them replay with that pointer, not as a tool the
+   * model has lost.
+   */
+  codeModeTools?: readonly string[];
+  /**
+   * Searches this run's memory before its first model call, using the memory search tools it
+   * offers. Absent when it offers neither. Rejects when every search it ran failed.
+   */
+  preTurnMemorySearch?: (input: PreTurnMemorySearchInput) => Promise<PreTurnMemorySearchResult>;
   history: Array<{
     id?: string;
     createdAt?: string;
@@ -729,6 +768,11 @@ export interface AgentRunRequest {
   /** Cheap per-call capture; serialize only when persisting that call’s human pause. */
   onCheckpoint?: (capture: () => string, executionId: string) => Promise<void>;
   /**
+   * Called before a runtime/model failure aborts the turn when resumable progress exists
+   * (completed tool steps or streamed text), so Continue can resume without restarting.
+   */
+  onFailureCheckpoint?: (checkpoint: string) => Promise<void>;
+  /**
    * Aborts when the process running the turn begins to stop. A runtime that supports it ends
    * the turn at its next step boundary with a `yielded` event instead of starting another model
    * call; one that does not keeps going until the turn ends or `signal` aborts.
@@ -742,8 +786,15 @@ export interface AgentRunRequest {
    * When set, skip synthetic empty-turn fallbacks (including after tools).
    */
   allowSilentEmpty?: boolean;
+  /** Unaddressed group turn: the model may reply or explicitly end with NO_RESPONSE. */
+  optionalReply?: boolean;
   /** Contextual fallback when a non-silent run produces no written response. */
   emptyResponseText?: string;
+  /**
+   * Judges whether a final reply leaves a decision for the user in prose. When it says so, the
+   * runtime asks the run to call ask_user once instead of ending. A failing judge lets it through.
+   */
+  finalReplyJudge?: (reply: string) => Promise<boolean>;
   executeTool?: (
     name: string,
     args: Record<string, unknown>,
@@ -857,7 +908,15 @@ export type AgentRuntimeEvent =
       executionId?: string;
       text: string;
       detail?: string;
-      actions?: Array<{ id: string; label: string }>;
+      actions?: Array<{ id: string; label: string; recommended?: boolean; description?: string }>;
+      /** Batch triage: independent items, each with its own choices (FYI rows omit `actions`). */
+      items?: Array<{
+        id: string;
+        question: string;
+        detail?: string;
+        ticketRef?: string;
+        actions?: Array<{ id: string; label: string; description?: string; recommended?: boolean }>;
+      }>;
     }
   | { type: "takeover"; reason: string; executionId?: string }
   | ({
@@ -887,7 +946,7 @@ export type AgentRuntimeEvent =
       progress?: string;
       result?: string;
     }
-  | { type: "done"; text?: string };
+  | { type: "done"; text?: string; emptyResponse?: boolean; emptyResponseReminders?: number };
 
 export interface AgentRuntimeCapabilities {
   streaming: boolean;

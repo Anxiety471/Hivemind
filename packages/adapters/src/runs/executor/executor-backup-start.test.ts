@@ -139,6 +139,7 @@ async function runTurn({
     {
       $transaction: vi.fn(async (work: (client: typeof tx) => Promise<unknown>) => work(tx)),
       user: { findUnique: vi.fn(async () => null) },
+      space: { findUnique: vi.fn(async () => null) },
       spaceMember: { findUnique: async () => ({ id: "member-1" }) },
       run: {
         findUnique: vi.fn(async () => run),
@@ -171,6 +172,7 @@ async function runTurn({
       },
       attempt: {
         create: vi.fn(async () => ({ id: "attempt-1" })),
+        findMany: vi.fn(async () => []),
         update: vi.fn(),
         updateMany: vi.fn(async () => ({ count: 1 })),
       },

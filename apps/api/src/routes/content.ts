@@ -37,6 +37,7 @@ import {
   restoreDriveFolder,
   trashDriveFile,
   trashDriveFolder,
+  updateDriveFile,
 } from "../content/files/index.js";
 import { querySpaceSearch } from "../content/search.js";
 import { listSpaceRuns } from "../threads/runs.js";
@@ -162,6 +163,9 @@ export function contentRoutes(ctx: RouterContext) {
       }),
       rename: authed.files.rename.handler(async ({ context, input }) =>
         renameDriveFile(deps, context.actor, input),
+      ),
+      update: authed.files.update.handler(async ({ context, input }) =>
+        updateDriveFile(deps, context.actor, input),
       ),
       move: authed.files.move.handler(async ({ context, input }) =>
         moveDriveFile(deps, context.actor, input),
@@ -555,6 +559,10 @@ export function contentRoutes(ctx: RouterContext) {
             where: { botId: input.botId, spaceId: context.actor.spaceId },
           }),
           (async () => {
+            // A Team Computer's workspace is shared by the Space's bots, so it holds no file
+            // that belongs to this bot; exporting the Space's files here would give another
+            // bot's work the same portable manifest. Dedicated computers stay private.
+            if (computerMode === "team") return [] as ExportManifest["files"];
             const exported: ExportManifest["files"] = [];
             const directory = resolveBotWorkspacePath(computerMode, bot.id, "");
             // Root dotfiles contain computer state rather than portable bot files.

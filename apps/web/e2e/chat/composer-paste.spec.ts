@@ -42,11 +42,13 @@ test("large pasted text can stay inline or use the normal file upload", async ({
   await expect(page.getByRole("button", { name: "Remove pasted-text.txt" })).toBeVisible();
   await captureScreenshot(page, testInfo, "02-pasted-text-attachment");
 
-  const uploaded = page.waitForRequest("**/rpc/artifacts/create");
+  // Pasted text goes up the same route as any other attachment: a multipart upload. The body is
+  // a stream here, so assert the request shape rather than its bytes.
+  const uploaded = page.waitForRequest("**/api/v1/files");
   await composer.press("Enter");
-  const upload = (await uploaded).postDataJSON().json;
-  expect(upload.name).toBe("pasted-text.txt");
-  expect(Buffer.from(upload.contentBase64, "base64").toString()).toBe(log);
+  const request = await uploaded;
+  expect(request.method()).toBe("POST");
+  expect(request.headers()["content-type"]).toContain("multipart/form-data");
   await expect(page.getByRole("button", { name: "Remove pasted-text.txt" })).toHaveCount(0);
 
   await paste(log);

@@ -12,12 +12,16 @@ export type LiveMessageUpdate =
       type: "tool";
       name: string;
       detail?: string;
+      skills?: string[];
+      runSkills?: string[];
     } & LiveStepTiming)
   | {
       type: "tool_completed";
       name: string;
       durationMs: number;
       outcome?: string;
+      detail?: string;
+      skills?: string[];
     }
   | { type: "usage"; costUsd: number }
   | {
@@ -27,8 +31,28 @@ export type LiveMessageUpdate =
       costUsd?: number;
       modelId?: string;
       modelProvider?: string;
+      skills?: string[];
     }
   | { type: "thinking"; segment: number; durationMs: number; lines: string[] };
+
+/** Trims and deduplicates skill names case-insensitively while preserving first-seen casing. */
+export function mergeSkillNames(...lists: readonly (readonly string[] | undefined)[]): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    if (!list) continue;
+    for (const raw of list) {
+      if (typeof raw !== "string") continue;
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(trimmed);
+    }
+  }
+  return merged;
+}
 
 export type ToolStepOutcome = "succeeded" | "failed" | "stopped";
 export type ToolStep = Extract<MessageBlock, { kind: "steps" }>["steps"][number];
@@ -102,6 +126,7 @@ export function reduceLiveMessageBlocks(
     blocks = current.filter((block) => block.kind !== "text" && block.kind !== "progress");
     const waitingNames = waiting?.kind === "progress" ? (waiting.pendingToolNames ?? []) : [];
     const waitingDetails = waiting?.kind === "progress" ? (waiting.pendingToolDetails ?? []) : [];
+    const waitingSkills = waiting?.kind === "progress" ? (waiting.pendingToolSkills ?? []) : [];
     const waitingTimings = waiting?.kind === "progress" ? (waiting.pendingToolTimings ?? []) : [];
     for (let index = 0; index < waitingNames.length; index += 1) {
       blocks = appendToolCallSegment(
@@ -109,6 +134,7 @@ export function reduceLiveMessageBlocks(
         waitingNames[index]!,
         waitingDetails[index] ?? undefined,
         waitingTimings[index] ?? undefined,
+        waitingSkills[index] ?? undefined,
       );
     }
   }
@@ -128,6 +154,10 @@ export function reduceLiveMessageBlocks(
     tail?.kind === "progress"
       ? priorPendingNames.map((_, index) => tail.pendingToolDetails?.[index] ?? null)
       : [];
+  const priorPendingSkills =
+    tail?.kind === "progress"
+      ? priorPendingNames.map((_, index) => tail.pendingToolSkills?.[index] ?? null)
+      : [];
   const priorPendingTimings =
     tail?.kind === "progress"
       ? priorPendingNames.map((_, index) => tail.pendingToolTimings?.[index] ?? null)
@@ -140,10 +170,17 @@ export function reduceLiveMessageBlocks(
           ...(update.forkedFromStep !== undefined ? { forkedFromStep: update.forkedFromStep } : {}),
         }
       : null;
+  const normalizedUpdateSkills = update.type === "tool" ? mergeSkillNames(update.skills) : [];
   const pendingToolNames = [...priorPendingNames, ...(update.type === "tool" ? [update.name] : [])];
   const pendingToolDetails = [
     ...priorPendingDetails,
     ...(update.type === "tool" ? [update.detail?.trim() || null] : []),
+  ];
+  const pendingToolSkills = [
+    ...priorPendingSkills,
+    ...(update.type === "tool"
+      ? [normalizedUpdateSkills.length > 0 ? normalizedUpdateSkills : null]
+      : []),
   ];
   const pendingToolTimings = [
     ...priorPendingTimings,
@@ -156,12 +193,15 @@ export function reduceLiveMessageBlocks(
 
   if (pendingToolNames.length > 0 && endsSentence(tailText)) {
     let next = activity ? [...segments] : appendTextSegment(segments, tailText);
+    const runSkills = update.type === "tool" ? update.runSkills : undefined;
     for (let index = 0; index < pendingToolNames.length; index += 1) {
       next = appendToolCallSegment(
         next,
         pendingToolNames[index]!,
         pendingToolDetails[index] ?? undefined,
         pendingToolTimings[index] ?? undefined,
+        pendingToolSkills[index] ?? undefined,
+        index === 0 ? runSkills : undefined,
       );
     }
     return next;
@@ -175,6 +215,7 @@ export function reduceLiveMessageBlocks(
       ...(activity ? { activity: true as const } : {}),
       ...(pendingToolNames.length > 0 ? { pendingToolNames } : {}),
       ...(pendingToolDetails.some(Boolean) ? { pendingToolDetails } : {}),
+      ...(pendingToolSkills.some(Boolean) ? { pendingToolSkills } : {}),
       ...(pendingToolTimings.some(Boolean) ? { pendingToolTimings } : {}),
     },
   ];
@@ -220,9 +261,12 @@ export function withToolStepOutcomes(
     outcome: ToolStepOutcome | undefined;
     tool?: string;
     call?: ToolStepCall;
+    detail?: string;
+    skills?: readonly string[];
     durationMs?: number;
     startedAtMs?: number;
   }[],
+  runSkills?: readonly string[],
 ): MessageBlock[] {
   let next = 0;
   const annotated: MessageBlock[] = [];
@@ -282,8 +326,12 @@ export function withToolStepOutcomes(
             ? "stopped"
             : "done"
         : undefined;
+      const resolvedDetail = own.findLast((call) => call.detail?.trim())?.detail?.trim();
+      const resolvedSkills = mergeSkillNames(step.skills, ...own.map((call) => call.skills));
       steps.push({
         ...rest,
+        ...(resolvedDetail ? { detail: resolvedDetail } : {}),
+        ...(resolvedSkills.length > 0 ? { skills: resolvedSkills } : {}),
         ...(startedAtMs !== undefined ? { startedAtMs } : {}),
         ...(summedDuration !== undefined
           ? { durationMs: summedDuration }
@@ -295,7 +343,16 @@ export function withToolStepOutcomes(
         ...(Object.keys(outcomes).length > 0 ? { outcomes } : {}),
       });
     }
-    annotated.push({ ...block, steps });
+    const blockSkills = mergeSkillNames(
+      block.skills,
+      runSkills,
+      ...steps.map((step) => step.skills),
+    );
+    annotated.push({
+      ...block,
+      steps,
+      ...(blockSkills.length > 0 ? { skills: blockSkills } : {}),
+    });
   }
   return annotated;
 }
@@ -344,9 +401,11 @@ export function appendToolStep(
   toolName: string,
   detail?: string,
   timing?: LiveStepTiming,
+  skills?: readonly string[],
 ): ToolStep[] {
   const label = humanizeToolName(toolName);
   const normalizedDetail = detail?.trim() || undefined;
+  const normalizedSkills = mergeSkillNames(skills);
   const timed = timing !== undefined && hasStepTiming(timing);
   const prepared = timed
     ? steps.map((step) =>
@@ -374,11 +433,13 @@ export function appendToolStep(
         last.status !== "stopped" &&
         last.status !== "failed"))
   ) {
+    const mergedSkills = mergeSkillNames(last.skills, normalizedSkills);
     return [
       ...prepared.slice(0, -1),
       {
         ...last,
         count: last.count + 1,
+        ...(mergedSkills.length > 0 ? { skills: mergedSkills } : {}),
         ...(timed && timing.startedAtMs !== undefined ? { status: "running" as const } : {}),
       },
     ];
@@ -389,6 +450,7 @@ export function appendToolStep(
       label,
       count: 1,
       ...(normalizedDetail ? { detail: normalizedDetail } : {}),
+      ...(normalizedSkills.length > 0 ? { skills: normalizedSkills } : {}),
       ...(timed && timing.startedAtMs !== undefined
         ? { startedAtMs: timing.startedAtMs, status: "running" as const }
         : {}),
@@ -445,10 +507,17 @@ export function appendToolCallSegment(
   toolName: string,
   detail?: string,
   timing?: LiveStepTiming,
+  skills?: readonly string[],
+  runSkills?: readonly string[],
 ): MessageBlock[] {
   const last = segments.at(-1);
   const priorSteps = last?.kind === "steps" ? last.steps : [];
-  const steps = appendToolStep(priorSteps, toolName, detail, timing);
+  const steps = appendToolStep(priorSteps, toolName, detail, timing, skills);
+  const blockSkills = mergeSkillNames(
+    last?.kind === "steps" ? last.skills : undefined,
+    runSkills,
+    skills,
+  );
   if (last?.kind === "steps") {
     const nextAttempts =
       timing?.attempt !== undefined ? Math.max(last.attempts ?? 1, timing.attempt) : last.attempts;
@@ -458,6 +527,7 @@ export function appendToolCallSegment(
         ...last,
         steps,
         ...(nextAttempts !== undefined ? { attempts: nextAttempts } : {}),
+        ...(blockSkills.length > 0 ? { skills: blockSkills } : {}),
       },
     ];
   }
@@ -467,6 +537,7 @@ export function appendToolCallSegment(
       kind: "steps",
       steps,
       ...(timing?.attempt !== undefined && timing.attempt > 1 ? { attempts: timing.attempt } : {}),
+      ...(blockSkills.length > 0 ? { skills: blockSkills } : {}),
     },
   ];
 }
@@ -493,6 +564,14 @@ export function validPosInt(value: unknown): number | undefined {
 export function validNonNegNumber(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
   return value;
+}
+
+export function validStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = mergeSkillNames(
+    value.filter((item): item is string => typeof item === "string"),
+  );
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function hasRunningStep(blocks: readonly MessageBlock[]): boolean {
@@ -534,11 +613,26 @@ function completeLiveToolStep(
       : update.outcome === "stopped" || update.outcome === "cancelled"
         ? "stopped"
         : "done";
-  const steps = block.steps.map((step, index) =>
-    index === stepIndex ? { ...step, durationMs, status } : step,
-  );
+  const completedDetail = update.detail?.trim() || undefined;
+  const completedSkills = mergeSkillNames(update.skills);
+  const steps = block.steps.map((step, index) => {
+    if (index !== stepIndex) return step;
+    const mergedSkills = mergeSkillNames(step.skills, completedSkills);
+    return {
+      ...step,
+      durationMs,
+      status,
+      ...(completedDetail ? { detail: completedDetail } : {}),
+      ...(mergedSkills.length > 0 ? { skills: mergedSkills } : {}),
+    };
+  });
+  const blockSkills = mergeSkillNames(block.skills, completedSkills);
   const next = [...current];
-  next[blockIndex] = { ...block, steps };
+  next[blockIndex] = {
+    ...block,
+    steps,
+    ...(blockSkills.length > 0 ? { skills: blockSkills } : {}),
+  };
   return next;
 }
 
@@ -557,6 +651,12 @@ function applyLiveCheckpoint(
   update: Extract<LiveMessageUpdate, { type: "checkpoint" }>,
 ): MessageBlock[] {
   const existingIndex = current.findLastIndex((block) => block.kind === "steps");
+  const existing = existingIndex !== -1 ? current[existingIndex] : undefined;
+  const mergedSkills = mergeSkillNames(
+    existing?.kind === "steps" ? existing.skills : undefined,
+    update.skills,
+    ...update.steps.map((step) => step.skills),
+  );
   const checkpointBlock: Extract<MessageBlock, { kind: "steps" }> = {
     kind: "steps",
     steps: update.steps,
@@ -564,14 +664,12 @@ function applyLiveCheckpoint(
     ...(update.costUsd !== undefined ? { costUsd: update.costUsd } : {}),
     ...(update.modelId ? { modelId: update.modelId } : {}),
     ...(update.modelProvider ? { modelProvider: update.modelProvider } : {}),
+    ...(mergedSkills.length > 0 ? { skills: mergedSkills } : {}),
   };
-  if (existingIndex !== -1) {
-    const existing = current[existingIndex];
-    if (existing?.kind === "steps") {
-      const next = [...current];
-      next[existingIndex] = { ...existing, ...checkpointBlock };
-      return next;
-    }
+  if (existingIndex !== -1 && existing?.kind === "steps") {
+    const next = [...current];
+    next[existingIndex] = { ...existing, ...checkpointBlock };
+    return next;
   }
   const tail = current.at(-1);
   if (tail?.kind === "progress") {

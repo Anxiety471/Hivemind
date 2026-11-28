@@ -1,5 +1,6 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { FLEET_TOOL_NAMES } from "@rakazo/contracts";
+import { commandTools } from "./builtin-commands.tool-definition.js";
 import { computerTools } from "./builtin-computer.tool-definition.js";
 import { conversationTools } from "./builtin-conversation.tool-definition.js";
 import { driveTools } from "./builtin-drive.tool-definition.js";
@@ -7,6 +8,8 @@ import { fleetTools } from "./builtin-fleet.tool-definition.js";
 import { memoryTools } from "./builtin-memory.tool-definition.js";
 import { serviceTools } from "./builtin-services.tool-definition.js";
 import { workTools } from "./builtin-work.tool-definition.js";
+import { codeModeToolDefinition } from "./code-mode.tool-definition.js";
+import { skillModeToolDefinition } from "./skill-mode.tool-definition.js";
 
 export const DELEGATION_TOOL_NAMES = new Set<string>([
   "run_subagent",
@@ -19,11 +22,15 @@ export const DELEGATION_TOOL_NAMES = new Set<string>([
 
 export const builtinAgentTools: ConnectorTool[] = [
   ...computerTools,
+  // Replaced per run with the index of the tools a script can call when the lab is on.
+  codeModeToolDefinition(""),
+  skillModeToolDefinition,
   ...driveTools,
   ...conversationTools,
   ...serviceTools,
   ...memoryTools,
   ...workTools,
+  ...commandTools,
   ...fleetTools,
 ];
 

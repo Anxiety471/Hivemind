@@ -1892,7 +1892,7 @@ describe("Pi connector tool dispatch", () => {
     expect(events).toEqual([{ type: "done" }]);
   });
 
-  it("still asks the user to retry when a normal empty turn produces nothing", async () => {
+  it("ends a normal empty turn as an empty response instead of placeholder text", async () => {
     fakeAgentState.mode = "empty";
     const runtime = new PiAgentRuntime();
     const events: unknown[] = [];
@@ -1920,14 +1920,11 @@ describe("Pi connector tool dispatch", () => {
       events.push(event);
     }
 
-    expect(events).toContainEqual({
+    expect(events).not.toContainEqual({
       type: "text",
       text: "No response. Try again.",
     });
-    expect(events.at(-1)).toEqual({
-      type: "done",
-      text: "No response. Try again.",
-    });
+    expect(events.at(-1)).toEqual({ type: "done", emptyResponse: true });
   });
 
   it("surfaces a contextual peer fallback when that run produces nothing", async () => {
@@ -1998,10 +1995,11 @@ describe("Pi connector tool dispatch", () => {
       events.push(event);
     }
 
-    expect(events.at(-1)).toEqual({
-      type: "done",
+    expect(events).not.toContainEqual({
+      type: "text",
       text: "No response. Try again.",
     });
+    expect(events.at(-1)).toEqual({ type: "done", emptyResponse: true });
   });
 
   it("allows more than 80 tool calls by default when no fuse is configured", async () => {
@@ -2536,50 +2534,55 @@ describe("Pi connector tool dispatch", () => {
     expect(result.content[2]).toEqual({ type: "text", text: "bbbbb…" });
   });
 
-  it("delivers a skill read larger than the tool result bound verbatim", async () => {
-    const skill = {
-      name: "large-skill",
-      description: "Large skill",
-      source: "user",
-      readOnly: false,
-      content: `---\nname: large-skill\n---\n${"1. Step kept for skill_update.\n".repeat(600)}`,
-    };
-    fakeAgentState.invoke = { name: "skill_read", args: { name: skill.name } };
-    const runtime = new PiAgentRuntime();
+  it.each(["skill_mode", "skill_read"])(
+    "delivers a %s result larger than the tool result bound verbatim",
+    async (toolName) => {
+      const skill = {
+        name: "large-skill",
+        description: "Large skill",
+        source: "user",
+        readOnly: false,
+        content: `---\nname: large-skill\n---\n${"1. Step kept for skill_update.\n".repeat(600)}`,
+      };
+      fakeAgentState.invoke = { name: toolName, args: { name: skill.name } };
+      const runtime = new PiAgentRuntime();
 
-    for await (const _event of runtime.run(
-      {
-        botId: "b",
-        threadId: "t",
-        runId: "large-skill",
-        prompt: "edit the skill",
-        instructions: "Read the skill before updating it.",
-        history: [],
-        tools: [
-          {
-            name: "skill_read",
-            description: "Load a skill by exact name",
-            inputSchema: { type: "object", properties: { name: { type: "string" } } },
-          },
-        ],
-        model: { provider: "test", id: "dispatch-test-model" },
-        executeTool: vi.fn(async () => skill),
-      },
-      {
-        operationId: "large-skill",
-        traceId: "large-skill",
-        spaceId: "w",
-        userId: "u",
-        signal: new AbortController().signal,
-      },
-    )) {
-      // Exhaust so the fake agent executes the tool.
-    }
+      for await (const _event of runtime.run(
+        {
+          botId: "b",
+          threadId: "t",
+          runId: `large-skill-${toolName}`,
+          prompt: "edit the skill",
+          instructions: "Read the skill before updating it.",
+          history: [],
+          tools: [
+            {
+              name: toolName,
+              description: "Load a skill by exact name",
+              inputSchema: { type: "object", properties: { name: { type: "string" } } },
+            },
+          ],
+          model: { provider: "test", id: "dispatch-test-model" },
+          executeTool: vi.fn(async () => skill),
+        },
+        {
+          operationId: `large-skill-${toolName}`,
+          traceId: `large-skill-${toolName}`,
+          spaceId: "w",
+          userId: "u",
+          signal: new AbortController().signal,
+        },
+      )) {
+        // Exhaust so the fake agent executes the tool.
+      }
 
-    const result = fakeAgentState.toolResult as { content: Array<{ type: string; text: string }> };
-    expect(result.content[0]!.text.length).toBeGreaterThan(TOOL_RESULT_TEXT_LIMIT);
-    expect(JSON.parse(result.content[0]!.text)).toEqual(skill);
-  });
+      const result = fakeAgentState.toolResult as {
+        content: Array<{ type: string; text: string }>;
+      };
+      expect(result.content[0]!.text.length).toBeGreaterThan(TOOL_RESULT_TEXT_LIMIT);
+      expect(JSON.parse(result.content[0]!.text)).toEqual(skill);
+    },
+  );
 
   it("delivers full child instructions and their version past the tool result bound", async () => {
     const listing = {

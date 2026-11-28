@@ -1,5 +1,6 @@
 import type { ComposerMentionBinding } from "@rakazo/core";
 import { createKeyedListeners, validateComposerMentionBindings } from "@rakazo/core";
+import { hasInFlightWebSends, hasUnsentWebSends } from "./send-outbox";
 
 export const COMPOSER_DRAFT_STORAGE_PREFIX = "rakazo.composerDraft.";
 const COMPOSER_BINDINGS_STORAGE_PREFIX = "rakazo.composerBindings.";
@@ -129,14 +130,17 @@ export function setComposerUnsavedWork(work: { sending: boolean; attachments: bo
   attachmentWork = work.attachments;
 }
 
-/** A send waiting for its answer, or attachments that only exist in memory. */
+/**
+ * A send waiting for its answer, attachments that only exist in memory, or a queued message the
+ * outbox still has to deliver.
+ */
 export function composerHoldsUnsavedWork(): boolean {
-  return composerHoldsWorkInFlight() || attachmentWork;
+  return composerHoldsWorkInFlight() || attachmentWork || hasUnsentWebSends();
 }
 
 /** A send waiting for its answer. Unlike picked attachments, it finishes on its own. */
 export function composerHoldsWorkInFlight(): boolean {
-  return pendingSubmissions.size > 0 || sendingWork;
+  return pendingSubmissions.size > 0 || sendingWork || hasInFlightWebSends();
 }
 
 /** Unsaved composer work, or saved text in any composer that has not been sent. */

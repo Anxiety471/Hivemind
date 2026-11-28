@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { summarizeToolCallDetail, TOOL_STEP_DETAIL_MAX_CHARS } from "./tool-step-detail.js";
+import {
+  summarizeToolCallDetail,
+  summarizeToolCallSkills,
+  summarizeToolCompletionDetail,
+  summarizeToolCompletionSkills,
+  TOOL_STEP_DETAIL_MAX_CHARS,
+} from "./tool-step-detail.js";
 
 describe("summarizeToolCallDetail", () => {
   it("extracts clean targets for web, file, shell, and browser tools", () => {
@@ -74,5 +80,114 @@ describe("summarizeToolCallDetail", () => {
     expect(detail).toBeDefined();
     expect(detail!.length).toBeLessThanOrEqual(TOOL_STEP_DETAIL_MAX_CHARS);
     expect(detail!.endsWith("…")).toBe(true);
+  });
+
+  it("summarizes code_mode tool/command calls and command_save/command_delete names", () => {
+    expect(
+      summarizeToolCallDetail("code_mode", {
+        code: 'await codemode.cmd.weekly_report({ week: "w1" });',
+      }),
+    ).toBe("cmd.weekly_report");
+    expect(
+      summarizeToolCallDetail("code_mode", {
+        code: `
+          await codemode.board_tickets({});
+          await codemode.list_fleet({});
+          await codemode.list_history({});
+          await codemode.drive_list({});
+          await codemode.web_search({ query: "x" });
+        `,
+      }),
+    ).toBe("board_tickets, list_fleet, list_history, drive_list +1 more");
+    expect(summarizeToolCallDetail("code_mode", { code: "console.log(1 + 2);" })).toBeUndefined();
+    expect(summarizeToolCallDetail("command_save", { name: "weekly_report" })).toBe(
+      "cmd.weekly_report",
+    );
+    expect(summarizeToolCallDetail("command_delete", { name: "weekly_report" })).toBe(
+      "cmd.weekly_report",
+    );
+  });
+
+  it("extracts runtime calls detail from code_mode completions in both Pi and direct shapes", () => {
+    expect(
+      summarizeToolCompletionDetail({
+        name: "code_mode",
+        result: {
+          kind: "agent_tool_result",
+          content: [{ type: "text", text: "{}" }],
+          details: { output: "ok", calls: ["board_tickets", "cmd.weekly_report", "board_tickets"] },
+        },
+      }),
+    ).toBe("board_tickets, cmd.weekly_report");
+
+    expect(
+      summarizeToolCompletionDetail({
+        name: "code_mode",
+        result: { output: "ok", calls: ["a", "b", "c", "d", "e"] },
+      }),
+    ).toBe("a, b, c, d +1 more");
+
+    expect(
+      summarizeToolCompletionDetail({
+        name: "shell",
+        result: { calls: ["ignored"] },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("extracts called skills from skill_read, skill_mode, use_tool, code_mode, and completions", () => {
+    expect(summarizeToolCallSkills("skill_read", { name: "pr-watch" })).toEqual(["pr-watch"]);
+    expect(summarizeToolCallSkills("skill_mode", { name: "pr-watch" })).toEqual(["pr-watch"]);
+    expect(
+      summarizeToolCallSkills("skill_mode", { names: ["Tasks", "Computer", "tasks"] }),
+    ).toEqual(["Tasks", "Computer"]);
+    expect(summarizeToolCallSkills("skill_mode", { query: "deploy frontend" })).toBeUndefined();
+    expect(
+      summarizeToolCallSkills("use_tool", {
+        name: "skill_read",
+        arguments: { name: "Tasks" },
+      }),
+    ).toEqual(["Tasks"]);
+    expect(
+      summarizeToolCallSkills("code_mode", {
+        code: 'await codemode.skill_read({ name: "pr-watch" }); await codemode.skill_mode({ names: ["Tasks", "History"] }); await codemode.shell({ command: "ls" });',
+      }),
+    ).toEqual(["pr-watch", "Tasks", "History"]);
+    expect(summarizeToolCallSkills("shell", { command: "ls" })).toBeUndefined();
+
+    expect(
+      summarizeToolCompletionSkills({
+        name: "skill_read",
+        result: { name: "PR Watch", content: "..." },
+      }),
+    ).toEqual(["PR Watch"]);
+    expect(
+      summarizeToolCompletionSkills({
+        name: "skill_mode",
+        result: { query: "deploy", loaded: ["Deploy Frontend"] },
+      }),
+    ).toEqual(["Deploy Frontend"]);
+    expect(
+      summarizeToolCompletionDetail({
+        name: "skill_mode",
+        result: { loaded: ["Tasks", "Computer"] },
+      }),
+    ).toBe("Tasks, Computer");
+    expect(
+      summarizeToolCompletionSkills({
+        name: "code_mode",
+        result: {
+          kind: "agent_tool_result",
+          content: [{ type: "text", text: "{}" }],
+          details: { output: "ok", skills: ["pr-watch", "PR-Watch", "deploy"] },
+        },
+      }),
+    ).toEqual(["pr-watch", "deploy"]);
+    expect(
+      summarizeToolCompletionDetail({
+        name: "skill_read",
+        result: { name: "PR Watch" },
+      }),
+    ).toBe("PR Watch");
   });
 });

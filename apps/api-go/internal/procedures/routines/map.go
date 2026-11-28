@@ -1,8 +1,8 @@
 // Package routines ports the routines procedures that touch only the database:
-// routines.list, routines.listForMentions, routines.history and routines.remove
-// (apps/api/src/routes/routines.ts). create, update and testRun stay on the TypeScript
-// API: they validate watches against a computer, read model catalogs, expand skill
-// references and wake runs.
+// routines.list, routines.listForMentions, routines.history, routines.setPrepare,
+// routines.commands and routines.testRun (apps/api/src/routes/routines.ts). create and update
+// stay on the TypeScript API: they validate watches against a computer, read model catalogs,
+// expand skill references and wake runs.
 //
 // routines.remove stays on TypeScript too: its chat notice writes sealed message and
 // event content (packages/db/src/encryption/content-encryption.ts).
@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Routine is the wire shape of RoutineSchema (packages/contracts/src/routines/routine.ts:45),
@@ -38,6 +39,7 @@ type Routine struct {
 	ThinkingLevel   *string     `json:"thinkingLevel"`
 	Watch           *Watch      `json:"watch"`
 	WatchState      *WatchState `json:"watchState"`
+	Prepare         *Prepare    `json:"prepare"`
 	LastRunAt       *string     `json:"lastRunAt"`
 	NextRunAt       *string     `json:"nextRunAt"`
 	ScheduleDelayed bool        `json:"scheduleDelayed"`
@@ -68,6 +70,7 @@ type routineRow struct {
 	ThinkingLevel   *string
 	Watch           []byte
 	WatchState      []byte
+	Prepare         []byte
 	LastRunAt       *time.Time
 	NextRunAt       *time.Time
 	CreatedAt       time.Time
@@ -76,14 +79,14 @@ type routineRow struct {
 // routineColumns is every column mapRoutine reads, in routineRow's order.
 const routineColumns = `id, "botId", name, prompt, crons, timezone, active, notify, "inChat",
 	"webhookEnabled", "githubEnabled", "messageProvider", "emailSenders", "modelProvider",
-	"modelId", "thinkingLevel", watch, "watchState", "lastRunAt", "nextRunAt", "createdAt"`
+	"modelId", "thinkingLevel", watch, "watchState", prepare, "lastRunAt", "nextRunAt", "createdAt"`
 
 func scanRoutine(source pgx.Row) (routineRow, error) {
 	var row routineRow
 	err := source.Scan(&row.ID, &row.BotID, &row.Name, &row.Prompt, &row.Crons, &row.Timezone,
 		&row.Active, &row.Notify, &row.InChat, &row.WebhookEnabled, &row.GithubEnabled,
 		&row.MessageProvider, &row.EmailSenders, &row.ModelProvider, &row.ModelID,
-		&row.ThinkingLevel, &row.Watch, &row.WatchState, &row.LastRunAt, &row.NextRunAt, &row.CreatedAt)
+		&row.ThinkingLevel, &row.Watch, &row.WatchState, &row.Prepare, &row.LastRunAt, &row.NextRunAt, &row.CreatedAt)
 	return row, err
 }
 
@@ -109,7 +112,7 @@ func loadRoutines(ctx context.Context, tx pgx.Tx, spaceID string, botIDs []strin
 }
 
 // mapRoutine is mapRoutine (apps/api/src/routines/routines.ts:85). The JSON columns go
-// through their schemas on every read (parseRoutineWatch and parseRoutineWatchState), so a
+// through their schemas on every read (parseWatch, parseWatchState and parsePrepare), so a
 // value that no longer fits answers null instead of surfacing later as a missing field.
 func mapRoutine(row routineRow) Routine {
 	crons, cronsInvalid := cronStrings(row.Crons)
@@ -132,6 +135,7 @@ func mapRoutine(row routineRow) Routine {
 		ThinkingLevel:   row.ThinkingLevel,
 		Watch:           parseWatch(row.Watch),
 		WatchState:      parseWatchState(row.WatchState),
+		Prepare:         parsePrepare(row.Prepare),
 		LastRunAt:       isoOptional(row.LastRunAt),
 		NextRunAt:       isoOptional(row.NextRunAt),
 		ScheduleDelayed: scheduleDelayed(row.Active, row.NextRunAt, time.Now()),
@@ -230,7 +234,7 @@ func (r Routine) valid() bool {
 		return false
 	}
 	if r.MessageProvider != nil {
-		if runeCount(*r.MessageProvider) > 50 || !messageProviderPattern(*r.MessageProvider) {
+		if !wtf8.ZodMaxPass(*r.MessageProvider, 50) || !messageProviderPattern(*r.MessageProvider) {
 			return false
 		}
 	}

@@ -30,12 +30,19 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  CopyTextFallback,
-  useCopyText,
 } from "@rakazo/ui-web";
-import { commitCheckTarget } from "./commit-checks";
-import { CommitChecksBadge } from "./commit-checks-badge";
-import { CheckIcon, CopyIcon, GlobeIcon, ImageIcon } from "./icons";
+import type { MarkdownHast } from "./code-blocks/code-block.web";
+import {
+  CodeBlock,
+  CopyButton,
+  codeElement,
+  codeText,
+  fenceLanguage,
+  useDrawing,
+} from "./code-blocks/code-block.web";
+import { mayHaveCodeBlock } from "./code-blocks/scan";
+import { LinkChecks } from "./commit-checks-badge";
+import { GlobeIcon, ImageIcon } from "./icons";
 import type { ChatMarkdownProps } from "./markdown";
 import {
   closeUnterminatedFence,
@@ -49,6 +56,7 @@ import {
   markdownLinkSite,
   markdownMentionId,
   markdownPageId,
+  markdownTicketRef,
   markRemoteImageLoaded,
   plainTextLinkParts,
   RemoteImagesContext,
@@ -59,10 +67,13 @@ import {
 } from "./markdown";
 import { useMarkdownCopy } from "./markdown-copy";
 import { useMarkdownLinkCopy, useMarkdownLinkTrust } from "./markdown-link-prompt";
+import { LinkPreview, ReferenceHoverCard } from "./markdown-reference-card.web";
 import { MarkdownTable, MarkdownTableSourceContext } from "./markdown-table";
 import { isMermaidFence, mermaidSvgImage } from "./mermaid";
 import { useMermaidSvg } from "./mermaid.web";
 import { PAGE_ICON } from "./page-icon";
+import type { ChatReferenceContext } from "./references";
+import { describeChatReference, TICKET_URL_PREFIX } from "./references";
 
 function preserveSkippedTableText() {
   return (tree: HastNode) => {
@@ -82,67 +93,8 @@ function preserveSkippedTableText() {
   };
 }
 
-function CopyButton({ read, label }: { read: () => string; label: string }) {
-  const copy = useMarkdownCopy();
-  const [copied, copyText, copyFailed, resetCopy, failedText] = useCopyText();
-
-  return (
-    <>
-      <button
-        type="button"
-        className="rk-chat-markdown-copy"
-        onClick={() => copyText(read())}
-        aria-label={copied ? copy.copied : label}
-      >
-        {copied ? <CheckIcon /> : <CopyIcon />}
-      </button>
-      <CopyTextFallback
-        open={copyFailed}
-        onOpenChange={resetCopy}
-        text={failedText}
-        label={label}
-      />
-    </>
-  );
-}
-
-function CodeBlock({
-  copyable,
-  prose,
-  ...props
-}: React.ComponentPropsWithoutRef<"pre"> & { copyable: boolean; prose: boolean }) {
-  const copy = useMarkdownCopy();
-  const preRef = useRef<HTMLPreElement>(null);
-  // The parser ends a fence's code with a newline the author didn't write.
-  const readCode = useCallback(() => (preRef.current?.textContent ?? "").replace(/\n$/, ""), []);
-
-  return (
-    <div className="rk-chat-markdown-pre-wrap">
-      <pre {...props} className={prose ? "rk-chat-markdown-pre-prose" : undefined} ref={preRef} />
-      {copyable ? <CopyButton read={readCode} label={copy.copyCode} /> : null}
-    </div>
-  );
-}
-
 /** Original markdown while streaming, before any display-only closing fence is appended. */
 const StreamingSourceContext = createContext<string | undefined>(undefined);
-
-function codeElement(node: MarkdownHast | undefined) {
-  return node?.children?.find((child) => child.tagName === "code");
-}
-
-function codeText(code: MarkdownHast | undefined) {
-  return (code?.children ?? []).map((child) => child.value ?? "").join("");
-}
-
-/** The language a fence names, or "" when it names none. */
-function fenceLanguage(node: MarkdownHast | undefined): string {
-  const classNames = codeElement(node)?.properties?.className;
-  const language = Array.isArray(classNames)
-    ? classNames.find((name) => typeof name === "string" && name.startsWith("language-"))
-    : undefined;
-  return typeof language === "string" ? language.slice("language-".length) : "";
-}
 
 /** The source of a ```mermaid fence, or undefined for any other block. */
 function mermaidFenceSource(node: MarkdownHast | undefined): string | undefined {
@@ -184,11 +136,19 @@ function MarkdownPre({
 }: React.ComponentPropsWithoutRef<"pre"> & { node?: MarkdownHast }) {
   const streamingSource = useContext(StreamingSourceContext);
   const diagram = mermaidFenceSource(node);
+  const language = fenceLanguage(node);
   // Prose an author wrote in a fence reads as prose; code keeps the monospaced font.
-  const prose = diagram === undefined && isProseFence(fenceLanguage(node));
-  // An empty fence has nothing to copy.
+  const prose = diagram === undefined && isProseFence(language);
+  const code = codeText(codeElement(node));
   const codeBlock = (
-    <CodeBlock {...props} copyable={/\S/.test(codeText(codeElement(node)))} prose={prose} />
+    // An empty fence has nothing to copy.
+    <CodeBlock
+      {...props}
+      code={code}
+      language={language}
+      copyable={/\S/.test(code)}
+      prose={prose}
+    />
   );
   if (diagram === undefined) return codeBlock;
   // Parser offsets identify the fence inside quotes and lists too. Inspect the original source,
@@ -361,15 +321,6 @@ function ConfirmableAnchor({ href, ...props }: React.ComponentPropsWithoutRef<"a
     />
   );
 }
-
-type MarkdownHast = {
-  type?: string;
-  tagName?: string;
-  value?: string;
-  properties?: Record<string, unknown>;
-  children?: MarkdownHast[];
-  position?: { start?: { offset?: number }; end?: { offset?: number } };
-};
 
 function hastString(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
@@ -549,21 +500,16 @@ function WebsiteLink({
   className,
   ...props
 }: React.ComponentPropsWithoutRef<"a"> & { href: string; children: ReactNode }) {
-  // The status glyph sits beside the link, not inside it: a control cannot nest in an anchor.
-  const target = commitCheckTarget(href);
   return (
-    <>
-      <ConfirmableAnchor
-        {...props}
-        href={href}
-        className={className ? `rk-chat-link ${className}` : "rk-chat-link"}
-      >
-        <LinkFavicon href={href} />
-        {/* bdi: direction characters in a label cannot reorder the text around the link. */}
-        <bdi className="rk-chat-link-label">{children}</bdi>
-      </ConfirmableAnchor>
-      {target ? <CommitChecksBadge target={target} /> : null}
-    </>
+    <ConfirmableAnchor
+      {...props}
+      href={href}
+      className={className ? `rk-chat-link ${className}` : "rk-chat-link"}
+    >
+      <LinkFavicon href={href} />
+      {/* bdi: direction characters in a label cannot reorder the text around the link. */}
+      <bdi className="rk-chat-link-label">{children}</bdi>
+    </ConfirmableAnchor>
   );
 }
 
@@ -572,7 +518,13 @@ function MarkdownAnchor({
   ...props
 }: React.ComponentPropsWithoutRef<"a"> & { node?: MarkdownHast }) {
   const loadRemote = useContext(RemoteImagesContext);
-  const { renderMention, onOpenPage: openPage } = useContext(InlineChipsContext);
+  const {
+    renderMention,
+    onOpenPage: openPage,
+    onOpenTicket: openTicket,
+    onDecideTicket: decideTicket,
+    referenceContext,
+  } = useContext(InlineChipsContext);
   const href = typeof props.href === "string" ? props.href : "";
   const pageId = markdownPageId(href);
   if (pageId) {
@@ -580,6 +532,19 @@ function MarkdownAnchor({
       <PageChip pageId={pageId} openPage={openPage}>
         {props.children}
       </PageChip>
+    );
+  }
+  const ticketRef = markdownTicketRef(href);
+  if (ticketRef) {
+    return (
+      <TicketChip
+        ticketRef={ticketRef}
+        openTicket={openTicket}
+        decideTicket={decideTicket}
+        referenceContext={referenceContext}
+      >
+        {props.children}
+      </TicketChip>
     );
   }
   const mentionId = markdownMentionId(href);
@@ -606,7 +571,14 @@ function MarkdownAnchor({
     );
   return (
     <InsideLinkContext.Provider value={opens ? "open" : "rejected"}>
-      {link}
+      {opens ? (
+        <LinkPreview href={href} referenceContext={referenceContext}>
+          {link}
+        </LinkPreview>
+      ) : (
+        link
+      )}
+      {opens ? <LinkChecks href={href} /> : null}
     </InsideLinkContext.Provider>
   );
 }
@@ -630,10 +602,51 @@ function PageChip({
   );
 }
 
-/** What a chip in the text does: a mention's rendering, and opening a linked page. */
-const InlineChipsContext = createContext<Pick<ChatMarkdownProps, "renderMention" | "onOpenPage">>(
-  {},
-);
+/** A ticket named in a message: its ref as a calm link-like button that opens the ticket. */
+function TicketChip({
+  ticketRef,
+  openTicket,
+  decideTicket,
+  referenceContext,
+  children,
+}: {
+  ticketRef: string;
+  openTicket: ((ticketRef: string) => void) | undefined;
+  decideTicket: ChatMarkdownProps["onDecideTicket"];
+  referenceContext: ChatReferenceContext | undefined;
+  children: ReactNode;
+}) {
+  const preview = describeChatReference(`${TICKET_URL_PREFIX}${ticketRef}`, referenceContext);
+  // A dot marks a ticket whose board decision still waits for an answer.
+  const pending =
+    preview?.kind === "ticket" && Boolean(preview.decision && !preview.decision.answer);
+  const chip = openTicket ? (
+    <button
+      type="button"
+      className={
+        pending ? "rk-chat-ticket-chip rk-chat-ticket-chip-pending" : "rk-chat-ticket-chip"
+      }
+      onClick={() => openTicket(ticketRef)}
+    >
+      {children}
+    </button>
+  ) : (
+    <span className={pending ? "rk-chat-ticket-chip-pending" : undefined}>{children}</span>
+  );
+  return (
+    <ReferenceHoverCard preview={preview} onDecideTicket={decideTicket}>
+      {chip}
+    </ReferenceHoverCard>
+  );
+}
+
+/** What a chip in the text does: a mention's rendering, and opening or answering a ticket. */
+const InlineChipsContext = createContext<
+  Pick<
+    ChatMarkdownProps,
+    "renderMention" | "onOpenPage" | "onOpenTicket" | "onDecideTicket" | "referenceContext"
+  >
+>({});
 
 /** The page icon (see `PAGE_ICON`), sized by its container. */
 export function PageIcon({ className }: { className?: string }) {
@@ -719,28 +732,51 @@ class PlainTextOnFailure extends Component<{ text: string; children: ReactNode }
 export function LinkifiedText({
   children,
   onOpenPage,
+  onOpenTicket,
+  onDecideTicket,
+  referenceContext,
 }: {
   children: string;
   onOpenPage?: (pageId: string) => void;
+  onOpenTicket?: (ticketRef: string) => void;
+  onDecideTicket?: ChatMarkdownProps["onDecideTicket"];
+  referenceContext?: ChatReferenceContext;
 }) {
   const { request, dialog } = useExternalLinkConfirm();
   return (
     <ConfirmLinkContext.Provider value={request}>
-      {plainTextLinkParts(children).map((part, index) =>
+      {plainTextLinkParts(children, referenceContext).map((part, index) =>
         part.type === "text" ? (
           part.value
         ) : part.type === "page" ? (
           <PageChip key={index} pageId={part.pageId} openPage={onOpenPage}>
             {part.value}
           </PageChip>
-        ) : linkFaviconOrigin(part.href) ? (
-          <WebsiteLink key={index} href={part.href} className="rk-chat-link-in-bubble">
-            {linkLabel(part.value, part.href)}
-          </WebsiteLink>
-        ) : (
-          <ConfirmableAnchor key={index} href={part.href} className="underline">
+        ) : part.type === "ticket" ? (
+          <TicketChip
+            key={index}
+            ticketRef={part.ticketRef}
+            openTicket={onOpenTicket}
+            decideTicket={onDecideTicket}
+            referenceContext={referenceContext}
+          >
             {part.value}
-          </ConfirmableAnchor>
+          </TicketChip>
+        ) : linkFaviconOrigin(part.href) ? (
+          <Fragment key={index}>
+            <LinkPreview href={part.href} referenceContext={referenceContext}>
+              <WebsiteLink href={part.href} className="rk-chat-link-in-bubble">
+                {linkLabel(part.value, part.href)}
+              </WebsiteLink>
+            </LinkPreview>
+            <LinkChecks href={part.href} />
+          </Fragment>
+        ) : (
+          <LinkPreview key={index} href={part.href} referenceContext={referenceContext}>
+            <ConfirmableAnchor href={part.href} className="underline">
+              {part.value}
+            </ConfirmableAnchor>
+          </LinkPreview>
         ),
       )}
       {dialog}
@@ -753,7 +789,7 @@ const rehypePlugins = [preserveSkippedTableText];
 
 // MarkdownImage decides what an image source may do, so it receives the source as written.
 function urlTransform(url: string, key: string) {
-  return key === "src" || markdownMentionId(url) || markdownPageId(url)
+  return key === "src" || markdownMentionId(url) || markdownPageId(url) || markdownTicketRef(url)
     ? url
     : (sanitizeMarkdownUrl(url, true) ?? "");
 }
@@ -866,19 +902,35 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   streaming = false,
   renderMention,
   onOpenPage,
+  onOpenTicket,
+  onDecideTicket,
+  referenceContext,
 }: ChatMarkdownProps) {
   const { request, dialog } = useExternalLinkConfirm();
+  // Code a bot wrote without a fence is fenced before Markdown reads it, so it keeps its shape,
+  // its JSX and its highlighting instead of arriving as paragraphs. Reading it is a chunk of its
+  // own, fetched as soon as a message may carry code (most carry none, and never fetch it): the
+  // text is drawn as written until that chunk is here, and then one paint draws the block.
+  const mayHaveCode = useMemo(() => mayHaveCodeBlock(children), [children]);
+  const drawing = useDrawing(mayHaveCode);
+  const source = useMemo(
+    () => (drawing ? drawing.codeBlockMarkdown(children) : children),
+    [drawing, children],
+  );
   // A streamed reply stays split once it finishes, so its blocks are not drawn again.
   const [split, setSplit] = useState(streaming);
   if (streaming && !split) setSplit(true);
   const previousSplit = useRef<SplitSource | undefined>(undefined);
   const blocks = useMemo(() => {
     if (!split) return undefined;
-    previousSplit.current = splitSource(children, previousSplit.current);
+    previousSplit.current = splitSource(source, previousSplit.current);
     return previousSplit.current.blocks;
-  }, [children, split]);
+  }, [source, split]);
 
-  const inlineChips = useMemo(() => ({ renderMention, onOpenPage }), [renderMention, onOpenPage]);
+  const inlineChips = useMemo(
+    () => ({ renderMention, onOpenPage, onOpenTicket, onDecideTicket, referenceContext }),
+    [renderMention, onOpenPage, onOpenTicket, onDecideTicket, referenceContext],
+  );
   return (
     <ConfirmLinkContext.Provider value={request}>
       <InlineChipsContext.Provider value={inlineChips}>
@@ -886,7 +938,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
           className={streaming ? "rk-chat-markdown rk-chat-markdown-streaming" : "rk-chat-markdown"}
         >
           <LinkFaviconsPausedContext.Provider value={streaming}>
-            <PlainTextOnFailure text={children}>
+            <PlainTextOnFailure text={source}>
               {blocks ? (
                 blocks.map((block, index) => (
                   <Fragment key={block.key}>
@@ -899,7 +951,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
                   </Fragment>
                 ))
               ) : (
-                <MarkdownBlock source={children} streaming={streaming} />
+                <MarkdownBlock source={source} streaming={streaming} />
               )}
             </PlainTextOnFailure>
           </LinkFaviconsPausedContext.Provider>
@@ -923,3 +975,22 @@ export {
 export type { MarkdownCopy } from "./markdown-copy";
 export { defaultMarkdownCopy, MarkdownCopyProvider } from "./markdown-copy";
 export { MarkdownLinkPromptProvider } from "./markdown-link-prompt";
+export type {
+  ChatJobReference,
+  ChatReferenceContext,
+  ChatReferencePreview,
+  ChatRepository,
+  ChatTicketDecision,
+  ChatTicketDecisionOption,
+  ChatTicketReference,
+} from "./references";
+export {
+  deriveRepositoryBaseUrl,
+  describeChatReference,
+  markdownTicketRef,
+  repositoryCommitUrl,
+  repositoryPullRequestUrl,
+  resolveJobCommitUrl,
+  withBlockChatReferences,
+  withChatReferences,
+} from "./references";

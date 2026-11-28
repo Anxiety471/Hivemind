@@ -22,8 +22,10 @@ export const queryClient = new QueryClient({
       // every open would undo the freshness window for a user moving between chats.
       refetchOnMount: true,
       refetchOnWindowFocus: false,
-      retry: (failures, error) => failures < 1 && isRetryableError(error),
-      retryDelay: (_failures, error) => retryDelayMs(error, 1_000),
+      // A dropped connection or a busy server gets two more tries, each waiting longer than the
+      // last (and longer still when the server asked for a specific wait).
+      retry: (failures, error) => failures < 2 && isRetryableError(error),
+      retryDelay: (failures, error) => retryDelayMs(error, 1_000 * 2 ** failures),
     },
   },
 });

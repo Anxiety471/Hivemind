@@ -21,6 +21,7 @@ function routine(partial: Partial<Routine>): Routine {
     modelId: null,
     thinkingLevel: null,
     watch: null,
+    prepare: null,
     watchState: null,
     lastRunAt: null,
     nextRunAt: null,

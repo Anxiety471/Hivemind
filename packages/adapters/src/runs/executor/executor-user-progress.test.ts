@@ -1,5 +1,6 @@
 import type { AgentRunRequest, AgentRuntimeEvent, BackgroundJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
+import { BACKGROUND_HELPER_TRIGGER } from "@rakazo/core";
 import { deferred } from "@rakazo/core/test-async";
 import type { AppendEventInput, Prisma } from "@rakazo/db";
 import {
@@ -71,6 +72,8 @@ async function runTurn(
     priorProgressText?: string;
     runtimeEvents?: AgentRuntimeEvent[];
     runtimeFailure?: boolean;
+    /** The reply ends by asking the user, so the run pauses instead of finishing. */
+    expectPause?: boolean;
     runtimeError?: Error;
     runtimeCancel?: boolean;
     failHelperId?: string;
@@ -309,6 +312,10 @@ async function runTurn(
         id: `effect-${data.idempotencyKey}`,
         ...data,
       })),
+      upsert: vi.fn(async ({ create }: { create: Record<string, unknown> }) => ({
+        id: `effect-${create.idempotencyKey}`,
+        ...create,
+      })),
       updateMany: vi.fn(async () => ({ count: 1 })),
     },
     userActionApprovalRule: { findMany: vi.fn(async () => []) },
@@ -388,7 +395,7 @@ async function runTurn(
 
   await executor.continueRun(run.id, "worker-1");
   expect(runtimeRun).toHaveBeenCalled();
-  if (!options.runtimeFailure)
+  if (!options.runtimeFailure && !options.expectPause)
     expect(finalizeRun).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
   return {
     finalizeRun,
@@ -712,6 +719,8 @@ describe("notes that can't be posted as messages", () => {
           note: "The meeting is with Anna.",
           // What the call was made with, for a later turn to replay.
           calls: [{ arguments: "{}" }],
+          status: "done",
+          startedAtMs: expect.any(Number),
         },
       ],
     });
@@ -1032,21 +1041,28 @@ describe("messages mode", () => {
   it.each(["routine", "reaction", "bot_message", "tickets"])(
     "leaves %s runs as they are",
     async (trigger) => {
-      const turn = (replyMode: "chat" | "messages") =>
-        runTurn("", true, ["I will check that.", "The draft is posted."], [], "fyi", {
-          trigger,
-          replyMode,
-          startedAt: new Date(Date.now() - 120_000),
-        });
-      const chat = await turn("chat");
-      const messages = await turn("messages");
-      expect(messages.finalizeRun.mock.calls[0]![0].blocks).toEqual(
-        chat.finalizeRun.mock.calls[0]![0].blocks,
-      );
-      expect(sentTexts(messages.messages)).toEqual(sentTexts(chat.messages));
-      expect(messages.runtimeRun.mock.calls[0]![0].instructions).not.toContain(
-        messagesModeReplyGuidance(),
-      );
+      // Both turns must stamp the same step timings for the block comparison.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      try {
+        const turn = (replyMode: "chat" | "messages") =>
+          runTurn("", true, ["I will check that.", "The draft is posted."], [], "fyi", {
+            trigger,
+            replyMode,
+            startedAt: new Date(Date.now() - 120_000),
+          });
+        const chat = await turn("chat");
+        const messages = await turn("messages");
+        expect(messages.finalizeRun.mock.calls[0]![0].blocks).toEqual(
+          chat.finalizeRun.mock.calls[0]![0].blocks,
+        );
+        expect(sentTexts(messages.messages)).toEqual(sentTexts(chat.messages));
+        expect(messages.runtimeRun.mock.calls[0]![0].instructions).not.toContain(
+          messagesModeReplyGuidance(),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 });
@@ -1882,6 +1898,70 @@ describe("a run that fails partway through its reply", () => {
       expect.objectContaining({ outcome: "failed", error: "Internal server error" }),
     );
   });
+
+  it("saves failure turn checkpoint with preserveTurnCheckpoint on retryable errors", async () => {
+    const { finalizeRun, prisma } = await runTurn("", false, "", [], "fyi", {
+      runtimeFailure: true,
+      runtime: async function* (request) {
+        yield { type: "text", text: "Part one." };
+        await request.onFailureCheckpoint?.(
+          JSON.stringify({
+            version: 1,
+            provider: "openrouter",
+            model: "fixture-model",
+            systemPrompt: "sys",
+            pendingToolCallId: "",
+            messages: [{ role: "user", content: "Hi", timestamp: 1 }],
+          }),
+        );
+        throw new Error("503 Service Unavailable");
+      },
+    });
+    expect(prisma.externalEffect.upsert).toHaveBeenCalledOnce();
+    const upsertCall = prisma.externalEffect.upsert.mock.calls[0]![0] as {
+      create: { result: string };
+    };
+    const saved = JSON.parse(upsertCall.create.result) as {
+      messages: Array<{ role: string; content: unknown }>;
+      reply?: { assembled: string; currentTextSegment: string; messageSegments: unknown[] };
+    };
+    expect(saved.messages.at(-1)).toMatchObject({ role: "user" });
+    expect(saved.reply?.assembled).toBe("");
+    expect(saved.reply?.currentTextSegment).toBe("");
+    expect(saved.reply?.messageSegments).toEqual([]);
+    expect(finalizeRun).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: "503 Service Unavailable",
+        preserveTurnCheckpoint: true,
+        partialReply: [{ kind: "text", text: "Part one." }],
+      }),
+    );
+  });
+
+  it("does not save a failure checkpoint for non-retryable auth errors", async () => {
+    const { finalizeRun, prisma } = await runTurn("", false, "", [], "fyi", {
+      runtimeFailure: true,
+      runtime: async function* (request) {
+        yield { type: "text", text: "Part one." };
+        await request.onFailureCheckpoint?.(
+          JSON.stringify({
+            version: 1,
+            provider: "openrouter",
+            model: "fixture-model",
+            systemPrompt: "sys",
+            pendingToolCallId: "",
+            messages: [{ role: "user", content: "Hi", timestamp: 1 }],
+          }),
+        );
+        throw new Error('401: {"message":"Invalid API key"}');
+      },
+    });
+    expect(prisma.externalEffect.upsert).not.toHaveBeenCalled();
+    expect(finalizeRun).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ preserveTurnCheckpoint: true }),
+    );
+  });
 });
 
 describe("a kept partial reply in later history", () => {
@@ -2149,9 +2229,15 @@ describe("a group member the message named nobody for", () => {
     expect(worked.finalizeRun).toHaveBeenCalledWith(expect.objectContaining({ markUnread: true }));
   });
 
-  it("still posts a placeholder when the message named the member", async () => {
+  it("captures a placeholder when the message named the member instead of posting it", async () => {
     const result = await turn(false, [text("."), done]);
-    expect(result.finalizeRun.mock.calls[0]![0].blocks).toEqual([{ kind: "text", text: "." }]);
+    expect(result.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        blocks: [],
+        markUnread: false,
+        emptyResponse: expect.objectContaining({ reason: "placeholder_only" }),
+      }),
+    );
   });
 
   it("ends an empty finish silently instead of posting a fallback", async () => {
@@ -2161,10 +2247,14 @@ describe("a group member the message named nobody for", () => {
     );
   });
 
-  it("keeps the fallback for an empty finish when the message named it", async () => {
+  it("captures an empty finish when the message named the member instead of posting a fallback", async () => {
     const result = await turn(false, [done]);
     expect(result.finalizeRun).toHaveBeenCalledWith(
-      expect.objectContaining({ blocks: [{ kind: "text", text: "done." }], markUnread: true }),
+      expect.objectContaining({
+        blocks: [],
+        markUnread: false,
+        emptyResponse: expect.objectContaining({ reason: "model_empty" }),
+      }),
     );
   });
 
@@ -2238,5 +2328,118 @@ describe("completion pushes", () => {
     vi.mocked(notifyRun).mockClear();
     await runTurn("Done.", false, "I will check.", [], "fyi", { trigger: "user" });
     expect(completionPushes()).toHaveLength(1);
+  });
+});
+
+describe("a prose choice question at the end of a reply", () => {
+  const SCREENSHOT_REPLY = [
+    "One account is marked sends-only in USER.md. Connecting it would go against that.",
+    "",
+    "Which do you want?",
+    "",
+    "- **Publish the OAuth app first, then add the three accounts.** This is my recommendation. It stops the 7-day expiry.",
+    "- **Add the three accounts now, in Testing mode.** They expire around 2026-12-04.",
+  ].join("\n");
+
+  it("pauses the run on an ask card with the recommended option instead of finishing", async () => {
+    const { finalizeRun, pauseRunForInput } = await runTurn(
+      SCREENSHOT_REPLY,
+      false,
+      undefined,
+      [],
+      "fyi",
+      {
+        trigger: "user",
+        expectPause: true,
+      },
+    );
+    expect(finalizeRun).not.toHaveBeenCalled();
+    const [[input]] = pauseRunForInput.mock.calls as unknown as [
+      [{ blocks: MessageBlock[]; offeredActions: unknown[] }],
+    ];
+    // Work before the reply (the tool step) stays; the reply splits into its context and the card.
+    expect(input.blocks.map((block) => block.kind)).toEqual(["steps", "text", "ask"]);
+    expect(input.blocks.slice(-2)).toEqual([
+      {
+        kind: "text",
+        text: "One account is marked sends-only in USER.md. Connecting it would go against that.",
+      },
+      {
+        kind: "ask",
+        text: "Which do you want?",
+        status: "pending",
+        actions: [
+          {
+            id: "choice-1",
+            label: "Publish the OAuth app first, then add the three accounts",
+            description: "It stops the 7-day expiry.",
+            recommended: true,
+          },
+          {
+            id: "choice-2",
+            label: "Add the three accounts now, in Testing mode",
+            description: "They expire around 2026-12-04.",
+          },
+        ],
+      },
+    ]);
+    expect(input.offeredActions).toEqual([
+      expect.objectContaining({ id: "choice-1", recommended: true }),
+      expect.objectContaining({ id: "choice-2" }),
+    ]);
+  });
+
+  it("finishes a normal reply and a background run without asking", async () => {
+    const plain = await runTurn("Done. The export is attached.", false, undefined, [], "fyi", {
+      trigger: "user",
+    });
+    expect(plain.pauseRunForInput).not.toHaveBeenCalled();
+    expect(plain.finalizeRun).toHaveBeenCalledTimes(1);
+
+    const background = await runTurn(SCREENSHOT_REPLY, false, undefined, [], "fyi", {
+      trigger: BACKGROUND_HELPER_TRIGGER,
+    });
+    expect(background.pauseRunForInput).not.toHaveBeenCalled();
+  });
+});
+
+describe("an ask_user choice keeps its recommendation and descriptions", () => {
+  it("saves them on the ask card and the run's resume checkpoint", async () => {
+    const { pauseRunForInput } = await runTurn("", false, undefined, [], "fyi", {
+      trigger: "user",
+      expectPause: true,
+      runtimeEvents: [
+        {
+          type: "ask",
+          text: "Which should I use?",
+          actions: [
+            {
+              id: "choice-1",
+              label: "Keep it",
+              description: "Nothing changes.",
+              recommended: true,
+            },
+            { id: "choice-2", label: "Replace it" },
+          ],
+        },
+      ],
+    });
+    const [[input]] = pauseRunForInput.mock.calls as unknown as [
+      [{ blocks: MessageBlock[]; offeredActions: unknown[] }],
+    ];
+    expect(input.blocks.at(-1)).toEqual(
+      expect.objectContaining({
+        kind: "ask",
+        text: "Which should I use?",
+        actions: [
+          { id: "choice-1", label: "Keep it", description: "Nothing changes.", recommended: true },
+          { id: "choice-2", label: "Replace it" },
+        ],
+      }),
+    );
+    expect(input.offeredActions).toEqual([
+      { id: "choice-1", label: "Keep it", description: "Nothing changes.", recommended: true },
+      { id: "choice-2", label: "Replace it" },
+    ]);
   });
 });

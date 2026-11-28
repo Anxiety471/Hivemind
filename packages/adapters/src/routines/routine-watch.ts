@@ -32,10 +32,7 @@ import { scheduleComputerSleep } from "../computers/computer-idle.js";
 import { ComputerBusyError, provisionComputer } from "../computers/computer-lifecycle.js";
 import { nativeShellCommandArgv } from "../computers/host/native-shell.js";
 import { sandboxKindCapabilities } from "../computers/sandbox/sandbox-kind-capabilities.js";
-import {
-  resolveBotWorkspaceCwd,
-  teamBotWorkspaceDirectory,
-} from "../computers/screens/computer-support.js";
+import { resolveBotWorkspaceCwd } from "../computers/screens/computer-support.js";
 import { connectedContext, selectRunConnections } from "../integrations/connection-context.js";
 import { isEgressRefused } from "../network/network-address.js";
 import { loadPurchaseRedactions } from "../payments/purchase-service.js";
@@ -47,6 +44,7 @@ import {
 import { recordVaultItemUse } from "../secrets/vault/vault-activity.js";
 import type { SafeWebFetchOptions } from "../web/web-ssrf.js";
 import { fetchSafeHttpRequest } from "../web/web-ssrf.js";
+import { ROUTINE_PREPARE_NOTE_START } from "./routine-prepare.prompt.js";
 import { ROUTINE_WATCH_NOTE_START, routineWatchNote } from "./routine-watch.prompt.js";
 import { resolveWatchArgs } from "./routine-watch-args.js";
 
@@ -501,20 +499,19 @@ for p in "$@"; do
 done
 exit "$status"`;
 
-/** Team file checks stay in this bot's folder, including absolute paths. */
+/** Team file checks stay in the shared workspace, including absolute paths. */
 export function resolveWatchPath(mode: ComputerMode, botId: string, path: string): string {
   const folder = watchFolder(mode, botId);
   const resolved = posix.resolve(folder, path);
   if (mode === "team" && resolved !== folder && !resolved.startsWith(`${folder}/`)) {
-    throw new RoutineWatchError("The watched path must stay inside the bot's folder.");
+    throw new RoutineWatchError("The watched path must stay inside the shared workspace.");
   }
   return resolved;
 }
 
-/** Where a bot's relative paths and commands start. */
-export function watchFolder(mode: ComputerMode, botId: string): string {
-  // Not resolveBotWorkspacePath(mode, botId, "."): a team computer refuses "." as escaping.
-  return mode === "team" ? `${WORKSPACE}/${teamBotWorkspaceDirectory(botId)}` : WORKSPACE;
+/** Where relative paths and commands start. */
+export function watchFolder(_mode: ComputerMode, _botId: string): string {
+  return WORKSPACE;
 }
 
 async function readComputer(
@@ -839,11 +836,14 @@ export type RoutineWatchTick =
 
 /**
  * The owner's part of a routine run's task prompt, as saved when it fired: the routine's
- * instructions without the change note, whose detail comes from what the watch read.
+ * instructions without the change note or the prepare note, whose details come from what the
+ * watch read and what the prepare command returned.
  */
 export function routineTaskInstructions(taskPrompt: string): string {
-  const note = taskPrompt.indexOf(ROUTINE_WATCH_NOTE_START);
-  return note === -1 ? taskPrompt : taskPrompt.slice(0, note);
+  const notes = [ROUTINE_WATCH_NOTE_START, ROUTINE_PREPARE_NOTE_START]
+    .map((start) => taskPrompt.indexOf(start))
+    .filter((index) => index !== -1);
+  return notes.length === 0 ? taskPrompt : taskPrompt.slice(0, Math.min(...notes));
 }
 
 /**

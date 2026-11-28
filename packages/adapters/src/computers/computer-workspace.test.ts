@@ -138,7 +138,7 @@ describe("provider-neutral computer workspace", () => {
     expect(files).toEqual(["packages/core/keep.txt"]);
   });
 
-  it("prepares shared and bot folders for a Team Computer", async () => {
+  it("does not isolate a Team Computer into per-bot or shared subdirectories", async () => {
     const provider = new FakeSandboxProvider();
     const computer = await provider.provision(
       { botId: "team-workspace", homePath: "/ignored" },
@@ -148,11 +148,7 @@ describe("provider-neutral computer workspace", () => {
 
     await ensureComputerWorkspaceLayout(provider, computer, "team", "bot-1", context);
 
-    expect(execute).toHaveBeenCalledWith(
-      computer,
-      { argv: ["mkdir", "-p", "shared", "bots/bot-1"] },
-      context,
-    );
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("leaves deleted bots' folders and browser profiles out of a Team Computer checkpoint", async () => {
@@ -402,6 +398,24 @@ describe("Team run checkpoints", () => {
       where: { id: "team" },
       data: { homeRevision: revision, homeRevisionAt: expect.any(Date) },
     });
+  });
+
+  it("leaves the save to the idle sleep for a server-mounted object-backed home", async () => {
+    const updateMany = vi.fn();
+    const deps = {
+      home: { describe: () => ({ id: "object-storage" }) },
+      sandbox: {},
+      prisma: { computer: { updateMany } },
+    };
+    await expect(
+      checkpointRunComputerWorkspace(
+        deps as never,
+        { id: "team", homeKey: "team", scope: "team", spaceId: "space" },
+        { id: "box", providerRef: "box", kind: "docker", botId: "team" },
+        context,
+      ),
+    ).resolves.toBeUndefined();
+    expect(updateMany).not.toHaveBeenCalled();
   });
 
   it("defers a remote export when another run prevents an exclusive checkpoint", async () => {

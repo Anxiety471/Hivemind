@@ -32,6 +32,8 @@ import {
 } from "../../../secrets/bot-secrets.js";
 import { FIND_TOOL, USE_TOOL } from "../../../tools/builtin.tool-definition.js";
 import { findTools, partitionTools } from "../../../tools/builtin-tool-bridge.js";
+import { CODE_MODE } from "../../../tools/code-mode.tool-definition.js";
+import { summarizeCodeModeCalls } from "../../../tools/code-mode-lint.js";
 import {
   lintPlaceholderArguments,
   placeholderRejectionMessage,
@@ -240,6 +242,12 @@ export function describeToolActivity(
       .trim();
     return clipToolResultText(text, ACTIVITY_DETAIL_LIMIT);
   };
+  if (toolName === CODE_MODE) {
+    const summary = summarizeCodeModeCalls(String(record.code ?? ""), 3);
+    return summary ? `Running ${summary}` : "Running script";
+  }
+  if (toolName === "command_save") return `Saving command: cmd.${detail(record.name)}`;
+  if (toolName === "command_delete") return `Deleting command: cmd.${detail(record.name)}`;
   if (toolName === "shell") return `Running: ${detail(record.command)}`;
   if (toolName === "user_computer_shell")
     return `Running on your computer: ${detail(record.command)}`;
@@ -274,10 +282,26 @@ export function describeToolActivity(
   if (toolName === "create_child_routine") return `Scheduling routine: ${detail(record.name)}`;
   if (toolName === "remember") return "Saving a note to memory";
   if (toolName === "save_shared_memory") return `Saving shared memory: ${detail(record.path)}`;
+  if (toolName === "search_memory_docs")
+    return record.query ? `Searching memory: ${detail(record.query)}` : "Listing memory notes";
+  if (toolName === "read_memory_doc") return `Reading memory note: ${detail(record.path)}`;
   if (toolName === "web_search") return `Searching the web: ${detail(record.query)}`;
   if (toolName === "web_fetch") return `Reading page: ${detail(redactActivityUrl(record.url))}`;
   if (toolName === "service_search") return `Finding a service: ${detail(record.query)}`;
   if (toolName === "service_call") return `Using service: ${detail(record.service)}`;
+  if (toolName === "skill_mode") {
+    if (record.query) return `Searching skills: ${detail(record.query)}`;
+    if (record.file && record.name)
+      return `Reading ${detail(record.file)} from ${detail(record.name)}`;
+    if (Array.isArray(record.names) && record.names.length > 0) {
+      const joined = record.names
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .join(", ");
+      if (joined) return `Reading skills: ${detail(joined)}`;
+    }
+    if (record.name) return `Reading skill: ${detail(record.name)}`;
+    return "Browsing skills";
+  }
   if (toolName === "skill_read")
     return record.file
       ? `Reading ${detail(record.file)} from ${detail(record.name)}`
@@ -387,7 +411,9 @@ function toAgentTool(
     // so a sibling request cannot start after one pauses for its card and share its answer.
     ...(SCHEDULE_TOOL_NAMES.has(tool.name) ||
     tool.name === "remember" ||
-    tool.name === "request_secret"
+    tool.name === "request_secret" ||
+    // One script can reach any read-only tool, memory and history included.
+    tool.name === CODE_MODE
       ? { executionMode: "sequential" as const }
       : {}),
     parameters: parametersFor(tool),
@@ -420,6 +446,14 @@ function toAgentTool(
           ...(typeof raw.recommended === "string" && raw.recommended.trim()
             ? { recommended: raw.recommended.trim() }
             : {}),
+          // Batch items get the same redaction; a non-array value stays as-is for schema rejection.
+          ...(raw.items === undefined
+            ? {}
+            : {
+                items: Array.isArray(raw.items)
+                  ? raw.items.map((item) => prepareAskItemArguments(item, host.request.secrets))
+                  : raw.items,
+              }),
         };
       }
       if (tool.name === "request_secret") {
@@ -577,6 +611,23 @@ function toAgentTool(
                 };
               }
               if (tool.name === "ask_user") {
+                if (args.items !== undefined) {
+                  if (args.options !== undefined) {
+                    throw new Error("ask_user takes either options or items, not both");
+                  }
+                  host.pausePending = true;
+                  host.queue.push({
+                    type: "ask",
+                    ...(host.request.onCheckpoint ? { executionId } : {}),
+                    text: String(args.question ?? "What should I use?"),
+                    items: batchAskItems(args.items),
+                  });
+                  return {
+                    content: [{ type: "text", text: "Waiting for the user's choice." }],
+                    details: args,
+                    terminate: true,
+                  };
+                }
                 const options = Array.isArray(args.options)
                   ? args.options.map((option) => String(option).trim())
                   : [];
@@ -879,6 +930,105 @@ export function redactedAskUserDetail(
   return `${capped}…`;
 }
 
+/** Batch triage: one to eight independent items, actionable ones carry choices. */
+const MAX_ASK_ITEMS = 8;
+const MAX_ASK_ITEM_QUESTION_LENGTH = 200;
+const MAX_ASK_ITEM_DETAIL_LENGTH = 600;
+const MAX_ASK_ITEM_TICKET_REF_LENGTH = 32;
+
+type AskRuntimeItem = NonNullable<Extract<AgentRuntimeEvent, { type: "ask" }>["items"]>[number];
+
+function prepareAskItemArguments(raw: unknown, secrets: readonly string[] | undefined): unknown {
+  const item = asObject(raw);
+  if (!item) return raw;
+  return {
+    question:
+      typeof item.question === "string"
+        ? redactSecrets(item.question, secrets ?? [])
+        : item.question,
+    ...(typeof item.detail === "string" && item.detail
+      ? { detail: redactedAskUserDetail(item.detail, secrets) }
+      : {}),
+    ...(item.ticketRef === undefined ? {} : { ticketRef: item.ticketRef }),
+    ...(item.options === undefined
+      ? {}
+      : { options: Array.isArray(item.options) ? item.options.map(String) : item.options }),
+    ...(typeof item.recommended === "string" && item.recommended.trim()
+      ? { recommended: item.recommended.trim() }
+      : {}),
+  };
+}
+
+/** Validates ask_user `items` and builds the ask event's items; throws on a bad batch. */
+function batchAskItems(rawItems: unknown): AskRuntimeItem[] {
+  if (!Array.isArray(rawItems) || rawItems.length < 1 || rawItems.length > MAX_ASK_ITEMS) {
+    throw new Error(`ask_user items takes one to ${MAX_ASK_ITEMS} items`);
+  }
+  let actionable = 0;
+  const items = rawItems.map((raw, index): AskRuntimeItem => {
+    const item = asObject(raw) ?? {};
+    const question = typeof item.question === "string" ? item.question.trim() : "";
+    if (!question || question.length > MAX_ASK_ITEM_QUESTION_LENGTH) {
+      throw new Error(
+        `ask_user items need a non-empty question of at most ${MAX_ASK_ITEM_QUESTION_LENGTH} characters`,
+      );
+    }
+    if (typeof item.detail === "string" && item.detail.length > MAX_ASK_ITEM_DETAIL_LENGTH) {
+      throw new Error(`ask_user item detail is at most ${MAX_ASK_ITEM_DETAIL_LENGTH} characters`);
+    }
+    const ticketRef = typeof item.ticketRef === "string" ? item.ticketRef.trim() : "";
+    if (ticketRef.length > MAX_ASK_ITEM_TICKET_REF_LENGTH) {
+      throw new Error(
+        `ask_user item ticketRef is at most ${MAX_ASK_ITEM_TICKET_REF_LENGTH} characters`,
+      );
+    }
+    const id = `item-${index + 1}`;
+    const base = {
+      id,
+      question,
+      ...(typeof item.detail === "string" && item.detail ? { detail: item.detail } : {}),
+      ...(ticketRef ? { ticketRef } : {}),
+    };
+    if (item.options === undefined) {
+      if (item.recommended !== undefined) {
+        throw new Error("ask_user item recommended needs options");
+      }
+      return base;
+    }
+    const options = Array.isArray(item.options)
+      ? item.options.map((option) => String(option).trim())
+      : [];
+    if (
+      options.length < 2 ||
+      options.length > 4 ||
+      options.some((option) => option.length === 0 || option.length > 80) ||
+      new Set(options).size !== options.length
+    ) {
+      throw new Error("ask_user items need two to four unique, non-empty options per item");
+    }
+    const recommendedRaw = typeof item.recommended === "string" ? item.recommended.trim() : "";
+    const recommendedIndex = recommendedRaw
+      ? options.findIndex((option) => option.toLowerCase() === recommendedRaw.toLowerCase())
+      : -1;
+    if (recommendedRaw && recommendedIndex < 0) {
+      throw new Error("ask_user item recommended must match one of its options");
+    }
+    actionable += 1;
+    return {
+      ...base,
+      actions: options.map((label, optionIndex) => ({
+        id: `choice-${optionIndex + 1}`,
+        label,
+        ...(optionIndex === recommendedIndex ? { recommended: true } : {}),
+      })),
+    };
+  });
+  if (actionable === 0) {
+    throw new Error("ask_user items need at least one item with options");
+  }
+  return items;
+}
+
 /** The arguments an ask_user call carries: directly, or nested in a use_tool wrapper
  * (the wrapper's own normalizer unwraps them, but the streamed message records the
  * nested object verbatim). */
@@ -923,6 +1073,10 @@ export function redactAskUserDetailInMessage(
       // A non-string detail never reaches the card (the argument normalizer drops
       // it); drop it here too, so no kept copy holds the raw value.
       delete args.detail;
+    }
+    if (Array.isArray(args.items)) {
+      // Batch items carry their own question and detail; the same scrub applies to each.
+      args.items = args.items.map((item) => prepareAskItemArguments(item, secrets));
     }
   }
 }

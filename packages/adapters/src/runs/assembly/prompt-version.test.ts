@@ -39,7 +39,7 @@ describe("prompt version", () => {
 
   it("renders the full system prompt templates", () => {
     const text = JSON.stringify(promptVersionParts());
-    expect(text).toContain("Prefer tools over claiming you already did the work.");
+    expect(text).toContain("Prefer tools over claiming you already did the work:");
     expect(text).toContain("reply_target");
   });
 });

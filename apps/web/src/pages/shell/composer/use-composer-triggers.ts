@@ -4,27 +4,36 @@ import type {
   ComposerMentionBinding,
   ComposerMentionQuery,
   ComposerMentionRange,
+  ComposerReferenceOption,
+  ComposerReferenceQuery,
   SlashActionId,
 } from "@rakazo/core";
 import {
+  applyComposerReference,
   bindComposerMention,
   clampMentionHighlightIndex,
   composerMentionQuery,
+  composerReferenceOptionsFrom,
   composerSlashOptions,
   composerSlashQuery,
   filterComposerMentionTargets,
+  filterComposerReferences,
+  findComposerReferenceQuery,
   mentionChipKey,
   removeComposerSlashQuery,
+  updateComposerMentionBindings,
 } from "@rakazo/core";
 import type { RefObject } from "react";
 import { useEffect, useId, useMemo, useState } from "react";
+import { useChatReferences } from "../chat/chat-references";
 import { slashActionLabel } from "./composer-mentions";
 
 type Composition = { text: string; bindings: ComposerMentionBinding[] };
 
 /**
- * What typing `@` or `/` opens in the composer: the mention list, the slash list of skills and
- * actions, and the skill a slash pick attaches to the message.
+ * What typing `@`, `/` or `#` opens in the composer: the mention list, the slash list of skills and
+ * actions, the `#` list of Space tickets and their pull requests, and the skill a slash pick
+ * attaches to the message.
  */
 export function useComposerTriggers({
   draft,
@@ -63,8 +72,16 @@ export function useComposerTriggers({
     composerSlashQuery(draft, draft.length, draft.length, mentionBindings),
   );
   const [selectedSkill, setSelectedSkill] = useState<AgentSkillCatalogEntry | null>(null);
+  const [referenceQuery, setReferenceQuery] = useState<ComposerReferenceQuery | null>(null);
+  const [referenceHighlightKey, setReferenceHighlightKey] = useState<string | null>(null);
+  const { referenceContext } = useChatReferences();
   const mentionListboxId = useId();
   const slashListboxId = useId();
+  const referenceListboxId = useId();
+  const allReferenceOptions = useMemo(
+    () => composerReferenceOptionsFrom(referenceContext?.tickets ?? []),
+    [referenceContext?.tickets],
+  );
 
   const knownMentions = [...(mentionTargets ?? []), ...selectedMentions];
 
@@ -78,6 +95,20 @@ export function useComposerTriggers({
       composerMentionQuery(value, caret, end, knownMentions, bindings)?.query ?? null,
     );
     updateSlashQuery(value, caret, end, bindings);
+    updateReferenceQuery(value, caret, end);
+  }
+
+  function updateReferenceQuery(
+    text: string,
+    selectionStart: number,
+    selectionEnd = selectionStart,
+  ) {
+    // A Space without tickets or linked pull requests never opens an empty list.
+    setReferenceQuery(
+      allReferenceOptions.length === 0
+        ? null
+        : findComposerReferenceQuery(text, selectionStart, selectionEnd),
+    );
   }
 
   function updateSlashQuery(
@@ -111,6 +142,24 @@ export function useComposerTriggers({
     setMentionHighlightKey(null);
     // Restore after React has committed the new controlled value.
     pendingCaret.current = { start: completion.caret, end: completion.caret };
+  }
+
+  function insertReference(option: ComposerReferenceOption) {
+    if (!referenceQuery) return;
+    markEdited();
+    const completion = applyComposerReference(draft, referenceQuery, option);
+    const bindings = updateComposerMentionBindings(draft, completion.text, mentionBindings, {
+      before: [{ start: referenceQuery.start, end: referenceQuery.end }],
+    });
+    commitComposition({ text: completion.text, bindings });
+    setReferenceQuery(null);
+    setReferenceHighlightKey(null);
+    pendingCaret.current = { start: completion.cursor, end: completion.cursor };
+  }
+
+  function dismissReferencePicker() {
+    setReferenceQuery(null);
+    setReferenceHighlightKey(null);
   }
 
   /** Takes the `/query` out of the draft, keeping the words and mentions around it. */
@@ -175,9 +224,23 @@ export function useComposerTriggers({
     [agentSkills, slashQuery],
   );
 
+  const referenceOptions = useMemo(
+    () =>
+      referenceQuery ? filterComposerReferences(allReferenceOptions, referenceQuery.query, 10) : [],
+    [allReferenceOptions, referenceQuery],
+  );
+  useEffect(() => setReferenceHighlightKey(null), [referenceQuery?.start, referenceQuery?.query]);
+  const referenceHighlightIndex = clampMentionHighlightIndex(
+    referenceOptions.findIndex((option) => option.key === referenceHighlightKey),
+    referenceOptions.length,
+  );
+  const showReferencePicker =
+    referenceQuery !== null && mentionQuery === null && referenceOptions.length > 0;
+
   const showSlashPicker =
     slashQuery !== null &&
     mentionQuery === null &&
+    referenceQuery === null &&
     (slashSkillOptions.length > 0 || slashActionOptions.length > 0);
   const slashOptionKeys = showSlashPicker
     ? [
@@ -195,7 +258,22 @@ export function useComposerTriggers({
     ? activeMentionOptionId
     : showSlashPicker
       ? `${slashListboxId}-option-${activeSlashIndex}`
-      : undefined;
+      : showReferencePicker
+        ? `${referenceListboxId}-option-${referenceHighlightIndex}`
+        : undefined;
+  // The list the message field points at, and the list the keyboard drives (one is ever open).
+  const activeListboxId = mentionPickerOpen
+    ? mentionListboxId
+    : showReferencePicker
+      ? referenceListboxId
+      : showSlashPicker
+        ? slashListboxId
+        : undefined;
+  const keyPicker = mentionPickerOpen
+    ? { count: mentionOptions.length, index: activeMentionIndex }
+    : showReferencePicker
+      ? { count: referenceOptions.length, index: referenceHighlightIndex }
+      : { count: slashOptionKeys.length, index: activeSlashIndex };
 
   function pickSlashOption(index: number) {
     const skill = slashSkillOptions[index];
@@ -219,6 +297,17 @@ export function useComposerTriggers({
     removeSkill,
     mentionListboxId,
     slashListboxId,
+    referenceQuery,
+    setReferenceQuery,
+    referenceOptions,
+    referenceHighlightIndex,
+    referenceHighlightKey,
+    setReferenceHighlightKey,
+    referenceListboxId,
+    showReferencePicker,
+    updateReferenceQuery,
+    dismissReferencePicker,
+    insertReference,
     mentionOptions,
     activeMentionIndex,
     mentionPickerOpen,
@@ -230,6 +319,8 @@ export function useComposerTriggers({
     setSlashHighlightKey,
     activeSlashIndex,
     activeOptionId,
+    activeListboxId,
+    keyPicker,
     pickSlashOption,
   };
 }

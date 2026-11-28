@@ -3,6 +3,7 @@ import { t } from "@lingui/core/macro";
 export type AskAction = {
   id: string;
   label: string;
+  description?: string;
   outcome?: "created" | "cancelled";
   recommended?: boolean;
 };

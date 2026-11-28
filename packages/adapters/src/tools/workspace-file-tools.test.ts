@@ -233,14 +233,14 @@ describe("readFileFromTool size limit", () => {
     });
   });
 
-  it("names a Team Computer's shared file as the shell reaches it from the bot's home", async () => {
+  it("names a Team Computer's shared file directly from the shared workspace root", async () => {
     const { sandbox, workspace } = failingWorkspace(new SandboxFileTooLargeError(1024));
     const result = (await readFileFromTool(
       sandbox,
       { ...workspace, computerMode: "team" },
       { path: "shared/huge.log" },
     )) as { error: string };
-    expect(result.error).toContain("read parts of ../../shared/huge.log with shell");
+    expect(result.error).toContain("read parts of shared/huge.log with shell");
   });
 
   it("lets a computer failure that only mentions a size fail the tool call", async () => {

@@ -9,19 +9,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
-	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
 )
 
 // oauthClientRequired is MCP_OAUTH_CLIENT_REQUIRED (packages/contracts/src/integrations/connector-errors.ts).
@@ -48,46 +44,31 @@ type Availability struct {
 
 // Server is McpServerSchema (mcp.ts:275-305).
 type Server struct {
-	ID              string       `json:"id"`
-	SpaceID         string       `json:"spaceId"`
-	InstallID       *string      `json:"installId"`
-	Slug            string       `json:"slug"`
-	Name            string       `json:"name"`
-	Description     string       `json:"description"`
-	Transport       string       `json:"transport"`
-	Endpoint        *string      `json:"endpoint"`
-	Command         *string      `json:"command"`
-	HasArgs         bool         `json:"hasArgs"`
-	EnvKeys         []string     `json:"envKeys"`
-	FileKeys        []string     `json:"fileKeys"`
-	HeaderKeys      []string     `json:"headerKeys"`
-	HasSecret       bool         `json:"hasSecret"`
-	OAuthStatus     string       `json:"oauthStatus"`
-	OAuthClientID   *string      `json:"oauthClientId"`
-	Health          Health       `json:"health"`
-	Enabled         bool         `json:"enabled"`
-	VerbatimResults bool         `json:"verbatimResults"`
-	Revision        int32        `json:"revision"`
-	Availability    Availability `json:"availability"`
-	AllBots         bool         `json:"allBots"`
-	CreatedAt       string       `json:"createdAt"`
-	UpdatedAt       string       `json:"updatedAt"`
-}
-
-type row struct {
-	id, spaceID, slug, name, description, transport string
-	endpoint, command                               *string
-	args, env, files, headers                       []byte
-	hasArgs                                         bool
-	secretID, installID                             *string
-	allSpaces, allBots, enabled                     bool
-	verbatim                                        bool
-	revision                                        int32
-	healthStatus                                    string
-	healthMessage                                   *string
-	healthToolCount                                 *int32
-	healthCheckedAt                                 *time.Time
-	createdAt, updatedAt                            time.Time
+	ID                 string       `json:"id"`
+	SpaceID            string       `json:"spaceId"`
+	InstallID          *string      `json:"installId"`
+	Slug               string       `json:"slug"`
+	Name               string       `json:"name"`
+	Description        string       `json:"description"`
+	Transport          string       `json:"transport"`
+	Endpoint           *string      `json:"endpoint"`
+	Command            *string      `json:"command"`
+	HasArgs            bool         `json:"hasArgs"`
+	EnvKeys            []string     `json:"envKeys"`
+	FileKeys           []string     `json:"fileKeys"`
+	HeaderKeys         []string     `json:"headerKeys"`
+	HasSecret          bool         `json:"hasSecret"`
+	OAuthStatus        string       `json:"oauthStatus"`
+	OAuthClientID      *string      `json:"oauthClientId"`
+	Health             Health       `json:"health"`
+	Enabled            bool         `json:"enabled"`
+	VerbatimResults    bool         `json:"verbatimResults"`
+	SendCallerIdentity bool         `json:"sendCallerIdentity"`
+	Revision           int32        `json:"revision"`
+	Availability       Availability `json:"availability"`
+	AllBots            bool         `json:"allBots"`
+	CreatedAt          string       `json:"createdAt"`
+	UpdatedAt          string       `json:"updatedAt"`
 }
 
 // List implements mcp.servers.list (routes/mcp.ts:62-88).
@@ -104,28 +85,17 @@ func List(
 	}
 	servers := []Server{}
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, "spaceId", slug, name, description, transport,
-			endpoint, command, args, "hasArgs", env, files, headers, "secretId", "installId",
-			"allSpaces", "allBots", enabled, coalesce("verbatimResults", false), revision,
-			"healthStatus", "healthMessage", "healthToolCount", "healthCheckedAt",
-			"createdAt", "updatedAt"
-			FROM mcp_servers WHERE "userId" = $1 AND ("spaceId" = $2 OR "allSpaces" = true
-				OR EXISTS (SELECT 1 FROM mcp_server_spaces s
-					WHERE s."serverId" = mcp_servers.id AND s."spaceId" = $2))
-			ORDER BY name ASC, "createdAt" ASC`, actor.UserID, actor.SpaceID)
+		//writeaudit:dynamic read: the column list and predicate are the fixed serverColumns/serverAvailable consts
+		rows, err := tx.Query(ctx, `SELECT `+serverColumns+` FROM mcp_servers
+			WHERE `+serverAvailable+`
+			ORDER BY name ASC, "createdAt" ASC`, actor.SpaceID, actor.UserID)
 		if err != nil {
 			return err
 		}
-		var found []row
+		var found []Record
 		for rows.Next() {
-			var record row
-			if err := rows.Scan(&record.id, &record.spaceID, &record.slug, &record.name,
-				&record.description, &record.transport, &record.endpoint, &record.command,
-				&record.args, &record.hasArgs, &record.env, &record.files, &record.headers,
-				&record.secretID, &record.installID, &record.allSpaces, &record.allBots,
-				&record.enabled, &record.verbatim, &record.revision, &record.healthStatus,
-				&record.healthMessage, &record.healthToolCount, &record.healthCheckedAt,
-				&record.createdAt, &record.updatedAt); err != nil {
+			record, err := scanRecord(rows)
+			if err != nil {
 				rows.Close()
 				return err
 			}
@@ -185,10 +155,10 @@ func List(
 			}
 		}
 		for _, record := range found {
-			summary := oauthSummary{status: "none"}
+			summary := OAuthSummary{Status: "none"}
 			if record.secretID != nil {
 				if ciphertext, ok := ciphertexts[*record.secretID]; ok {
-					value, err := summarizeMaterial(vault, ctx, ciphertext, *record.secretID)
+					value, err := SummarizeMaterial(vault, ctx, ciphertext, *record.secretID)
 					if err != nil {
 						// A reference the store cannot serve fails the whole list, as the shipped
 						// reader rethrows SecretStoreUnavailable instead of hiding it.
@@ -203,49 +173,9 @@ func List(
 					spaceIDs = append(spaceIDs, spaceID)
 				}
 			}
-			// The router parses this output: values a stored row can break are 500s, as in TS.
-			switch record.transport {
-			case "streamable_http", "sse", "stdio":
-			default:
-				return shared.OutputInvalid()
-			}
-			if record.revision <= 0 {
-				return shared.OutputInvalid()
-			}
-			if record.endpoint != nil {
-				parsed, err := url.Parse(*record.endpoint)
-				if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-					return shared.OutputInvalid()
-				}
-			}
-			if record.healthToolCount != nil && *record.healthToolCount < 0 {
-				return shared.OutputInvalid()
-			}
-			server := Server{
-				ID:              record.id,
-				SpaceID:         record.spaceID,
-				InstallID:       record.installID,
-				Slug:            record.slug,
-				Name:            record.name,
-				Description:     record.description,
-				Transport:       record.transport,
-				Endpoint:        record.endpoint,
-				Command:         record.command,
-				HasArgs:         record.hasArgs || len(legacyArgs(record.args)) > 0,
-				EnvKeys:         objectKeys(record.env),
-				FileKeys:        objectKeys(record.files),
-				HeaderKeys:      objectKeys(record.headers),
-				HasSecret:       record.secretID != nil && summary.credential,
-				OAuthStatus:     summary.status,
-				OAuthClientID:   summary.clientID,
-				Health:          healthDTO(record),
-				Enabled:         record.enabled,
-				VerbatimResults: record.verbatim,
-				Revision:        record.revision,
-				Availability:    Availability{AllSpaces: record.allSpaces, SpaceIDs: spaceIDs},
-				AllBots:         record.allBots,
-				CreatedAt:       record.createdAt.UTC().Format(shared.ISOMillis),
-				UpdatedAt:       record.updatedAt.UTC().Format(shared.ISOMillis),
+			server, failure := ServerDTO(record, spaceIDs, summary)
+			if failure != nil {
+				return failure
 			}
 			servers = append(servers, server)
 		}
@@ -255,58 +185,6 @@ func List(
 		return nil, shared.Failure(err)
 	}
 	return servers, nil
-}
-
-type oauthSummary struct {
-	status     string
-	clientID   *string
-	credential bool
-}
-
-// summarizeMaterial is McpOAuthBroker.summaryForCiphertext: JSON material, or an empty one when
-// the value cannot be read. An unavailable store is rethrown (the shipped reader does the same):
-// the local store has none except an `infisical:` ref, which this build cannot serve.
-func summarizeMaterial(vault *shared.SecretVault, ctx context.Context, ciphertext, recordID string) (oauthSummary, error) {
-	plaintext, err := vault.Writer.Load(ctx, ciphertext, recordID)
-	if err != nil {
-		if errors.Is(err, secretstore.ErrRemoteUnsupported) {
-			return oauthSummary{}, err
-		}
-		return oauthSummary{status: "none"}, nil
-	}
-	var material map[string]any
-	if err := json.Unmarshal([]byte(plaintext), &material); err != nil || material == nil {
-		material = map[string]any{}
-	}
-	summary := oauthSummary{status: "none"}
-	if oauth, ok := material["oauth"].(map[string]any); ok {
-		if tokens, present := oauth["tokens"]; present && tokens != nil {
-			summary.status = "connected"
-		} else {
-			summary.status = "reconnect"
-		}
-	}
-	if client, ok := material["oauthClient"].(map[string]any); ok {
-		if id, ok := client["client_id"].(string); ok {
-			summary.clientID = &id
-		}
-	}
-	secret, _ := material["secret"].(string)
-	summary.credential = secret != "" ||
-		arrayLength(material["args"]) > 0 ||
-		len(objectKeysRaw(material["env"])) > 0 ||
-		len(objectKeysRaw(material["files"])) > 0 ||
-		len(objectKeysRaw(material["headers"])) > 0 ||
-		material["oauthClient"] != nil ||
-		material["oauth"] != nil
-	return summary, nil
-}
-
-func arrayLength(value any) int {
-	if items, ok := value.([]any); ok {
-		return len(items)
-	}
-	return 0
 }
 
 func objectKeys(raw []byte) []string {
@@ -369,18 +247,6 @@ func isArrayIndex(key string) bool {
 	return strconv.FormatUint(value, 10) == key
 }
 
-func objectKeysRaw(value any) []string {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return []string{}
-	}
-	keys := make([]string, 0, len(object))
-	for key := range object {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
 func legacyArgs(raw []byte) []string {
 	var value any
 	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
@@ -399,7 +265,7 @@ func legacyArgs(raw []byte) []string {
 	return args
 }
 
-func healthDTO(record row) Health {
+func healthDTO(record Record) Health {
 	status := record.healthStatus
 	switch status {
 	case "unknown", "installing", "ok", "error":

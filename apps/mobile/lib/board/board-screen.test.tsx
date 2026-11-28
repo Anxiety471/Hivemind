@@ -93,6 +93,9 @@ const ticket = {
   id: "ticket-1",
   title: "Example ticket",
   status: "todo",
+  pullRequests: [] as Ticket["pullRequests"],
+  issues: [] as Ticket["issues"],
+  repository: null,
 } as Ticket;
 let host: HTMLDivElement;
 let root: Root;
@@ -182,6 +185,9 @@ it("opens a ticket detail sheet on tap and submits a 3-option decision", async (
         { id: "both", label: "Keep both", recommended: false },
       ],
     },
+    pullRequests: [] as Ticket["pullRequests"],
+    issues: [] as Ticket["issues"],
+    repository: null,
   } as Ticket;
   const decidedTicket = {
     ...decisionTicket,
@@ -219,6 +225,9 @@ it("offers 3 fallback choices (+ Recommended + Other) on legacy blocked tickets 
     ref: "RAK-130",
     title: "Fix delete-before-upload bug",
     status: "blocked",
+    pullRequests: [] as Ticket["pullRequests"],
+    issues: [] as Ticket["issues"],
+    repository: null,
   } as Ticket;
   rpc
     .mockResolvedValueOnce({ tickets: [legacyTicket] })

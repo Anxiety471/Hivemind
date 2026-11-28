@@ -31,6 +31,27 @@ export async function pauseForAnswer(ctx: RunContext, event: RuntimeEvent<"ask">
   const safeActions = event.actions?.map((action) => ({
     id: action.id,
     label: redactSecrets(action.label, ctx.secrets),
+    ...(action.description ? { description: redactSecrets(action.description, ctx.secrets) } : {}),
+    ...(action.recommended ? { recommended: true } : {}),
+  }));
+  // Batch items: question, detail and choice text are redacted; ids and ticket refs stay.
+  const safeItems = event.items?.map((item) => ({
+    id: item.id,
+    question: redactSecrets(item.question, ctx.secrets),
+    ...(item.detail ? { detail: redactSecrets(item.detail, ctx.secrets) } : {}),
+    ...(item.ticketRef ? { ticketRef: item.ticketRef } : {}),
+    ...(item.actions
+      ? {
+          actions: item.actions.map((action) => ({
+            id: action.id,
+            label: redactSecrets(action.label, ctx.secrets),
+            ...(action.description
+              ? { description: redactSecrets(action.description, ctx.secrets) }
+              : {}),
+            ...(action.recommended ? { recommended: true } : {}),
+          })),
+        }
+      : {}),
   }));
   await ctx.computer.checkpoint.flush();
   await persistTurnCheckpoint(ctx, event.executionId);
@@ -53,10 +74,12 @@ export async function pauseForAnswer(ctx: RunContext, event: RuntimeEvent<"ask">
         ...(safeDetail ? { detailFormat: "text" as const } : {}),
         status: "pending",
         actions: safeActions,
+        ...(safeItems ? { items: safeItems } : {}),
       },
     ],
     // Keep unredacted labels on the run for resume; message blocks stay redacted.
     offeredActions: event.actions,
+    offeredItems: event.items,
   });
   if (!paused) return;
   await enqueueSteeringContinuation(deps, paused.continuationRunId);

@@ -5,8 +5,11 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { formatFinishedShellCommand } from "../computers/sandbox/shell-command-stream.js";
 import {
+  EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
+  EMPTY_RESPONSE_REMINDER_PROMPT,
   SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
   SILENT_TOOL_CONTINUATION_PROMPT,
+  UNFINISHED_WORK_CONTINUATION_PROMPT,
 } from "../runs/assembly/continuation.prompt.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
@@ -23,6 +26,13 @@ import {
 const image = { type: "image_url", image_url: { url: "data:image/png;base64,aGk=" } };
 
 describe("automated messages are labelled as not from the user", () => {
+  it("labels the empty-response reminders and asks before guessing", () => {
+    expect(EMPTY_RESPONSE_REMINDER_PROMPT.startsWith(AUTOMATED_MESSAGE_LABEL)).toBe(true);
+    expect(EMPTY_RESPONSE_REMINDER_PROMPT).toContain("ask them instead of guessing");
+    expect(EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT.startsWith(AUTOMATED_MESSAGE_LABEL)).toBe(true);
+    expect(UNFINISHED_WORK_CONTINUATION_PROMPT.startsWith(AUTOMATED_MESSAGE_LABEL)).toBe(true);
+  });
+
   it("relabels the screenshot message pi-ai adds after a tool result and keeps the images", () => {
     const payload = {
       model: "m",

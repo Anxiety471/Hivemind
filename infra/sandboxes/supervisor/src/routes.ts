@@ -29,6 +29,7 @@ import {
   computerMountsMatch,
   computerNetworkNameFor,
   computerNetworkOwnerFor,
+  computerPackageMirrorMatches,
   containerCreateOptions,
   containerNameFor,
   controlPortPublicationMatches,
@@ -44,6 +45,7 @@ import {
   computerComputeGpus,
   computerDns,
   computerMounts,
+  computerPackageMirrorUrl,
   controlViaLoopback,
   dataDir,
   docker,
@@ -77,6 +79,7 @@ import {
   removeBotNetwork,
   removeUnusedComputerNetwork,
 } from "./networks.js";
+import { packageMirrorConfigArchive } from "./package-mirror-config.js";
 import { publishedScreenUrl } from "./readiness.js";
 import { limitSupervisorRequestBody, supervisorFileWriteSchema } from "./request-limits.js";
 import {
@@ -189,8 +192,14 @@ app.post("/computers", async (c) => {
       }
       const computerUser = runtimeInfo ? COMPUTER_USER : hostComputerUser(hostUid, hostGid);
       const existing = await findBotContainer(body.botId, body.spaceId);
+      let replacingInPlace = false;
       if (existing) {
         const info = await existing.inspect();
+        replacingInPlace =
+          info.Config.User === computerUser &&
+          (info.HostConfig.Binds?.includes(`${storage.homePath}:/home/rakazo`) ||
+            (storage.homeVolume !== undefined &&
+              homeVolumeMatches(info.HostConfig.Mounts, storage.homeVolume)));
         const desired = await docker.getImage(COMPUTER_IMAGE).inspect();
         const controlPublishOk = controlPortPublicationMatches(
           info.HostConfig.PortBindings,
@@ -265,6 +274,8 @@ app.post("/computers", async (c) => {
           computerLocaleMatches(info.Config.Env, locale) &&
           // And the bot browser's proxy auto-config.
           computerBrowserProxyPacMatches(info.Config.Env, computerBrowserProxyPacUrl) &&
+          // And the package mirror its Cargo and Composer config files were written for.
+          computerPackageMirrorMatches(info.Config.Env, computerPackageMirrorUrl) &&
           controlPublishOk &&
           (!storage.homeVolume || homeVolumeMatches(info.HostConfig.Mounts, storage.homeVolume)) &&
           // A computer that cannot rejoin its network is replaced below instead.
@@ -310,7 +321,11 @@ app.post("/computers", async (c) => {
           runtimeInfo || hostUid === undefined || hostGid === undefined || hostUid === 0
             ? COMPUTER_GID
             : hostGid;
-        await assertComputerHomeWritable(serviceHomePath, effectiveUid, effectiveGid);
+        // Replacing a computer that already runs as this user on this very home changes no
+        // ownership, so the walk (millions of entries on a large home, minutes to hours)
+        // would only delay provisioning.
+        if (!replacingInPlace)
+          await assertComputerHomeWritable(serviceHomePath, effectiveUid, effectiveGid);
         const name = containerNameFor(body.botId);
         const createdNetwork =
           screenNetworkMode === "internal"
@@ -330,6 +345,7 @@ app.post("/computers", async (c) => {
           mounts: computerMounts,
           computeGpus: computerComputeGpus,
           browserProxyPacUrl: computerBrowserProxyPacUrl,
+          packageMirrorUrl: computerPackageMirrorUrl,
           locale,
         });
         let container: Docker.Container | undefined;
@@ -359,6 +375,12 @@ app.post("/computers", async (c) => {
             () => docker.createContainer(options),
             removeNamedComputer,
           );
+          // Cargo and Composer read config files, not variables: write them before first start.
+          if (computerPackageMirrorUrl) {
+            await container.putArchive(packageMirrorConfigArchive(computerPackageMirrorUrl), {
+              path: "/",
+            });
+          }
           await container.start();
         } catch (error) {
           // Never force removal: a lost start response may hide a running computer.

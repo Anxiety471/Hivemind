@@ -79,7 +79,14 @@ export function DriveFilePickerDialog({
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-start text-body hover:bg-accent"
               >
                 <FileText size={15} strokeWidth={1.8} className="shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{file.name}</div>
+                  {file.description || file.slug ? (
+                    <div className="truncate text-label text-muted-foreground">
+                      {file.description ?? file.slug}
+                    </div>
+                  ) : null}
+                </div>
                 <span className="shrink-0 text-label text-muted-foreground">
                   {formatFileSize(file.size)}
                 </span>

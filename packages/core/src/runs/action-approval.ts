@@ -33,6 +33,10 @@ const APPROVAL_EXEMPT_TOOLS = new Set([
   "schedule_cancel",
   "list_fleet",
   "organize_bot",
+  "drive_save",
+  "drive_create_folder",
+  "drive_move",
+  "drive_update",
   // The wallet owner approves every purchase in the wallet itself; a card here would ask twice.
   "request_purchase",
 ]);
@@ -42,6 +46,8 @@ const APPROVAL_EXEMPT_TOOLS = new Set([
  * run. Anything else, new tools included, is gated there (see outsideRunToolRequiresApproval).
  */
 const OUTSIDE_RUN_SAFE_BUILTIN_TOOLS = new Set([
+  // Every call it makes is gated on its own, so the script itself changes nothing.
+  "code_mode",
   "ask_user",
   "attach_file",
   "browser_snapshot",
@@ -56,6 +62,7 @@ const OUTSIDE_RUN_SAFE_BUILTIN_TOOLS = new Set([
   "read_email",
   "read_file",
   "read_history",
+  "read_memory_doc",
   "recall_memory",
   "list_history",
   "reflect_memory",
@@ -64,7 +71,9 @@ const OUTSIDE_RUN_SAFE_BUILTIN_TOOLS = new Set([
   "schedule_list",
   "scratchpad_list",
   "search_history",
+  "search_memory_docs",
   "service_search",
+  "skill_mode",
   "skill_read",
   "task_catalog",
   "web_fetch",
@@ -92,6 +101,9 @@ const APPROVAL_REQUIRED_BUILTIN_TOOLS = new Set([
   "create_child_routine",
   "feedback",
   "send_email",
+  // Code every bot can then run, so the person sees it first.
+  "command_save",
+  "command_delete",
 ]);
 const EXPLICIT_APPROVAL_BUILTIN_TOOLS = new Set([
   // Permanent: the owner sees the exact address before it is theirs for good.
@@ -247,6 +259,8 @@ export function isOwnerStartedRun(trigger: string, followUpFromUser: boolean): b
  */
 const OWN_STATE_RESULT_TOOLS = new Set([
   "ask_user",
+  // The script itself reads nothing: each call it makes goes through the gate and taints on its own.
+  "code_mode",
   // Only confirms what the bot itself sent.
   "send_email",
   "connect_app",
@@ -261,6 +275,7 @@ const OWN_STATE_RESULT_TOOLS = new Set([
   "list_secrets",
   "message_user",
   "read_history",
+  "read_memory_doc",
   "recall_memory",
   "list_history",
   "reflect_memory",
@@ -280,6 +295,8 @@ const OWN_STATE_RESULT_TOOLS = new Set([
   "scratchpad_remove",
   "scratchpad_update",
   "search_history",
+  "search_memory_docs",
+  "skill_mode",
   "skill_read",
   "task_catalog",
   "update_preferences",

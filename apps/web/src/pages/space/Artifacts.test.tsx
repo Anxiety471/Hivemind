@@ -62,8 +62,11 @@ vi.mock("@rakazo/ui-web", () => {
     BotAvatar: () => <span />,
     CopyTextFallback: () => null,
     Spinner: (props: ComponentProps<"svg">) => <svg role="status" {...props} />,
-    Button: (props: ComponentProps<"button">) => <button {...props} />,
+    Button: ({ loading: _loading, ...props }: ComponentProps<"button"> & { loading?: boolean }) => (
+      <button {...props} />
+    ),
     buttonVariants: () => "",
+    cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(" "),
     Empty: Container,
     EmptyDescription: Container,
     EmptyHeader: Container,

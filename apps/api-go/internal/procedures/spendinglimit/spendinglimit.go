@@ -119,7 +119,7 @@ func Payments(ctx context.Context, database *db.DB, actor db.Actor) ([]Payment, 
 		return nil
 	})
 	if err != nil {
-		return nil, failure(err)
+		return nil, shared.Failure(err)
 	}
 	return payments, nil
 }
@@ -155,7 +155,7 @@ func get(ctx context.Context, database *db.DB, actor db.Actor, logger *slog.Logg
 		return err
 	})
 	if err != nil {
-		return Status{}, failure(err)
+		return Status{}, shared.Failure(err)
 	}
 	return status, nil
 }
@@ -232,15 +232,4 @@ func validCurrency(value string) bool {
 
 func validPeriod(value string) bool {
 	return value == "day" || value == "week" || value == "month" || value == "none"
-}
-
-func failure(err error) *orpc.Error {
-	var answer *orpc.Error
-	if errors.As(err, &answer) {
-		return answer
-	}
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
 }

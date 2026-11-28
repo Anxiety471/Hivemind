@@ -4,6 +4,7 @@ package drivefiles
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
@@ -11,6 +12,25 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 )
+
+type nullableString struct {
+	Present bool
+	Value   *string
+}
+
+func (n *nullableString) UnmarshalJSON(data []byte) error {
+	n.Present = true
+	if string(data) == "null" {
+		n.Value = nil
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	n.Value = &s
+	return nil
+}
 
 func decodeID(raw string, label string) (string, *orpc.Error) {
 	trimmed := strings.TrimSpace(raw)
@@ -230,6 +250,35 @@ func Procedures(svc *drive.Service) []local.Procedure {
 					return nil, failure
 				}
 				return svc.RenameFile(ctx, actor, id, req.Name)
+			},
+		},
+		{
+			Name: "files.update",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				if svc == nil {
+					return nil, orpc.Unavailable()
+				}
+				var req struct {
+					FileID      string         `json:"fileId"`
+					Name        *string        `json:"name"`
+					Description nullableString `json:"description"`
+					Slug        nullableString `json:"slug"`
+				}
+				if failure := input.DecodeInto(&req); failure != nil {
+					return nil, failure
+				}
+				id, failure := decodeID(req.FileID, "fileId")
+				if failure != nil {
+					return nil, failure
+				}
+				return svc.UpdateFile(ctx, actor, drive.UpdateFileInput{
+					FileID:         id,
+					Name:           req.Name,
+					HasDescription: req.Description.Present,
+					Description:    req.Description.Value,
+					HasSlug:        req.Slug.Present,
+					Slug:           req.Slug.Value,
+				})
 			},
 		},
 		{

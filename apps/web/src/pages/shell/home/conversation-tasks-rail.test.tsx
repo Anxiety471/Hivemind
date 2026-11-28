@@ -98,6 +98,9 @@ it("renders synced tasks inline beside the conversation and opens the Kanban mod
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
+    pullRequests: [],
+    issues: [],
+    repository: null,
   };
   botTickets.current = [ticket];
 
@@ -149,6 +152,9 @@ it("puts tasks waiting on the user first and names the bots other blocked tasks 
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
+    pullRequests: [],
+    issues: [],
+    repository: null,
   };
   botTickets.current = [
     { ...base, id: "t-doing", ref: "TASK-1", title: "Active item", status: "doing" },
@@ -229,6 +235,9 @@ it("changes a task's status from its right-click menu", async () => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
+    pullRequests: [],
+    issues: [],
+    repository: null,
   } satisfies Ticket;
   botTickets.current = [ticket];
   await act(async () => {
@@ -277,6 +286,9 @@ it("remembers a folded section after the rail remounts", async () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       completedAt: null,
+      pullRequests: [],
+      issues: [],
+      repository: null,
     },
   ];
   const toggle = () =>
@@ -324,6 +336,9 @@ it("collapses and expands the entire Tasks rail and persists the state", async (
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       completedAt: null,
+      pullRequests: [],
+      issues: [],
+      repository: null,
     },
   ];
   const rail = () => host.querySelector<HTMLElement>('[data-testid="conversation-tasks-rail"]');

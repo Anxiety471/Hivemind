@@ -361,6 +361,36 @@ describe("an item for chosen bots", () => {
     await click(trigger);
   }
 
+  it("offers a bot created while the editor was closed", async () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    // The app keeps a read for 30s; a bot made elsewhere must still be offered on the next open.
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+    });
+    const custom = { ...rows[3]!, allBots: true, botIds: [] };
+    vault.list.mockResolvedValue([custom]);
+    vault.put.mockResolvedValue(custom);
+    bots.list
+      .mockResolvedValueOnce([{ id: "bot-1", name: "Ada", color: "#F97316" }])
+      .mockResolvedValue([
+        { id: "bot-1", name: "Ada", color: "#F97316" },
+        { id: "bot-9", name: "Researcher", color: "#6366F1" },
+      ]);
+    await render();
+    await click(rowNamed("custom"));
+    await click("vault-item-edit");
+    await openPicker();
+    expect(menuItem("Researcher")).toBeUndefined();
+    await click("settings-back");
+    await click("vault-item-edit");
+    await openPicker();
+    await vi.waitFor(() => expect(menuItem("Researcher")).not.toBeUndefined());
+  });
+
   it("names the chosen bots, and offers no choice while one of them isn't shown", async () => {
     vi.stubGlobal("matchMedia", () => ({
       matches: false,

@@ -1688,7 +1688,7 @@ describeJourneys("required product journeys", () => {
     expect(connector.records.length).toBe(afterFirst);
   });
 
-  it("9: export includes memory and the bot's own files but not secrets or browser sessions", async () => {
+  it("9: export carries memory and history but not shared workspace files, secrets or browser sessions", async () => {
     const cookie = await signup(app, `export-j-${stamp}@rakazo.test`, "Export");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {
       name: "Chief",
@@ -1727,8 +1727,11 @@ describeJourneys("required product journeys", () => {
       botId: bot.id,
     });
     const rawJson = JSON.stringify(manifest);
-    expect(manifest.files.map((file) => file.path)).toContain("notes/result.txt");
-    expect(rawJson).toContain("export-ok");
+    // Both bots write under the Team Computer's shared root, so neither file is this bot's:
+    // a bot export carries its configuration and history, and the Space export carries files.
+    expect(manifest.files).toEqual([]);
+    // The first bot's history quotes what it was asked to write; the other bot's file content
+    // itself must not ride along.
     expect(rawJson).not.toContain("other-bot-private");
     expect(rawJson).toContain("Be useful");
     expect(rawJson).not.toContain(secret);
@@ -2543,7 +2546,7 @@ describeJourneys("required product journeys", () => {
     expect(await prisma.run.count({ where: { botId: bot.id, trigger: "helper_result" } })).toBe(0);
   });
 
-  it("13g: a replayed start starts nothing new, and one bot runs at most four helpers", async () => {
+  it("13g: a replayed start starts nothing new, and one bot runs at most eight helpers", async () => {
     const { cookie, bot } = await newChief("Background Cap");
     const key = `cap-replay-${stamp}`;
     expect(await startHelper(cookie, bot.id, "keep working on the venue list", key)).toMatchObject({
@@ -2555,12 +2558,15 @@ describeJourneys("required product journeys", () => {
     expect(await prisma.run.count({ where: { botId: bot.id, trigger: "helper" } })).toBe(1);
     expect(await prisma.thread.count({ where: { helperBotId: bot.id } })).toBe(1);
 
+    // The chat already runs one helper, and MAX_HELPERS_PER_CHAT is 8.
     const results = await Promise.all(
-      [1, 2, 3, 4].map(() => startHelper(cookie, bot.id, "keep working on the venue list")),
+      [1, 2, 3, 4, 5, 6, 7, 8].map(() =>
+        startHelper(cookie, bot.id, "keep working on the venue list"),
+      ),
     );
-    expect(results.filter((result) => "ok" in result)).toHaveLength(3);
+    expect(results.filter((result) => "ok" in result)).toHaveLength(7);
     expect(results.filter((result) => "error" in result)).toHaveLength(1);
-    expect(await prisma.run.count({ where: { botId: bot.id, trigger: "helper" } })).toBe(4);
+    expect(await prisma.run.count({ where: { botId: bot.id, trigger: "helper" } })).toBe(8);
     await rpc(app, cookie, "threads/stop", { botId: bot.id });
     expect(
       await prisma.run.count({

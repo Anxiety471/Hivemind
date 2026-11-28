@@ -10,6 +10,7 @@ import { DEFAULT_NEW_BOT_AVATAR_SET, hasLab } from "@rakazo/contracts";
 import {
   activeThreadRuns,
   answerableAskMessageIds,
+  canRetryRunError,
   channelMessageSender,
   chatSnoozed,
   chatUserBubbleColors,
@@ -43,6 +44,7 @@ import { IncomingCall } from "../components/call/IncomingCall";
 import { ComputerUpdateProgress } from "../components/computers/ComputerUpdateProgress";
 import { PageLoading } from "../components/PageLoading";
 import { PageViewHost } from "../components/pages/PageViewHost";
+import { ReconnectingNotice } from "../components/ReconnectingNotice";
 import { authClient } from "../lib/auth/auth";
 import { peekBootstrapSeed } from "../lib/bootstrap";
 import { setCallMinimized, startCall, useCallSession } from "../lib/calls/call-session";
@@ -50,6 +52,7 @@ import type { HelperThreadTarget } from "../lib/chat/helper-thread";
 import { toolActivityPreference } from "../lib/chat/tool-activity-preference";
 import { composerEnterToSendPreference } from "../lib/composer/composer-enter-to-send-pref";
 import { computersAreUnavailable } from "../lib/computers/computer-sandbox";
+import { driveOpenPath } from "../lib/files/drive-url";
 import { composerModelPickerPreference } from "../lib/models/composer-model-picker-preference";
 import type { ArtifactTarget } from "../lib/pages/artifact-open";
 import { PagesProvider, usePagesForChat } from "../lib/pages/pages";
@@ -82,6 +85,7 @@ import type { ChatMenuState, ChatMenuTarget } from "./shell/chat/chat-context-me
 import { ChatContextMenu } from "./shell/chat/chat-context-menu";
 import { ChatFindBar } from "./shell/chat/chat-find-bar";
 import { ChatHeader } from "./shell/chat/chat-header";
+import { ChatReferencesProvider } from "./shell/chat/chat-references";
 import { FALLBACK_BOT_COLOR } from "./shell/chat/chat-shared";
 import { HelperThreadView } from "./shell/chat/helper-thread-view";
 import { Transcript } from "./shell/chat/transcript";
@@ -765,6 +769,8 @@ function SpaceShell() {
   const composer = useComposerActions({
     rpc,
     pageSession: pages.session,
+    userId,
+    spaceId: currentSpaceId,
     activeId: active?.id,
     inGroup,
     groupId,
@@ -785,6 +791,17 @@ function SpaceShell() {
     flushPendingBrowserNotifications,
   });
   const { sending, sendError, stopRun } = composer;
+  function openModels() {
+    // A group's failed run belongs to one member; change that bot's model.
+    const failedBotId = inGroup && composer.displayedRunError ? activeSnapshot?.run?.botId : null;
+    if (active && !inGroup) {
+      setPanel("settings");
+      setModelFocusRequest(Date.now());
+    } else if (failedBotId) {
+      openChatSettings("bot", failedBotId);
+      setModelFocusRequest(Date.now());
+    } else openSettings("models");
+  }
   function openChatSettings(kind: "bot" | "group", id: string) {
     const destKey =
       userId && bootstrapMe?.spaceId
@@ -875,6 +892,14 @@ function SpaceShell() {
     },
     [active?.id, groupId, read.markBotUnread, read.markGroupUnreadFrom],
   );
+  // Read through a ref so the chat's memoized rows keep one callback as routines load.
+  const openRoutineLatest = useRef((_name: string) => {});
+  openRoutineLatest.current = (name: string) => {
+    const routine = activeRoutines.find((item) => item.name === name);
+    if (routine) startRoutine(routine);
+    else setPanel("routines");
+  };
+  const openRoutine = useCallback((name: string) => openRoutineLatest.current(name), []);
   const openPeerMessages = useCallback(
     (peer: { peerBotId: string; peerBotName: string }) => {
       setPeerConversation(peer);
@@ -985,6 +1010,24 @@ function SpaceShell() {
         navigate={navigate}
       />
     ) : null;
+  const snapshotRun = activeSnapshot?.run;
+  const inlineRetryableRun =
+    !recordingSkill &&
+    snapshotRun?.status === "failed" &&
+    snapshotRun.error &&
+    canRetryRunError(snapshotRun.error) &&
+    (!snapshotRun.userId || !userId || snapshotRun.userId === userId)
+      ? {
+          id: snapshotRun.id,
+          botId: snapshotRun.botId,
+          error: snapshotRun.error,
+          resumable: snapshotRun.resumable,
+        }
+      : null;
+  const inlineRetryableRunId = inlineRetryableRun?.id ?? null;
+  useEffect(() => {
+    if (inlineRetryableRunId) composer.handleRunErrorPresented(inlineRetryableRunId);
+  }, [composer.handleRunErrorPresented, inlineRetryableRunId]);
   const chatMenu: ChatMenuState = {
     menu: botMenu,
     setMenu: setBotMenu,
@@ -1012,6 +1055,7 @@ function SpaceShell() {
           if (active) void refreshThread(active.id);
         }}
       />
+      <ReconnectingNotice />
       {bootstrapMe !== undefined ? (
         <HostComputerPrompt initialMe={bootstrapMe ?? undefined} onMeUpdated={setBootstrapMe} />
       ) : null}
@@ -1097,6 +1141,9 @@ function SpaceShell() {
         user={session.data?.user}
         boardEnabled={hasLab(bootstrapMe?.labs, "board")}
         navLinks={desktopBridge() ? [] : (bootstrapMe?.navLinks ?? [])}
+        driveUrl={
+          desktopBridge() || !bootstrapMe?.driveUrl ? undefined : driveOpenPath(bootstrapMe.spaceId)
+        }
         mobileApp={bootstrapMe?.mobileApp}
         openSettings={openSettings}
         openIntegrations={() => setOverlay({ kind: "integrations" })}
@@ -1169,6 +1216,7 @@ function SpaceShell() {
           ) : (
             <Transcript
               key={activeSnapshot?.threadId}
+              threadLoading={Boolean(active || activeGroup) && !activeSnapshot}
               meId={userId}
               scrollRef={thread.messageScroll}
               scrollRequest={scrollRequest}
@@ -1188,6 +1236,9 @@ function SpaceShell() {
               workingRoutine={workingRoutineName(workingRuns)}
               activeRun={workingRuns[0] ?? activeSnapshot?.run ?? null}
               threadRuns={currentRuns}
+              failedRun={inlineRetryableRun}
+              onRetryRun={composer.retryRun}
+              retryingRun={composer.retryingRun}
               onStop={stopRun}
               onRewind={composer.rewindRun}
               userBubble={userBubble}
@@ -1206,6 +1257,7 @@ function SpaceShell() {
               onReact={composer.reactToMessage}
               onJumpToMessage={jumpToReplyMessage}
               onOpenPeerMessages={openPeerMessages}
+              onOpenRoutine={openRoutine}
               onOpenSubagent={setHelperThread}
               memberName={resolveTranscriptMemberName}
               peerBot={resolveTranscriptBot}
@@ -1220,6 +1272,16 @@ function SpaceShell() {
               onReleaseComputer={computerControls.onReleaseComputer}
               onOpenImportSetup={openImportSetup}
               rpc={rpc}
+              pendingSends={composer.pendingSends}
+              onRetryPendingSend={composer.retryPendingSend}
+              onSendPendingAsFile={composer.sendPendingAsFile}
+              onDiscardPendingSend={composer.discardPendingSend}
+              onOpenModels={openModels}
+              // A job card's controls speak in this chat, exactly as the composer would.
+              onJobAction={async (text) => {
+                const accepted = await composer.sendMessage(text, [], newClientId());
+                if (!accepted) throw new Error(t`Could not send the instruction.`);
+              }}
             />
           )}
         </div>
@@ -1257,21 +1319,10 @@ function SpaceShell() {
               sendError={sendError}
               imageConfirmation={composer.imageConfirmation}
               onDraftEdited={composer.clearImageConfirmation}
-              onOpenModels={() => {
-                // A group's failed run belongs to one member; change that bot's model.
-                const failedBotId =
-                  inGroup && composer.displayedRunError ? activeSnapshot?.run?.botId : null;
-                if (active && !inGroup) {
-                  setPanel("settings");
-                  setModelFocusRequest(Date.now());
-                } else if (failedBotId) {
-                  openChatSettings("bot", failedBotId);
-                  setModelFocusRequest(Date.now());
-                } else openSettings("models");
-              }}
+              onOpenModels={openModels}
               onOpenConnections={() => openSettings("models")}
               onOpenBilling={() => openSettings("billing")}
-              runError={composer.displayedRunError}
+              runError={inlineRetryableRun ? null : composer.displayedRunError}
               runErrorId={composer.displayedRunErrorId}
               onRunErrorPresented={composer.handleRunErrorPresented}
               onDismissError={composer.dismissComposerError}
@@ -1559,7 +1610,9 @@ function SpaceShell() {
   return (
     <SpaceRpcProvider spaceId={shellSpaceId}>
       {initialBotsLoaded || initialLoadFailed ? (
-        <PagesProvider value={pages}>{shell}</PagesProvider>
+        <PagesProvider value={pages}>
+          <ChatReferencesProvider>{shell}</ChatReferencesProvider>
+        </PagesProvider>
       ) : (
         <PageLoading />
       )}

@@ -2,15 +2,34 @@ import type { SkillRecord, SkillSource } from "@rakazo/core";
 import {
   buildSkillMd,
   findSkillByName,
+  formatSkillRunPrompt,
   isSkillReadOnly,
   mergeBuiltinSkills,
   parseSkillMd,
 } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { availableInSpace } from "@rakazo/db";
-import { BUILTIN_AGENT_SKILLS } from "./builtin-skills.prompt.js";
+import { parsePlaybook } from "../bots/teaching-session.js";
+import {
+  BOARD_SKILL_NAME,
+  BUILTIN_AGENT_SKILLS,
+  COMPUTER_SKILL_NAME,
+  computerToolsOffered,
+  DOCUMENTS_SKILL_NAME,
+  HISTORY_SKILL_NAME,
+  ROUTINES_SKILL_NAME,
+  SUBAGENTS_SKILL_NAME,
+} from "./builtin-skills.prompt.js";
+import {
+  SKILL_MODE,
+  SKILL_MODE_DEFAULT_LIMIT,
+  SKILL_MODE_MAX_BATCH_NAMES,
+} from "./skill-mode.tool-definition.js";
+import type { SearchableSkill, SearchableSkillSource } from "./skill-search.js";
+import { searchSkills } from "./skill-search.js";
 
 export const SKILL_TOOL_NAMES = new Set([
+  SKILL_MODE,
   "skill_read",
   "skill_create",
   "skill_update",
@@ -316,4 +335,332 @@ export async function skillDeleteFromTool(
   });
   if (deleted.count !== 1) return { error: SHARED_SKILL_ERROR };
   return { ok: true, name: existing.name };
+}
+
+export type TaughtSkillSummaryRow = {
+  id: string;
+  name: string;
+  goal: string;
+  userId: string;
+  playbook: unknown;
+};
+
+/**
+ * Filter built-in/user/plugin skills to the ones whose prerequisites exist in this run.
+ * Shared by prompt assembly and `skill_mode` so both see the same skill catalog.
+ */
+export function filterRunAgentSkills<T extends SkillRecord & { id?: string }>(
+  agentSkills: readonly T[],
+  offeredToolNames: ReadonlySet<string>,
+  nonOwnerChatRun: boolean,
+): T[] {
+  const boardOffered = offeredToolNames.has("ticket_update");
+  const historyOffered = offeredToolNames.has("search_history");
+  const routinesOffered =
+    offeredToolNames.has("schedule_create") && offeredToolNames.has("command_save");
+  const computerOffered = computerToolsOffered(offeredToolNames);
+  const subagentsOffered = offeredToolNames.has("run_subagent");
+  const base = nonOwnerChatRun ? (builtinAgentSkillRecords() as unknown as T[]) : [...agentSkills];
+  return base.filter(
+    (skill) =>
+      skill.source !== "builtin" ||
+      ((boardOffered || skill.name !== BOARD_SKILL_NAME) &&
+        (historyOffered || skill.name !== HISTORY_SKILL_NAME) &&
+        (routinesOffered || skill.name !== ROUTINES_SKILL_NAME) &&
+        (computerOffered || skill.name !== COMPUTER_SKILL_NAME) &&
+        (computerOffered || skill.name !== DOCUMENTS_SKILL_NAME) &&
+        (subagentsOffered || skill.name !== SUBAGENTS_SKILL_NAME)),
+  );
+}
+
+/** Taught skills visible to a run, honoring owner/messaging boundaries. */
+export function filterRunTaughtSkills<T extends { userId: string }>(
+  savedSkills: readonly T[],
+  options: { ownerStartedRun: boolean; userId: string; nonOwnerChatRun: boolean },
+): T[] {
+  if (options.nonOwnerChatRun) return [];
+  return savedSkills.filter((skill) => options.ownerStartedRun || skill.userId === options.userId);
+}
+
+/** Render a saved taught skill into the markdown playbook format bots follow. */
+export function formatTaughtSkillContent(skill: TaughtSkillSummaryRow): {
+  name: string;
+  whenToUse: string;
+  content: string;
+} {
+  const name = skill.name || skill.goal.slice(0, 80);
+  const playbook = parsePlaybook(skill.playbook);
+  const whenToUse = playbook.whenToUse || skill.goal;
+  return {
+    name,
+    whenToUse,
+    content: formatSkillRunPrompt(name, playbook),
+  };
+}
+
+/** Convert scoped agent + taught skills into indexable search documents. */
+export function buildSearchableSkills(
+  agentSkills: readonly (SkillRecord & { id: string })[],
+  taughtSkills: readonly TaughtSkillSummaryRow[] = [],
+  filePathsById?: ReadonlyMap<string, readonly string[]>,
+): SearchableSkill[] {
+  const out: SearchableSkill[] = agentSkills.map((skill) => ({
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    source: skill.source,
+    readOnly: skill.readOnly,
+    content: skill.content,
+    ...(filePathsById?.get(skill.id)?.length ? { filePaths: filePathsById.get(skill.id) } : {}),
+  }));
+  const seenNames = new Set(out.map((entry) => entry.name.trim().toLowerCase()));
+  for (const taught of taughtSkills) {
+    const formatted = formatTaughtSkillContent(taught);
+    if (!formatted.name.trim()) continue;
+    // If an AgentSkill shares the same name, keep the AgentSkill first; still avoid duplicate exact names.
+    if (seenNames.has(formatted.name.trim().toLowerCase())) continue;
+    seenNames.add(formatted.name.trim().toLowerCase());
+    out.push({
+      id: `taught:${taught.id}`,
+      name: formatted.name,
+      description: formatted.whenToUse || taught.goal,
+      source: "taught",
+      readOnly: true,
+      content: formatted.content,
+      whenToUse: formatted.whenToUse,
+    });
+  }
+  return out;
+}
+
+async function loadSkillFileMap(
+  prisma: PrismaClient,
+  owner: SkillOwner,
+  skillIds: readonly string[],
+): Promise<Map<string, Record<string, string>>> {
+  const map = new Map<string, Record<string, string>>();
+  const nonBuiltinIds = skillIds.filter(
+    (id) => !id.startsWith("builtin:") && !id.startsWith("taught:"),
+  );
+  if (nonBuiltinIds.length === 0) return map;
+  const rows = await prisma.agentSkill.findMany({
+    where: { id: { in: nonBuiltinIds }, ...availableInSpace(owner) },
+    select: { id: true, files: true },
+  });
+  for (const row of rows as Array<{ id?: string; files?: unknown }>) {
+    if (!row.id) continue;
+    const files = skillFiles(row.files);
+    if (Object.keys(files).length > 0) map.set(row.id, files);
+  }
+  return map;
+}
+
+async function loadAllFilePathsById(
+  prisma: PrismaClient,
+  owner: SkillOwner,
+): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  const rows = await prisma.agentSkill.findMany({
+    where: availableInSpace(owner),
+    select: { id: true, files: true },
+  });
+  for (const row of rows as Array<{ id?: string; files?: unknown }>) {
+    if (!row.id) continue;
+    const paths = Object.keys(skillFiles(row.files)).sort();
+    if (paths.length > 0) map.set(row.id, paths);
+  }
+  return map;
+}
+
+function asSearchSource(value: unknown): SearchableSkillSource | undefined {
+  if (value === "builtin" || value === "user" || value === "plugin" || value === "taught") {
+    return value;
+  }
+  return undefined;
+}
+
+export async function skillModeFromTool(
+  prisma: PrismaClient,
+  scope: SkillOwner & {
+    botId?: string;
+    ownerStartedRun?: boolean;
+    nonOwnerChatRun?: boolean;
+    offeredToolNames?: ReadonlySet<string>;
+  },
+  input: {
+    query?: string;
+    name?: string;
+    names?: readonly string[];
+    file?: string;
+    list?: boolean;
+    source?: string;
+    limit?: number;
+  },
+): Promise<Record<string, unknown>> {
+  const nonOwnerChatRun = Boolean(scope.nonOwnerChatRun);
+  const ownerStartedRun = scope.ownerStartedRun ?? true;
+  const rawAgentSkills = nonOwnerChatRun
+    ? builtinAgentSkillRecords()
+    : await listAgentSkillRecords(prisma, scope);
+  const agentSkills = scope.offeredToolNames
+    ? filterRunAgentSkills(rawAgentSkills, scope.offeredToolNames, nonOwnerChatRun)
+    : rawAgentSkills;
+
+  const rawTaughtSkills =
+    !nonOwnerChatRun && scope.botId && prisma.taughtSkill?.findMany
+      ? await prisma.taughtSkill.findMany({
+          where: { botId: scope.botId, spaceId: scope.spaceId, status: "saved" },
+        })
+      : [];
+  const taughtSkills = filterRunTaughtSkills(rawTaughtSkills, {
+    ownerStartedRun,
+    userId: scope.userId,
+    nonOwnerChatRun,
+  });
+
+  const filePathsById = !nonOwnerChatRun
+    ? await loadAllFilePathsById(prisma, scope).catch(() => new Map<string, string[]>())
+    : undefined;
+  const searchable = buildSearchableSkills(agentSkills, taughtSkills, filePathsById);
+  const sourceFilter = asSearchSource(input.source);
+
+  const batchNames = Array.isArray(input.names)
+    ? input.names
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, SKILL_MODE_MAX_BATCH_NAMES)
+    : [];
+
+  if (batchNames.length > 0) {
+    const found: SearchableSkill[] = [];
+    const notFound: string[] = [];
+    for (const target of batchNames) {
+      const matched = findSkillByName(searchable, target);
+      if (matched) found.push(matched);
+      else notFound.push(target);
+    }
+    const filesMap = await loadSkillFileMap(
+      prisma,
+      scope,
+      found.map((skill) => skill.id),
+    );
+    const loadedNames = found.map((skill) => skill.name);
+    return {
+      skills: found.map((skill) => {
+        const paths = Object.keys(filesMap.get(skill.id) ?? {}).sort();
+        return {
+          name: skill.name,
+          description: skill.description,
+          source: skill.source,
+          readOnly: skill.readOnly,
+          content: skill.content,
+          ...(paths.length > 0 ? { files: paths } : {}),
+        };
+      }),
+      loaded: loadedNames,
+      ...(notFound.length > 0 ? { notFound } : {}),
+    };
+  }
+
+  const singleName = input.name?.trim();
+  if (singleName) {
+    const skill = findSkillByName(searchable, singleName);
+    if (!skill) {
+      const suggestions = searchSkills(searchable, singleName, { limit: 3 }).hits.map((hit) => ({
+        name: hit.skill.name,
+        source: hit.skill.source,
+        description: hit.skill.description,
+      }));
+      return {
+        error: `Skill "${singleName}" not found.`,
+        ...(suggestions.length > 0 ? { suggestions } : {}),
+      };
+    }
+    const filesMap = await loadSkillFileMap(prisma, scope, [skill.id]);
+    const files = filesMap.get(skill.id) ?? {};
+    const paths = Object.keys(files).sort();
+    const wanted = input.file?.trim().replace(/^\.\//, "");
+    if (wanted) {
+      const text = files[wanted];
+      if (text === undefined) {
+        return { error: `No file "${wanted}" in this skill.`, files: paths };
+      }
+      return {
+        name: skill.name,
+        source: skill.source,
+        file: wanted,
+        content: text,
+        loaded: [skill.name],
+      };
+    }
+    return {
+      name: skill.name,
+      description: skill.description,
+      source: skill.source,
+      readOnly: skill.readOnly,
+      content: skill.content,
+      ...(paths.length > 0 ? { files: paths } : {}),
+      loaded: [skill.name],
+    };
+  }
+
+  const query = input.query?.trim();
+  if (query) {
+    const limit =
+      typeof input.limit === "number" && Number.isFinite(input.limit)
+        ? input.limit
+        : SKILL_MODE_DEFAULT_LIMIT;
+    const result = searchSkills(searchable, query, {
+      limit,
+      ...(sourceFilter ? { source: sourceFilter } : {}),
+    });
+    const autoSkill = result.autoExpand?.skill;
+    const filesMap = autoSkill ? await loadSkillFileMap(prisma, scope, [autoSkill.id]) : undefined;
+    const autoPaths = autoSkill ? Object.keys(filesMap?.get(autoSkill.id) ?? {}).sort() : [];
+    return {
+      query,
+      totalSkills: sourceFilter
+        ? searchable.filter((skill) => skill.source === sourceFilter).length
+        : searchable.length,
+      results: result.hits.map((hit) => ({
+        name: hit.skill.name,
+        source: hit.skill.source,
+        description: hit.skill.description,
+        score: hit.score,
+        matchedIn: hit.matchedIn,
+        ...(hit.matchedHeading ? { matchedHeading: hit.matchedHeading } : {}),
+        ...(hit.snippet ? { snippet: hit.snippet } : {}),
+        ...(hit.skill.filePaths?.length ? { files: hit.skill.filePaths } : {}),
+      })),
+      ...(autoSkill
+        ? {
+            autoLoaded: {
+              name: autoSkill.name,
+              description: autoSkill.description,
+              source: autoSkill.source,
+              readOnly: autoSkill.readOnly,
+              content: autoSkill.content,
+              ...(autoPaths.length > 0 ? { files: autoPaths } : {}),
+            },
+            loaded: [autoSkill.name],
+          }
+        : {}),
+      ...(result.hits.length === 0
+        ? { hint: "No matching skills found. Try broader keywords or skill_mode({ list: true })." }
+        : {}),
+    };
+  }
+
+  const listed = sourceFilter
+    ? searchable.filter((skill) => skill.source === sourceFilter)
+    : searchable;
+  return {
+    totalSkills: listed.length,
+    skills: listed.map((skill) => ({
+      name: skill.name,
+      source: skill.source,
+      description: skill.description,
+      ...(skill.filePaths?.length ? { files: skill.filePaths } : {}),
+    })),
+  };
 }

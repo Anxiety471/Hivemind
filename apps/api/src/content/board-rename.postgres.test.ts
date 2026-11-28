@@ -16,6 +16,7 @@ describe.skipIf(!enabled)("board prefix rename (PostgreSQL)", () => {
   let prisma: PrismaClient;
   let actor: Actor;
   let boardId: string;
+  let initialPrefix: string;
   const suffix = randomUUID().slice(0, 8);
   const organizationId = `board-rename-org-${suffix}`;
   const userId = `board-rename-user-${suffix}`;
@@ -59,6 +60,7 @@ describe.skipIf(!enabled)("board prefix rename (PostgreSQL)", () => {
       const board = await ensureBoard(prisma, spaceId);
       expect(board.nextNumber).toBe(1);
       boardId = board.id;
+      initialPrefix = board.ticketPrefix;
       actor = { spaceId, userId, email: `${userId}@rakazo.test`, isDeploymentOwner: false };
     }),
   );
@@ -151,7 +153,7 @@ describe.skipIf(!enabled)("board prefix rename (PostgreSQL)", () => {
         prisma.board.findUniqueOrThrow({ where: { id: boardId } }),
       );
       expect(board.name).toBe("General");
-      expect(board.ticketPrefix).toBe("RAK");
+      expect(board.ticketPrefix).toBe(initialPrefix);
       expect(board.nextNumber).toBe(2);
       expect(
         await runAsSystem("board rename assertion", () =>

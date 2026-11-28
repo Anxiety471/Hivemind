@@ -217,11 +217,11 @@ vi.mock("react-native", async () => {
 });
 
 import { darkTokens, lightTokens, MAX_FONT_SCALE } from "@rakazo/ui-tokens";
-import { themes } from "prism-react-renderer";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { TextProps } from "react-native";
 import { Platform, Pressable, StyleSheet } from "react-native";
+import { CODE_BLOCK_SAMPLE } from "./code-blocks/code-blocks.test-support";
 import type { LinkFavicons, MermaidDiagramProps } from "./markdown.native";
 import {
   ChatMarkdown,
@@ -624,7 +624,7 @@ describe("native markdown code blocks", () => {
     "preserves blank fence lines without adding a trailing row: %j",
     (code) => {
       const html = renderToStaticMarkup(
-        <ChatMarkdown colorScheme="light">{`\`\`\`\n${code}`}</ChatMarkdown>,
+        <ChatMarkdown palette={lightTokens} colorScheme="light">{`\`\`\`\n${code}`}</ChatMarkdown>,
       );
       const document = new DOMParser().parseFromString(html, "text/html");
       const rows = document.querySelectorAll("rn-scroll-view rn-view[data-flex-direction='row']");
@@ -633,7 +633,8 @@ describe("native markdown code blocks", () => {
       const tokens = [...rows].map((row) => row.querySelector("rn-text"));
       for (const token of tokens) {
         expect(token).not.toBeNull();
-        expect(token?.getAttribute("data-color")).toBe(themes.oneLight.plain.color);
+        // Code is drawn in the app's own ink, the same one every other text uses.
+        expect(token?.getAttribute("data-color")).toBe(lightTokens.foreground);
         for (const attribute of ["data-font-family", "data-font-size"]) {
           expect(token?.getAttribute(attribute)).toBeTruthy();
           expect(token?.getAttribute(attribute)).toBe(tokens[0]?.getAttribute(attribute));
@@ -645,6 +646,23 @@ describe("native markdown code blocks", () => {
       }
     },
   );
+
+  it("draws a bot's unfenced sample as one labelled block", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown palette={lightTokens} colorScheme="light">
+        {CODE_BLOCK_SAMPLE}
+      </ChatMarkdown>,
+    );
+    const text = new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
+    // The prose around it stays a paragraph; the code is one block.
+    expect(text).toContain("Here is where everything runs:");
+    // The JSX the sanitizer used to eat is code, kept exactly as written.
+    expect(text).toContain("render: (v) => <Tag>{v}</Tag>");
+    expect(text).toContain(
+      "ReactDOM.render(<Table columns={columns} dataSource={data} />, mountNode);",
+    );
+    expect(text).toContain("jsx");
+  });
 
   const LONG_LINE =
     '<settings><entry key="preview.enabled" value="true" note="a line wider than the bubble"/></settings>';
@@ -737,7 +755,10 @@ describe("native markdown prose fences", () => {
     "keeps a fence marked %j monospaced in a sideways scroll view",
     (language) => {
       const html = renderToStaticMarkup(
-        <ChatMarkdown colorScheme="light">{`\`\`\`${language}\nconst a = 1;\n\`\`\``}</ChatMarkdown>,
+        <ChatMarkdown
+          palette={lightTokens}
+          colorScheme="light"
+        >{`\`\`\`${language}\nconst a = 1;\n\`\`\``}</ChatMarkdown>,
       );
       const document = new DOMParser().parseFromString(html, "text/html");
       expect(document.querySelector("rn-scroll-view")).not.toBeNull();
@@ -749,7 +770,7 @@ describe("native markdown prose fences", () => {
 
   it("preserves a prose fence's lines and blank lines", () => {
     const html = renderToStaticMarkup(
-      <ChatMarkdown colorScheme="light">
+      <ChatMarkdown palette={lightTokens} colorScheme="light">
         {"```text\nDear team,\n\n  see you Monday.\n```"}
       </ChatMarkdown>,
     );
@@ -784,7 +805,11 @@ describe("native markdown prose fences", () => {
   it("aligns each prose line by its own direction, like a paragraph", () => {
     const align = (markdown: string, line: string) =>
       textStyle(
-        renderToStaticMarkup(<ChatMarkdown colorScheme="light">{markdown}</ChatMarkdown>),
+        renderToStaticMarkup(
+          <ChatMarkdown palette={lightTokens} colorScheme="light">
+            {markdown}
+          </ChatMarkdown>,
+        ),
         line,
       )["data-text-align"];
     expect(align("```text\nשלום רב.\nDear team,\n```", "שלום רב.")).toBe("right");
@@ -946,7 +971,9 @@ describe("native markdown re-renders", () => {
 
   it("draws each code line as one text with its tokens inside", () => {
     const html = renderToStaticMarkup(
-      <ChatMarkdown colorScheme="light">{"```ts\nconst a = 1;\nreturn a;\n```"}</ChatMarkdown>,
+      <ChatMarkdown palette={lightTokens} colorScheme="light">
+        {"```ts\nconst a = 1;\nreturn a;\n```"}
+      </ChatMarkdown>,
     );
     const rows = new DOMParser()
       .parseFromString(html, "text/html")
@@ -1017,9 +1044,9 @@ describe("long user messages", () => {
 
 describe("native markdown code colours", () => {
   it.each([
-    ["dark", darkTokens, themes.oneDark],
-    ["light", lightTokens, themes.oneLight],
-  ] as const)("draws plain code in the %s theme's text colour", (scheme, palette, theme) => {
+    ["dark", darkTokens],
+    ["light", lightTokens],
+  ] as const)("draws plain code in the %s theme's text colour", (scheme, palette) => {
     const html = renderToStaticMarkup(
       <ChatMarkdown palette={palette} colorScheme={scheme}>
         {"```bash\necho hi\n```\n\n```\nplain text\n```"}
@@ -1031,7 +1058,7 @@ describe("native markdown code colours", () => {
     expect(code.length).toBeGreaterThan(0);
     for (const text of code) expect(text.getAttribute("data-color")).toBeTruthy();
     const plain = code.find((text) => text.textContent === "plain text");
-    expect(plain?.getAttribute("data-color")).toBe(theme.plain.color);
+    expect(plain?.getAttribute("data-color")).toBe(palette.foreground);
   });
 });
 
@@ -2263,6 +2290,35 @@ describe("native markdown page links", () => {
     });
     expect(container.querySelector("[data-accessibility-role='link']")).toBeNull();
     expect(container.textContent).toContain("See Duplex voice and x and z");
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+});
+
+describe("native markdown ticket links", () => {
+  it("draws a ticket as a link that opens it, or as its text without a handler", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const openTicket = vi.fn();
+    const markdown = "Work on [TASK-397](rakazo-ticket:TASK-397) next";
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<ChatMarkdown onOpenTicket={openTicket}>{markdown}</ChatMarkdown>);
+    });
+    const links = [...container.querySelectorAll<HTMLElement>("[data-accessibility-role='link']")];
+    expect(links.map((link) => link.textContent)).toEqual(["TASK-397"]);
+    await act(async () => {
+      links[0]!.click();
+    });
+    expect(openTicket).toHaveBeenCalledWith("TASK-397");
+    await act(async () => {
+      root.render(<ChatMarkdown>{markdown}</ChatMarkdown>);
+    });
+    expect(container.querySelector("[data-accessibility-role='link']")).toBeNull();
+    expect(container.textContent).toContain("Work on TASK-397 next");
     await act(async () => {
       root.unmount();
     });

@@ -8,6 +8,10 @@ import { sanitizeConnectorError } from "../../integrations/connector-safety.js";
 import type { ToolRefusal } from "./tool-refusal.js";
 import { refusalCode } from "./tool-refusal.js";
 import { isFailedToolResult, toolResultError } from "./tool-result-error.js";
+import {
+  summarizeToolCompletionDetail,
+  summarizeToolCompletionSkills,
+} from "./tool-step-detail.js";
 
 function isAuditableToolResult(value: unknown): value is {
   kind: "agent_tool_result";
@@ -74,6 +78,14 @@ export function toolCompletionAuditPayload(
   };
   if (error !== undefined) {
     payload.error = sanitizeConnectorError(error, secrets);
+  }
+  const completedDetail = summarizeToolCompletionDetail(completion, secrets);
+  if (completedDetail) {
+    payload.detail = completedDetail;
+  }
+  const completedSkills = summarizeToolCompletionSkills(completion, secrets);
+  if (completedSkills?.length) {
+    payload.skills = completedSkills;
   }
   if (!isAuditableToolResult(completion.result)) return payload;
 

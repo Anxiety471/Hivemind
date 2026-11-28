@@ -1,5 +1,5 @@
-// Package pages ports pages.list, rename and pin. pages.get, setVisibility and remove read
-// or write the sealed share token in the secret store, and stay on the TypeScript API.
+// Package pages ports pages.list, rename, pin, remove and setVisibility. pages.get still
+// reads the page detail in TypeScript; every page share write here uses the SecretStore.
 package pages
 
 import (
@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -77,6 +77,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		conditions = append(conditions, afterCursor(after, arg))
 	}
 	if input.HasQuery {
+		// writeaudit:dynamic input.Query is a request field, not a pgx method value
 		conditions = append(conditions, `title ILIKE '%' || `+arg(escapeSearchWildcards(input.Query))+` || '%'`)
 	}
 	query := fmt.Sprintf(`SELECT `+summaryColumns+`
@@ -86,6 +87,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 
 	var rows []row
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		// writeaudit:dynamic read: conditions/limit are fixed fragments; args are filters
 		result, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -159,7 +161,7 @@ func (r row) invalid() bool {
 	empty := func(id *string) bool { return id != nil && *id == "" }
 	fourDigits := func(at time.Time) bool { return at.UTC().Year() >= 0 && at.UTC().Year() <= 9999 }
 	return r.summary.ID == "" || empty(r.summary.BotID) || empty(r.summary.GroupID) ||
-		utf8.RuneCountInString(r.summary.Title) > titleMaxLength || r.summary.CurrentVersion < 1 ||
+		!wtf8.ZodMaxPass(r.summary.Title, titleMaxLength) || r.summary.CurrentVersion < 1 ||
 		!fourDigits(r.createdAt) || !fourDigits(r.updatedAt)
 }
 

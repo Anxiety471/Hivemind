@@ -1,6 +1,6 @@
 import * as z from "zod";
 import { Id, IsoDate } from "../ids.js";
-import { ARTIFACT_NAME_MAX_LENGTH } from "../threads/attachments.js";
+import { ARTIFACT_NAME_MAX_LENGTH, ARTIFACT_SLUG_MAX_LENGTH } from "../threads/attachments.js";
 
 export const FileSourceSchema = z.enum(["upload", "chat", "bot", "email", "messaging"]);
 export type FileSource = z.infer<typeof FileSourceSchema>;
@@ -52,9 +52,20 @@ export const FileNameSchema = z
     "File name cannot contain slashes or control characters",
   );
 
+export const FileSlugSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(ARTIFACT_SLUG_MAX_LENGTH)
+  .refine(
+    (slug) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug),
+    "Slug must use lowercase letters, digits, and hyphens",
+  );
+
 export const FileFolderSchema = z.object({
   id: Id,
   parentId: Id.nullable(),
+  botId: Id.nullable(),
   name: z.string(),
   trashedAt: IsoDate.nullable(),
   createdAt: IsoDate,
@@ -76,6 +87,7 @@ export const DriveFileSchema = z.object({
   folderId: Id.nullable(),
   source: FileSourceSchema,
   name: z.string(),
+  slug: z.string().nullable(),
   description: z.string().nullable(),
   mimeType: z.string(),
   size: z.number().int().nonnegative(),
@@ -92,6 +104,7 @@ export type DriveFile = z.infer<typeof DriveFileSchema>;
 export const DriveFolderTreeEntrySchema = z.object({
   id: Id,
   parentId: Id.nullable(),
+  botId: Id.nullable(),
   name: z.string(),
 });
 export type DriveFolderTreeEntry = z.infer<typeof DriveFolderTreeEntrySchema>;

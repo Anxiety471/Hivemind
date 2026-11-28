@@ -1,4 +1,5 @@
 import type { AccountExportManifest, AccountExportRecord } from "@rakazo/contracts";
+import { readBoardRepositories } from "../artifacts/board.js";
 import type { Prisma, PrismaClient } from "../database/client.js";
 import { runAsTenant } from "../database/row-security.js";
 
@@ -448,7 +449,13 @@ async function* spaceRecords(
   if (!owner) return;
   const board = await prisma.board.findUnique({ where: { spaceId } });
   if (!board) return;
-  yield { type: "board", id: board.id, name: board.name, ticketPrefix: board.ticketPrefix };
+  yield {
+    type: "board",
+    id: board.id,
+    name: board.name,
+    ticketPrefix: board.ticketPrefix,
+    repositories: readBoardRepositories(board),
+  };
   for (let number = 0; ; ) {
     const tickets = await prisma.ticket.findMany({
       where: { boardId: board.id, spaceId, number: { gt: number } },

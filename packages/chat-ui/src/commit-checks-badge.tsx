@@ -2,7 +2,12 @@ import type { CommitCheck, CommitCheckState } from "@rakazo/contracts";
 import { Popover, PopoverContent, PopoverTrigger } from "@rakazo/ui-web";
 import { useContext } from "react";
 import type { CommitCheckTarget } from "./commit-checks";
-import { CommitChecksContext, commitCheckSeconds, summarizeCommitChecks } from "./commit-checks";
+import {
+  CommitChecksContext,
+  commitCheckSeconds,
+  commitCheckTarget,
+  summarizeCommitChecks,
+} from "./commit-checks";
 import { useMarkdownCopy } from "./markdown-copy";
 import "./commit-checks-badge.css";
 
@@ -108,4 +113,13 @@ export function CommitChecksBadge({ target }: { target: CommitCheckTarget }) {
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * The CI status beside a commit or pull request link. It sits after the link's hover card, not
+ * inside it: a control cannot nest in an anchor, and the card's trigger wraps only the link.
+ */
+export function LinkChecks({ href }: { href: string }) {
+  const target = commitCheckTarget(href);
+  return target ? <CommitChecksBadge target={target} /> : null;
 }

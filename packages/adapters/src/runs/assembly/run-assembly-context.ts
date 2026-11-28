@@ -1,8 +1,13 @@
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import {
+  blocksToAgentHistoryText,
   expandSkillReferencesInPrompt,
+  extractExpandedSkillNames,
+  formatRelevantSkillsHint,
+  formatSkillModeCatalogInstruction,
   formatSkillRunPrompt,
   formatSkillsCatalogInstruction,
+  mergeSkillNames,
   promptInvokesSkill,
   redactSecrets,
   renderBotDirectory,
@@ -15,17 +20,24 @@ import { lateRoutineRunInstruction } from "../../routines/routine-lateness.promp
 import { routineRunInstruction } from "../../routines/routine-run.prompt.js";
 import { formatCompactedSummary } from "../../runtime/context/history-compaction.prompt.js";
 import { inferScript } from "../../runtime/scripted-runtime.js";
-import { BOARD_SKILL_NAME, HISTORY_SKILL_NAME } from "../../tools/builtin-skills.prompt.js";
 import { partitionTools } from "../../tools/builtin-tool-bridge.js";
 import type { FleetRun } from "../../tools/fleet-tools.js";
-import { builtinAgentSkillRecords } from "../../tools/skill-tools.js";
+import { SKILL_MODE } from "../../tools/skill-mode.tool-definition.js";
+import { matchRelevantSkillsForPrompt } from "../../tools/skill-search.js";
+import {
+  buildSearchableSkills,
+  filterRunAgentSkills,
+  filterRunTaughtSkills,
+} from "../../tools/skill-tools.js";
 import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { buildApprovalContinuation } from "../lifecycle/run-effects.js";
 import { createReplyState } from "../lifecycle/run-progress.js";
+import { codeModeCallableTools } from "../tools/run-tool-selection.js";
 import { historyMyChatsAllowed } from "../tools/run-tools-memory.js";
 import { withLatestStepScreenshot, withRecentTurnImages } from "../turn/run-turn-images.js";
 import { missingTurnImagesInstruction } from "../turn/run-turn-images.prompt.js";
 import { formatCurrentTimeInstruction } from "./current-time.prompt.js";
+import { operatorInstruction } from "./operator-instructions.js";
 import { loadReplyContext } from "./reply-context.js";
 import type {
   ComputerInstructions,
@@ -127,6 +139,7 @@ export async function createRunContext(
     searchResultUrls,
     strategicBuiltins,
     tools,
+    listedTools,
     trustLoaders,
   } = parts.tools;
   const { hostEnvironment } = parts.computerInstructions;
@@ -163,6 +176,7 @@ export async function createRunContext(
     vaultUses: new Set(),
     handedOff: false,
     terminalCheckpointComplete: false,
+    failureCheckpoint: undefined,
   };
   /** Fleet tools take every scope from the run, never from arguments. */
   const fleetRun: FleetRun = {
@@ -234,6 +248,7 @@ export async function createRunContext(
     },
     tools: {
       offered: tools,
+      listed: listedTools,
       builtins: strategicBuiltins,
       connector: connectorTools,
       disabled: disabledBuiltinTools,
@@ -288,36 +303,45 @@ export async function buildTurnPrompt(
     historyMessages,
     recalledMemory,
     turnBlocks,
+    ticketContext,
   } = parts.turnContext;
   const { resolved, runModelId, runModelProvider } = parts.model;
   const { attachedFilesPrompt, modelSeesImages } = parts.computer;
   const { callEndRun, disabledBuiltinTools, ownerStartedRun, voiceCall } = parts.capabilities;
-  const { approvedEffects, tools } = parts.tools;
+  const { approvedEffects, tools, listedTools } = parts.tools;
   const { ctx } = parts;
   const pluginLine = connectedPluginsInstruction(connectedPlugins);
+  const offeredToolNames = new Set(tools.map((tool) => tool.name));
+  const skillModeOffered = offeredToolNames.has(SKILL_MODE);
   const runSavedSkills = nonOwnerChatRun ? [] : savedSkills;
-  // The Tasks and History skills are only useful where the run offers their tools.
-  const boardOffered = tools.some((tool) => tool.name === "ticket_update");
-  const historyOffered = tools.some((tool) => tool.name === "search_history");
-  const runAgentSkills = (nonOwnerChatRun ? builtinAgentSkillRecords() : agentSkills).filter(
-    (skill) =>
-      skill.source !== "builtin" ||
-      ((boardOffered || skill.name !== BOARD_SKILL_NAME) &&
-        (historyOffered || skill.name !== HISTORY_SKILL_NAME)),
-  );
+  const runAgentSkills = filterRunAgentSkills(agentSkills, offeredToolNames, nonOwnerChatRun);
+  const scopedTaughtSkills = filterRunTaughtSkills(runSavedSkills, {
+    ownerStartedRun,
+    userId: run.userId,
+    nonOwnerChatRun,
+  });
   const taughtSkillIndex = runSavedSkills.slice(0, 20);
-  const taughtSkillsLine = taughtSkillsInstruction(
-    taughtSkillIndex.map((skill) => ({
-      name: skill.name || skill.goal.slice(0, 80),
-      whenToUse: parsePlaybook(skill.playbook).whenToUse || skill.goal,
-    })),
-  );
-  const agentSkillsLine = formatSkillsCatalogInstruction(runAgentSkills);
+  const taughtSkillCatalog = scopedTaughtSkills.map((skill) => ({
+    name: skill.name || skill.goal.slice(0, 80),
+    whenToUse: parsePlaybook(skill.playbook).whenToUse || skill.goal,
+  }));
+  const taughtSkillsLine = skillModeOffered
+    ? undefined
+    : taughtSkillsInstruction(
+        taughtSkillIndex.map((skill) => ({
+          name: skill.name || skill.goal.slice(0, 80),
+          whenToUse: parsePlaybook(skill.playbook).whenToUse || skill.goal,
+        })),
+      );
+  const agentSkillsLine = skillModeOffered
+    ? formatSkillModeCatalogInstruction(runAgentSkills, taughtSkillCatalog)
+    : formatSkillsCatalogInstruction(runAgentSkills);
   const missingImagesInstruction = missingTurnImagesInstruction(turnBlocks, currentTurnImages);
-  const taskPrompt = expandSkillReferencesInPrompt(
-    [task.prompt, attachedFilesPrompt, missingImagesInstruction].filter(Boolean).join("\n\n"),
-    runAgentSkills,
-  );
+  const rawTaskPrompt = [task.prompt, attachedFilesPrompt, missingImagesInstruction]
+    .filter(Boolean)
+    .join("\n\n");
+  const invokedPromptSkills = extractExpandedSkillNames(rawTaskPrompt, runAgentSkills);
+  const taskPrompt = expandSkillReferencesInPrompt(rawTaskPrompt, runAgentSkills);
   const invokedSkill = runSavedSkills.find(
     (skill) =>
       // Taught skills are the space's. Only a person's own message may pull in one someone
@@ -325,6 +349,16 @@ export async function buildTurnPrompt(
       (ownerStartedRun || skill.userId === run.userId) &&
       promptInvokesSkill(taskPrompt, skill.name || skill.goal),
   );
+  const invokedRunSkills = mergeSkillNames(
+    invokedPromptSkills,
+    invokedSkill ? [invokedSkill.name || invokedSkill.goal.slice(0, 80)] : undefined,
+  );
+  if (invokedRunSkills.length > 0) {
+    ctx.state.reply.invokedSkills = mergeSkillNames(
+      ctx.state.reply.invokedSkills,
+      invokedRunSkills,
+    );
+  }
   const basePrompt = invokedSkill
     ? `${formatSkillRunPrompt(
         invokedSkill.name || invokedSkill.goal.slice(0, 80),
@@ -349,7 +383,10 @@ export async function buildTurnPrompt(
     : buildApprovalContinuation(
         approvedEffects,
         (request) => redactSecrets(JSON.stringify(request), runSecrets),
-        { exposedToolNames: new Set(partitionTools(tools).listed.map((tool) => tool.name)) },
+        {
+          exposedToolNames: new Set(partitionTools(listedTools).listed.map((tool) => tool.name)),
+          scriptToolNames: new Set(codeModeCallableTools(tools).map((tool) => tool.name)),
+        },
       );
   const replyContext = await loadReplyContext(deps.prisma, thread.id, run.sourceMessageId);
   let userTimeZone: string | null | undefined;
@@ -382,6 +419,29 @@ export async function buildTurnPrompt(
   const sharedSpaceNote = people
     ? await loadSharedSpaceNote(deps.prisma, run.spaceId, run.userId)
     : undefined;
+  const spacePromptRow = await bestEffort(
+    "load space system prompt append",
+    deps.prisma.space.findUnique({
+      where: { id: run.spaceId },
+      select: { systemPromptAppend: true },
+    }),
+  );
+  const skillHint =
+    skillModeOffered && run.trigger !== "created" && !nonOwnerChatRun
+      ? skillHintInput(rawTaskPrompt, {
+          ticket: ticketContext,
+          previousMessages: previousPromptMessages(historyMessages, currentTurnMessage?.id),
+        })
+      : undefined;
+  const relevantSkillsHint = skillHint
+    ? formatRelevantSkillsHint(
+        matchRelevantSkillsForPrompt(
+          skillHint.prompt,
+          buildSearchableSkills(runAgentSkills, scopedTaughtSkills),
+          { maxHints: 3, excludeNames: invokedRunSkills, contextText: skillHint.contextText },
+        ),
+      )
+    : undefined;
   const prompt = [
     replyContext,
     routineNote,
@@ -397,6 +457,7 @@ export async function buildTurnPrompt(
       userTimeZone,
       previousMessageAt(historyMessages, currentTurnMessage?.id),
     )}\n</current_time>`,
+    relevantSkillsHint,
     lateRoutineNote,
     sharedSpaceNote,
   ]
@@ -455,6 +516,8 @@ export async function buildTurnPrompt(
   const botDirectory =
     [renderBotDirectory(teammates), groupDirectory].filter(Boolean).join("\n\n") || undefined;
   return {
+    operatorInstruction: await operatorInstruction(),
+    spaceSystemPromptAppend: spacePromptRow?.systemPromptAppend?.trim() || undefined,
     pluginLine,
     taughtSkillsLine,
     agentSkillsLine,
@@ -468,6 +531,49 @@ export async function buildTurnPrompt(
 }
 
 export type TurnPrompt = Awaited<ReturnType<typeof buildTurnPrompt>>;
+
+/** Words in a request beyond which its own text is enough to match skills on. */
+const SKILL_HINT_SHORT_PROMPT_WORDS = 12;
+/** How much ticket and earlier-reply text a short request may borrow for skill matching. */
+const SKILL_HINT_CONTEXT_MAX_CHARS = 1_200;
+
+/** The request, and the borrowed context a short turn may match skills against. */
+export interface SkillHintInput {
+  prompt: string;
+  contextText?: string;
+}
+
+/**
+ * The request plus the context a short turn may borrow: the ticket and the replies already loaded
+ * for the prompt, so a follow-up like "Done sending" still finds the skill it needs. A longer
+ * request speaks for itself, so it borrows no context and cannot shift its matches.
+ */
+export function skillHintInput(
+  rawTaskPrompt: string,
+  context: { ticket?: string; previousMessages?: readonly string[] },
+): SkillHintInput {
+  const prompt = rawTaskPrompt.trim();
+  if (prompt.split(/\s+/).filter(Boolean).length > SKILL_HINT_SHORT_PROMPT_WORDS) return { prompt };
+  const contextText = [context.ticket, ...(context.previousMessages ?? [])]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join("\n")
+    .slice(0, SKILL_HINT_CONTEXT_MAX_CHARS);
+  return contextText ? { prompt, contextText } : { prompt };
+}
+
+/** Plain text of the last replies before this turn, for skill matching on a short follow-up. */
+export function previousPromptMessages(
+  messages: ReadonlyArray<{ id: string; blocks: Parameters<typeof blocksToAgentHistoryText>[0] }>,
+  currentId: string | undefined,
+  limit = 2,
+): string[] {
+  return messages
+    .filter((message) => message.id !== currentId)
+    .slice(-limit)
+    .map((message) => blocksToAgentHistoryText(message.blocks).trim())
+    .filter(Boolean);
+}
 
 /** When the newest message other than this turn's was sent, read before compaction drops it. */
 export function previousMessageAt(

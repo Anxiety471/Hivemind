@@ -1,6 +1,6 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ActiveBotGlyph, CollaborationMarker } from "./CollaborationMarker";
+import { ActiveBotGlyph, AgentMessageMarker, CollaborationMarker } from "./CollaborationMarker";
 
 describe("collaboration transcript markers", () => {
   it("shows a centred peer event with its avatar and full label", () => {
@@ -23,6 +23,18 @@ describe("collaboration transcript markers", () => {
     expect(html).toContain("Message from Research");
     expect(html).not.toContain("{peer}");
     expect(html).not.toContain("peer-replies-toggle");
+  });
+
+  it("names an outside agent with a plain glyph, not a bot avatar, and offers nothing to open", () => {
+    const html = renderToString(
+      <AgentMessageMarker agentName="Oh My Pi" label="Message from Oh My Pi" />,
+    );
+
+    expect(html).toContain('data-testid="agent-message-chip"');
+    expect(html).toContain("Message from ");
+    expect(html).toContain("Oh My Pi");
+    expect(html).not.toContain("rakazo-organic-avatar");
+    expect(html).not.toContain("<button");
   });
 
   it("animates the active bot glyph from its run status", () => {

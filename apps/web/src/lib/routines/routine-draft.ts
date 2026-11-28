@@ -1,5 +1,5 @@
 import { t } from "@lingui/core/macro";
-import type { Routine, RoutineWatch, RoutineWatchInput } from "@rakazo/contracts";
+import type { Routine, RoutinePrepare, RoutineWatch, RoutineWatchInput } from "@rakazo/contracts";
 import { ROUTINE_WATCH_DEFAULT_MINUTES, RoutineWatchSchema } from "@rakazo/contracts";
 import type { RoutineDraft } from "@rakazo/core";
 import { draftFromRoutine, emptyRoutineDraft, isOneShotRoutineCrons } from "@rakazo/core";
@@ -32,6 +32,15 @@ export type RoutineDraftState = RoutineDraft & {
   inChat: boolean;
   /** Null unless the routine starts when something changes. */
   watch: RoutineWatchDraft | null;
+  /** Null unless the routine runs a saved command first. */
+  prepare: RoutinePrepareDraft | null;
+};
+
+/** The saved command the routine runs first, as the editor holds it: arguments are free text. */
+export type RoutinePrepareDraft = {
+  command: string;
+  /** JSON object of arguments for the command. */
+  args: string;
 };
 
 /** The change trigger as the editor holds it: free text until saved. */
@@ -121,6 +130,47 @@ export function watchFromDraft(
   };
 }
 
+function prepareDraftFromRoutine(prepare: RoutinePrepare | null): RoutinePrepareDraft | null {
+  return prepare ? { command: prepare.command, args: JSON.stringify(prepare.args ?? {}) } : null;
+}
+
+function parsePrepareArgs(text: string): { args: RoutinePrepare["args"] } | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.trim() || "{}");
+  } catch {
+    return { error: t`Arguments must be a JSON object` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: t`Arguments must be a JSON object` };
+  }
+  return { args: parsed as RoutinePrepare["args"] };
+}
+
+/** The draft as the api takes it, or the reason it cannot be saved. */
+export function prepareFromDraft(
+  draft: RoutinePrepareDraft,
+): { prepare: RoutinePrepare } | { error: string } {
+  const parsed = parsePrepareArgs(draft.args);
+  if ("error" in parsed) return parsed;
+  return { prepare: { command: draft.command, args: parsed.args } };
+}
+
+/** Whether this draft would change the saved prepare, so an untouched one is not sent. */
+export function prepareDraftChanged(
+  draft: RoutinePrepareDraft | null,
+  saved: RoutinePrepare | null,
+): boolean {
+  if (!draft) return saved !== null;
+  const parsed = prepareFromDraft(draft);
+  if ("error" in parsed) return true;
+  if (!saved) return true;
+  return (
+    saved.command !== parsed.prepare.command ||
+    JSON.stringify(saved.args ?? {}) !== JSON.stringify(parsed.prepare.args)
+  );
+}
+
 export function emptyRoutineDraftState(): RoutineDraftState {
   return {
     ...emptyRoutineDraft(),
@@ -132,6 +182,7 @@ export function emptyRoutineDraftState(): RoutineDraftState {
     thinkingLevel: "",
     inChat: false,
     watch: null,
+    prepare: null,
   };
 }
 
@@ -149,5 +200,6 @@ export function draftStateFromRoutine(routine: Routine): RoutineDraftState {
     thinkingLevel: routine.thinkingLevel ?? "",
     inChat: routine.inChat,
     watch: watchDraftFromRoutine(routine.watch),
+    prepare: prepareDraftFromRoutine(routine.prepare),
   };
 }

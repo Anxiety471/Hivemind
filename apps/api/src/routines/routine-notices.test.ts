@@ -31,6 +31,7 @@ const routine = {
   modelProvider: null,
   modelId: null,
   thinkingLevel: null,
+  prepare: null,
   lastRunAt: null,
   nextRunAt: new Date("2030-01-01T09:00:00Z"),
   createdAt: new Date("2026-09-01T00:00:00.000Z"),

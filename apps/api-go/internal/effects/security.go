@@ -2,7 +2,6 @@ package effects
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"math"
@@ -14,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // SecurityEvent is one event to record (SecurityEventInput in security-events.ts).
@@ -97,15 +97,16 @@ func (r *Recorder) Record(ctx context.Context, input SecurityEvent) error {
 		"security.event.type", event.Type, "user.id", event.UserID, "space.id", event.SpaceID,
 		"client.ip", event.IP, "user_agent.original", event.UserAgent, "security.event.metadata", metadata)
 
-	body, err := json.Marshal(metadata)
+	body, err := wtf8.Marshal(metadata)
 	if err != nil {
 		return err
 	}
 	if err := r.db.System(ctx, "append a security event", func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO security_events (id, type, "userId", "spaceId", ip, "userAgent", metadata, "createdAt")
 			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
-			NewID(), event.Type, nullable(event.UserID), nullable(event.SpaceID), nullable(event.IP), nullable(event.UserAgent),
-			string(body), time.Now().UTC().Truncate(time.Millisecond))
+			db.Data(NewID(), event.Type, nullable(event.UserID), nullable(event.SpaceID), nullable(event.IP),
+				nullable(event.UserAgent), db.JSONText(string(body)),
+				time.Now().UTC().Truncate(time.Millisecond))...)
 		return err
 	}); err != nil {
 		r.logger.Error("security.event.write_failed", "error", err)
@@ -121,6 +122,10 @@ func (r *Recorder) Record(ctx context.Context, input SecurityEvent) error {
 		}
 		if kind != "" {
 			audit.TargetType = kind
+		}
+		// Every vault item is its person's own; see the vault rule in audit-events.ts.
+		if kind == "vault_credential" {
+			audit.UserID = event.UserID
 		}
 		if err := r.recordAudit(WithCaller(ctx, Caller{IP: event.IP, UserAgent: event.UserAgent}), audit); err != nil {
 			r.logger.Error("audit.event.write_failed", "audit.event.action", audit.Action, "error", err)
@@ -195,13 +200,13 @@ func bounded(value string, max int) string {
 	return sliceUTF16(value, max)
 }
 
-func utf16Length(value string) int { return len(utf16.Encode([]rune(value))) }
+func utf16Length(value string) int { return len(wtf8.Units(value)) }
 
 // sliceUTF16 is value.slice(0, max) in UTF-16 code units, then the write hook's
 // sanitizeUtf16ForJson (packages/db/src/security-events.ts:134, text-sanitization.ts:58): a cut
 // that lands inside a surrogate pair leaves one lone half, which becomes U+FFFD.
 func sliceUTF16(value string, max int) string {
-	units := utf16.Encode([]rune(value))
+	units := wtf8.Units(value)
 	if max < 0 {
 		max = 0
 	}

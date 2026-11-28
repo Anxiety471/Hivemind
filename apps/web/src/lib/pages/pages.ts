@@ -76,8 +76,13 @@ export function usePageDocument(
   // The surface follows the theme, so it is read again whenever the theme changes.
   const surface = useMemo(() => (theme ? readSurface(on) : ""), [theme, on]);
   const touch = useMedia("(pointer: coarse)");
-  // Fetched again on every mount; the browser revalidates the server's no-cache runtime.
-  const runtime = useQuery({ queryKey: ["page-runtime"], queryFn: fetchPageRuntime });
+  // Fetched again on every mount; the browser revalidates the server's no-cache runtime, so a
+  // server upgrade shows without waiting out the query client's freshness window.
+  const runtime = useQuery({
+    queryKey: ["page-runtime"],
+    queryFn: fetchPageRuntime,
+    refetchOnMount: "always",
+  });
   const errorTitle = t`This page couldn't be shown.`;
   const viewerDocument = useMemo(
     () =>

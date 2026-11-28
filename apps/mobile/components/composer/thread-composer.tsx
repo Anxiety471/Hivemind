@@ -10,17 +10,23 @@ import type {
   ComposerMentionBinding,
   ComposerMentionQuery,
   ComposerMentionRange,
+  ComposerReferenceOption,
+  ComposerReferenceQuery,
   SlashActionId,
 } from "@rakazo/core";
 import {
+  applyComposerReference,
   bindComposerMention,
   composerMentionQuery,
   composerMentionSegments,
   composerMentionsForPrompt,
+  composerReferenceOptionsFrom,
   composerSelectedMentions,
   composerSlashOptions,
   composerSlashQuery,
   filterComposerMentionTargets,
+  filterComposerReferences,
+  findComposerReferenceQuery,
   mentionChipKey,
   removeComposerSlashQuery,
   resolveComposerMentionBackspace,
@@ -42,6 +48,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { useChatReferences } from "../../lib/board/chat-references";
 import { useComposerDictation } from "../../lib/composer/composer-dictation";
 import type { ComposerDraftScope } from "../../lib/composer/composer-draft";
 import { readComposerDraft, writeComposerDraft } from "../../lib/composer/composer-draft";
@@ -50,6 +57,7 @@ import type { ComposerSnapshot } from "../../lib/thread/send/thread-feedback";
 import { BotAvatar } from "../bots/bot-avatar";
 import { GlassSurface } from "../native/glass-surface";
 import { NativeSymbol } from "../native/native-symbol";
+import { ReferencePicker } from "./reference-picker";
 
 type NativeEdit = {
   beforeText: string;
@@ -141,6 +149,17 @@ export function ThreadComposer({
   const [selection, setSelection] = useState<{ start: number; end: number }>();
   const [mentionQuery, setMentionQuery] = useState<ComposerMentionQuery | null>(null);
   const [slashQuery, setSlashQuery] = useState<ComposerMentionQuery | null>(null);
+  const { referenceContext } = useChatReferences();
+  const allReferenceOptions = useMemo(
+    () => composerReferenceOptionsFrom(referenceContext?.tickets ?? []),
+    [referenceContext?.tickets],
+  );
+  const [referenceQuery, setReferenceQuery] = useState<ComposerReferenceQuery | null>(null);
+  const referenceOptions = useMemo(
+    () =>
+      referenceQuery ? filterComposerReferences(allReferenceOptions, referenceQuery.query, 8) : [],
+    [allReferenceOptions, referenceQuery],
+  );
   const [mentionBindings, setMentionBindings] = useState(saved.bindings);
   const bindingsRef = useRef(saved.bindings);
   const selectionHistory = useRef<ComposerMentionRange[]>([]);
@@ -180,6 +199,7 @@ export function ThreadComposer({
     setSelection(nativeSelection.current);
     setMentionQuery(null);
     setSlashQuery(null);
+    setReferenceQuery(null);
   }
   const dictation = useComposerDictation({ disabled: onCall, onWords: showDictation });
   function toggleDictation() {
@@ -239,6 +259,7 @@ export function ThreadComposer({
       setMentionQuery(null);
       setSlashQuery(null);
       setSelectedSkill(null);
+      setReferenceQuery(null);
       updateBindings([]);
       selectMention(null);
       selectionHistory.current = [];
@@ -247,6 +268,7 @@ export function ThreadComposer({
     insert: (text) => {
       setSlashQuery(null);
       setMentionQuery(null);
+      setReferenceQuery(null);
       // A delayed selection must not replay the edit from before the share.
       pendingNativeEdit.current = null;
       const current = draftRef.current;
@@ -256,6 +278,7 @@ export function ThreadComposer({
     addReply: (text) => {
       setSlashQuery(null);
       setMentionQuery(null);
+      setReferenceQuery(null);
       const current = draftRef.current;
       draftRef.current = current.trim() ? `${current.trimEnd()} ${text}` : text;
       setDraft(draftRef.current);
@@ -291,23 +314,27 @@ export function ThreadComposer({
       : { skills: [], actions: [] };
   function updatePickerQueries(value: string, start: number, end = start) {
     // One skill per message: a chosen skill keeps the slash menu closed.
-    setSlashQuery(
-      selectedSkill ? null : composerSlashQuery(value, start, end, bindingsRef.current),
-    );
+    const slash = selectedSkill ? null : composerSlashQuery(value, start, end, bindingsRef.current);
+    setSlashQuery(slash);
     // A mention selected by a backspace is waiting to be deleted, not re-picked.
-    if (selectedMentionRef.current !== null) {
-      setMentionQuery(null);
-      return;
-    }
-    const query = composerMentionQuery(
-      value,
-      start,
-      end,
-      [...composerMentionTargets, ...composerSelectedMentions(bindingsRef.current)],
-      bindingsRef.current,
-    );
+    const query =
+      selectedMentionRef.current === null
+        ? composerMentionQuery(
+            value,
+            start,
+            end,
+            [...composerMentionTargets, ...composerSelectedMentions(bindingsRef.current)],
+            bindingsRef.current,
+          )
+        : null;
     if (query) onMentionRequested?.();
     setMentionQuery(query);
+    // A # reference is typed only while no @ mention or / command is open.
+    setReferenceQuery(
+      query || slash || allReferenceOptions.length === 0
+        ? null
+        : findComposerReferenceQuery(value, start, end),
+    );
   }
 
   function updateDraft(nativeValue: string) {
@@ -385,6 +412,20 @@ export function ThreadComposer({
     inputRef.current?.focus();
   }
 
+  function insertReference(option: ComposerReferenceOption) {
+    if (!referenceQuery) return;
+    const next = applyComposerReference(draftRef.current, referenceQuery, option);
+    pendingNativeEdit.current = null;
+    draftRef.current = next.text;
+    setDraft(next.text);
+    nativeSelection.current = { start: next.cursor, end: next.cursor };
+    selectionHistory.current = [nativeSelection.current];
+    completedSelection.current = next.cursor;
+    setSelection(nativeSelection.current);
+    setReferenceQuery(null);
+    inputRef.current?.focus();
+  }
+
   /** Takes the `/query` out of the draft, keeping the words and mentions around it. */
   function removeSlashQuery(): boolean {
     if (!slashQuery) return false;
@@ -423,6 +464,13 @@ export function ThreadComposer({
   // bottom margin would leave them high.
   const lineHeight = Math.max(44, emptyRowHeight ?? 22 + 22 * textScale);
   const pillInset = (lineHeight - composerPillStyle.height) / 2;
+
+  const showSlashPicker = slashSkillOptions.length > 0 || slashActionOptions.length > 0;
+  const showReferencePicker =
+    referenceQuery !== null &&
+    mentionQuery === null &&
+    !showSlashPicker &&
+    referenceOptions.length > 0;
 
   const canSend = Boolean(draft.trim()) || selectedSkill !== null || attachmentIds.length > 0;
   // Sending resets the box, which would drop a clip still recording or words still being transcribed.
@@ -562,6 +610,9 @@ export function ThreadComposer({
             </Pressable>
           ))}
         </ScrollView>
+      ) : null}
+      {showReferencePicker ? (
+        <ReferencePicker options={referenceOptions} onSelect={insertReference} />
       ) : null}
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 10, marginTop: 8 }}>
         <MenuView

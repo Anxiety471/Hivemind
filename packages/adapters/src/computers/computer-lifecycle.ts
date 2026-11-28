@@ -68,6 +68,8 @@ type ComputerUpdateProgress = (
 ) => Promise<void>;
 
 export const EXECUTION_LEASE_MS = 5 * 60_000;
+/** How often a run still waiting for its bot's computer says who holds it. */
+const LEASE_WAIT_REPORT_MS = 5 * 60_000;
 const BOOT_WAIT_ATTEMPTS = 40;
 const BOOT_WAIT_MS = 250;
 const RUNNING_CHECK_RETRY_MS = [250, 750];
@@ -1074,6 +1076,25 @@ export async function waitForRunComputerLease(
   input: { computerId: string; botId: string; runId: string; workerId: string; runFence: number },
   signal: AbortSignal,
 ): Promise<ComputerExecutionLease | null> {
+  const waitStarted = Date.now();
+  let lastReported = waitStarted;
+  const reportLongWait = async () => {
+    if (Date.now() - lastReported < LEASE_WAIT_REPORT_MS) return;
+    lastReported = Date.now();
+    const holder = await bestEffort(
+      "lease holder lookup",
+      prisma.computerExecutionLease.findFirst({
+        where: { computerId: input.computerId, botId: input.botId, expiresAt: { gt: new Date() } },
+        select: { runId: true },
+      }),
+    );
+    getLogger().warn("computer.lease_waiting", {
+      "computer.id": input.computerId,
+      "run.id": input.runId,
+      "computer.lease_holder_run.id": holder?.runId,
+      waited_ms: Date.now() - waitStarted,
+    });
+  };
   const outcome = await pollUntil(
     async () => {
       signal.throwIfAborted();
@@ -1089,6 +1110,7 @@ export async function waitForRunComputerLease(
         return lease ?? (await acquireDedicatedScreenLeaseFence(prisma, input));
       } catch (error) {
         if (!(error instanceof ComputerBusyError) && !isRetryableError(error)) throw error;
+        await reportLongWait();
         return undefined;
       }
     },
@@ -1471,16 +1493,17 @@ export async function replaceComputer(
         : previousState === "running" && !tornDown
           ? "running"
           : "error";
-    await deps.prisma.computer
-      .updateMany({
+    await bestEffort(
+      "record the failed computer state after a failed provision",
+      deps.prisma.computer.updateMany({
         where: {
           id: computerId,
           updatedAt: claimStamp,
           maintenanceId: existing.maintenanceId ?? null,
         },
         data: { state: failedState },
-      })
-      .catch(() => undefined);
+      }),
+    );
     throw error;
   }
 }

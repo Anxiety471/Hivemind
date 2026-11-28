@@ -8,6 +8,7 @@ import {
   formatStepDuration,
   stepCategory,
 } from "../../../lib/chat/checkpoint-graph";
+import { stepCalledSkills } from "../../../lib/chat/tool-activity-view";
 import { OdometerCost } from "./OdometerCost";
 import { StepCategoryIcon } from "./step-icons";
 
@@ -95,6 +96,17 @@ export function CollapsedMonitorPill({
                   />
                   <TooltipContent>
                     <span>{node.step.label}</span>
+                    {node.step.detail ? (
+                      <span className="max-w-52 truncate font-mono text-background/80">
+                        {node.step.detail}
+                      </span>
+                    ) : null}
+                    {!/^skill[ _]read$/i.test(node.step.label.trim()) &&
+                    stepCalledSkills(node.step).length > 0 ? (
+                      <span className="max-w-52 truncate text-background/80">
+                        {stepCalledSkills(node.step).join(", ")}
+                      </span>
+                    ) : null}
                     {duration ? (
                       <span className="font-mono text-background/75 tabular-nums">{duration}</span>
                     ) : null}

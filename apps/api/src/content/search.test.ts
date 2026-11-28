@@ -308,3 +308,47 @@ it("finds text stored beside entries that are not blocks, in a bot chat and in a
     { kind: "message", groupId: "g-1", messageId: "message-2", seq: 4 },
   ]);
 });
+
+it("queries active non-trashed files by name, slug, or description and surfaces snippet", async () => {
+  const { prisma } = fixture(0);
+  prisma.artifact.findMany
+    .mockReset()
+    .mockResolvedValueOnce([
+      {
+        id: "file-slug-1",
+        botId: "bot-1",
+        bot: { name: "Analyst" },
+        name: "report.pdf",
+        slug: "q4-launch-deck",
+        description: "Final Q4 board deck",
+        mimeType: "application/pdf",
+        size: 2048,
+      },
+    ])
+    .mockResolvedValueOnce([]);
+  prisma.$queryRaw
+    .mockReset()
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([{ artifactId: "file-slug-1", id: "msg-1", seq: 2 }])
+    .mockResolvedValue([]);
+
+  const hits = await querySpaceSearch(prisma as never, actor, "launch-deck");
+
+  expect(prisma.artifact.findMany.mock.calls[0]?.[0]).toMatchObject({
+    where: expect.objectContaining({
+      spaceId: actor.spaceId,
+      trashedAt: null,
+      OR: expect.arrayContaining([
+        expect.objectContaining({ slug: expect.anything() }),
+        expect.objectContaining({ description: expect.anything() }),
+      ]),
+    }),
+  });
+  expect(hits).toContainEqual(
+    expect.objectContaining({
+      kind: "file",
+      artifactId: "file-slug-1",
+      snippet: expect.stringContaining("Final Q4 board deck"),
+    }),
+  );
+});

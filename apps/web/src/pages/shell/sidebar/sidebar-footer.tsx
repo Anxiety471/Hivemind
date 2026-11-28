@@ -14,6 +14,7 @@ import {
   Building2,
   Check,
   ChevronRight,
+  Code,
   Download,
   FolderOpen,
   Gauge,
@@ -233,6 +234,15 @@ export function SidebarFooter({
                 <Trans>Board</Trans>
               </Button>
             ) : null}
+            <a
+              className={`${buttonVariants({ variant: "ghost", size: "lg" })} w-full justify-start gap-2.5 font-normal`}
+              href="https://code.bocchi.trade"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Code className="text-muted-foreground" strokeWidth={1.75} />
+              <Trans>Code</Trans>
+            </a>
             {links.map((link) => (
               <Button
                 key={link.id}

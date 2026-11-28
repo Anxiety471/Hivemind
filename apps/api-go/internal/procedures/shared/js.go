@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/tz"
 )
 
 // Base64URL is Buffer.from(value, "base64url"): characters outside both
@@ -140,9 +142,12 @@ func ParseDate(text string) (time.Time, bool) {
 	}
 	location := time.UTC
 	hasTime := match[4] != ""
+	localTime := false
 	switch offset := match[8]; {
 	case offset == "" && hasTime:
-		location = time.Local
+		// V8 reads a datetime without an offset in the process zone; its rules
+		// come from the embedded tzdata release, never the host's.
+		localTime = true
 	case offset == "" || offset == "Z" || offset == "z":
 	default:
 		sign := 1
@@ -157,12 +162,62 @@ func ParseDate(text string) (time.Time, bool) {
 		location = time.FixedZone("", sign*(hours*3600+minutes*60))
 	}
 	moment := time.Date(year, time.Month(month), day, hour, minute, second, nanos, location)
+	if localTime {
+		// V8 reads a datetime without an offset in the process zone, choosing
+		// the instant Temporal calls "compatible"; tz.Local's rules come from
+		// the embedded tzdata release, never the host's.
+		moment = localInstant(time.Date(year, time.Month(month), day, hour, minute, second, nanos, time.UTC), tz.Local())
+	}
 	// ECMAScript TimeClip: a Date more than 8.64e15 ms from the epoch is Invalid Date,
 	// so Date.parse rejects it (e.g. +275760-09-13T00:00:00.001Z).
 	if milliseconds := moment.UnixMilli(); milliseconds > maxTimeClip || milliseconds < -maxTimeClip {
 		return time.Time{}, false
 	}
 	return moment.UTC(), true
+}
+
+// localInstant resolves a wall-clock time in location the way V8's Date.parse
+// does, with Temporal's "compatible" disambiguation: a wall time that occurs
+// once has its single instant; one the clocks skip moves forward by the gap,
+// using the offset in effect before the transition; one they repeat takes the
+// earlier instant.
+//
+// The offset is sampled a day before and a day after the wall time read as UTC.
+// Equal samples mean the wall time is unambiguous, and that offset gives its
+// instant. Otherwise each sample is tried as a candidate and the zone must map
+// the candidate back to the wall time; two consistent candidates are an
+// overlap (take the earlier), one is the unique answer, and none means the wall
+// time is in a gap, whose answer is the pre-transition offset.
+func localInstant(wall time.Time, location *time.Location) time.Time {
+	milliseconds := wall.UnixMilli()
+	offsetAt := func(at int64) int64 {
+		_, seconds := time.UnixMilli(at).In(location).Zone()
+		return int64(seconds) * 1000
+	}
+	const day = int64(24 * time.Hour / time.Millisecond)
+	before := offsetAt(milliseconds - day)
+	after := offsetAt(milliseconds + day)
+	if before == after {
+		return time.UnixMilli(milliseconds - before)
+	}
+	instantBefore := milliseconds - before
+	instantAfter := milliseconds - after
+	beforeConsistent := offsetAt(instantBefore) == before
+	afterConsistent := offsetAt(instantAfter) == after
+	switch {
+	case beforeConsistent && afterConsistent:
+		if instantAfter < instantBefore {
+			return time.UnixMilli(instantAfter)
+		}
+		return time.UnixMilli(instantBefore)
+	case beforeConsistent:
+		return time.UnixMilli(instantBefore)
+	case afterConsistent:
+		return time.UnixMilli(instantAfter)
+	default:
+		// A gap: the pre-transition offset shifts the wall time forward.
+		return time.UnixMilli(instantBefore)
+	}
 }
 
 // maxTimeClip is the ECMAScript maximum absolute time value, in milliseconds.

@@ -148,6 +148,7 @@ export function blockText(message: MobileMessage) {
       if (block.kind === "channel_message") return channelMessageLine(block);
       if (block.kind === "cloud_agent")
         return `${block.title}: ${block.status}${block.prUrl ? ` ${block.prUrl}` : ""}`;
+      if (block.kind === "job") return `${block.title}: ${block.state}`;
       if (block.kind === "subagent") {
         return `${block.name ?? "subagent"}: ${block.result || block.progress || block.task || ""}`;
       }

@@ -4,6 +4,8 @@ import type { AdapterContext, AgentRunRequest, AgentUsage } from "@rakazo/adapte
 import { DEFAULT_CONTEXT_STRATEGY } from "@rakazo/adapter-kit";
 import { getLogger } from "@rakazo/logging";
 import { isVerbatimMcpResult, toolCallIdentity } from "../../mcp/verbatim-mcp-result.js";
+import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
+import { SKILL_MODE } from "../../tools/skill-mode.tool-definition.js";
 import { promptCacheDeclaredOff } from "../pi/models/pi-local-provider-id.js";
 import {
   effectiveOutputReserve,
@@ -39,7 +41,11 @@ interface ProjectionEntry {
 }
 const projections = new Map<string, ProjectionEntry[]>();
 /** Keep editable source and fleet instruction versions intact; these tools bound their own output. */
-export const VERBATIM_TOOL_RESULTS: ReadonlySet<string> = new Set(["skill_read", "list_fleet"]);
+export const VERBATIM_TOOL_RESULTS: ReadonlySet<string> = new Set([
+  SKILL_MODE,
+  "skill_read",
+  "list_fleet",
+]);
 // History reads are exact evidence and keep their own offset-aware shortening elsewhere.
 const UNSHORTENED_TOOL_RESULTS = new Set([
   "read_history",
@@ -331,10 +337,13 @@ export function createRuntimeContextPolicy(
     modelWindow = request.model.contextWindow ?? model.contextWindow,
   ): Prepared {
     const ctx = pruned(source);
+    const hasCodeMode = request.tools.some((tool) => tool.name === CODE_MODE);
     const hasHistoryRetrievalTools =
       Boolean(request.executeTool) &&
-      ["read_history", "search_history"].every((name) =>
-        request.tools.some((tool) => tool.name === name),
+      ["read_history", "search_history"].every(
+        (name) =>
+          request.tools.some((tool) => tool.name === name) ||
+          (hasCodeMode && Boolean(request.codeModeTools?.includes(name))),
       );
     const standaloneHistoryFallback =
       request.contextStrategy === undefined && !hasHistoryRetrievalTools;

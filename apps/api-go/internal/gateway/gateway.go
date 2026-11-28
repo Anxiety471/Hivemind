@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/auth"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
@@ -85,10 +86,19 @@ func New(options Options) *Gateway {
 		Rewrite: gateway.rewrite,
 		// A negative interval flushes after every write, which is what event
 		// streams need; ordinary JSON bodies are unaffected.
-		FlushInterval: -1,
-		Transport:     transport,
-		ErrorHandler:  gateway.upstreamFailed,
-		ErrorLog:      slog.NewLogLogger(options.Logger.Handler(), slog.LevelWarn),
+		FlushInterval:  -1,
+		Transport:      transport,
+		ErrorHandler:   gateway.upstreamFailed,
+		ErrorLog:       slog.NewLogLogger(options.Logger.Handler(), slog.LevelWarn),
+		ModifyResponse: func(response *http.Response) error {
+			// A reverse proxy in front of this gateway buffers a stream unless it is
+			// told not to; the API sets the same header, so this only fills a gap.
+			if strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") &&
+				response.Header.Get("X-Accel-Buffering") == "" {
+				response.Header.Set("X-Accel-Buffering", "no")
+			}
+			return nil
+		},
 	}
 	return gateway
 }
@@ -124,6 +134,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			g.proxy.ServeHTTP(status, r)
 		}
+	case r.URL.Path == auth.DriveOpenPath && g.drive != nil:
+		g.drive.ServeHTTP(status, r)
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
 		mode, readOnly, explicit := g.routes.LookupExplicit(r.URL.Path)
 		// Space Drive files.* run natively in Go by default when initialized unless

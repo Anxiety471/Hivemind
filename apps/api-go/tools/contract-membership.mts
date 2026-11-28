@@ -17,6 +17,16 @@ type System = any;
 
 const sha = (token: string) => createHash("sha256").update(token).digest("hex");
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n));
+// organizations.list and the invitation lists order by createdAt alone; organizations and
+// invitations seeded together would otherwise share at(0)/at(20) or a default now(). One
+// millisecond per seeded row, keyed by the seed object, keeps those orders total and identical on
+// both sides (the harness seeds each side with a fresh object).
+const seedTimes = new WeakMap<Seeded, number>();
+const seedTime = (seeded: Seeded, base: Date) => {
+  const n = seedTimes.get(seeded) ?? 0;
+  seedTimes.set(seeded, n + 1);
+  return new Date(base.getTime() + n);
+};
 const HOUR = 3_600_000;
 /** Fixed instants, so both sides seed identical rows: a link or invitation that is still open, and one that has lapsed. */
 const OPEN_UNTIL = new Date(Date.UTC(2099, 0, 1));
@@ -182,7 +192,7 @@ export function membershipCases(system: System): Case[] {
         id: org,
         name: `Org ${key}`,
         slug: `contract-${seeded.userId}-${key}`,
-        createdAt: at(0),
+        createdAt: seedTime(seeded, at(0)),
       },
     });
     await S.member.create({
@@ -249,6 +259,7 @@ export function membershipCases(system: System): Case[] {
         spaceId,
         tokenHash: sha(token),
         createdByUserId: options.by ?? seeded.userId,
+        createdAt: seedTime(seeded, at(0)),
         expiresAt: expiry(options.expiresIn),
         acceptedAt: options.acceptedBy ? at(10) : null,
         acceptedByUserId: options.acceptedBy ?? null,
@@ -277,7 +288,8 @@ export function membershipCases(system: System): Case[] {
         role: "member",
         status: options.status ?? "pending",
         expiresAt: expiry(options.expiresIn),
-        createdAt: at(options.created ?? 20),
+        createdAt:
+          options.created === undefined ? seedTime(seeded, at(20)) : at(options.created),
         inviterId: options.by ?? seeded.userId,
       },
     });

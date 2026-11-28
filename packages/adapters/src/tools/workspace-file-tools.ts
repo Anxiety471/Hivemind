@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { AdapterContext, ComputerRef, SandboxProvider } from "@rakazo/adapter-kit";
 import { isSandboxProviderOutage, SandboxFileTooLargeError } from "@rakazo/adapter-kit";
 import type { ComputerMode } from "@rakazo/contracts";
@@ -10,7 +9,6 @@ import { JSDOM } from "jsdom";
 import {
   displayBotWorkspacePath,
   resolveBotWorkspacePath,
-  teamBotWorkspaceDirectory,
 } from "../computers/screens/computer-support.js";
 import { publishMessage } from "../runs/assembly/run-messages.js";
 import type { ExecutorDeps } from "../runs/executor/executor-deps.js";
@@ -34,13 +32,9 @@ export type RunWorkspace = {
   runSecrets: string[];
 };
 
-/** Names the file as the shell sees it: on a Team Computer the shell starts in the bot's home, not the Team root. */
-function fileTooLarge(computerMode: ComputerMode, botId: string, storedPath: string) {
-  const shellPath =
-    computerMode === "team"
-      ? path.posix.relative(teamBotWorkspaceDirectory(botId), storedPath)
-      : storedPath;
-  return `file is over ${READ_FILE_MAX_KB} KB; read parts of ${shellPath} with shell (grep, sed -n, tail)`;
+/** Names the file as the shell sees it from the workspace root. */
+function fileTooLarge(_computerMode: ComputerMode, _botId: string, storedPath: string) {
+  return `file is over ${READ_FILE_MAX_KB} KB; read parts of ${storedPath} with shell (grep, sed -n, tail)`;
 }
 
 /** An optional argument the model must send as a positive integer; anything else is ignored. */

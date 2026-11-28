@@ -66,7 +66,7 @@ vi.mock("@rakazo/ui-web", () => {
 
 import { downloadArtifactBytes } from "../../lib/pages/artifact-open";
 import { spaceQueries } from "../../lib/query/query";
-import { AgentSkills, KnowledgeSection } from "./KnowledgeSection";
+import { AgentSkills, KnowledgeSection, SpaceMemorySection } from "./KnowledgeSection";
 
 const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 let queryClient = newClient();
@@ -597,5 +597,100 @@ it("says a document changed elsewhere instead of failing the save, and reads the
     expect(memory.button("Save").disabled).toBe(true);
   } finally {
     await memory.cleanup();
+  }
+});
+
+it("hides cold archive documents from the memory list", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  memoryApi.list.mockResolvedValueOnce([
+    { id: "mem", path: "MEMORY.md", content: "# Bot\n\n- active", revision: 1, updatedAt: "" },
+    {
+      id: "arch",
+      path: "archive/2026-11.md",
+      content: "- [2026-11-25] archived note",
+      revision: 1,
+      updatedAt: "",
+    },
+  ] as never);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await show(root, <KnowledgeSection botId="fixture" />);
+    expect(host.textContent).toContain("MEMORY.md");
+    expect(host.textContent).not.toContain("archive/2026-11.md");
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
+it("hides legacy per-bot USER.md only when Space USER.md exists in budget", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    memoryApi.list.mockResolvedValueOnce([
+      { id: "mem", path: "MEMORY.md", content: "# Bot\n\n- active", revision: 1, updatedAt: "" },
+      { id: "usr", path: "USER.md", content: "- legacy profile", revision: 1, updatedAt: "" },
+    ] as never);
+    memoryApi.budget.mockResolvedValueOnce({
+      limitBytes: 32768,
+      usedBytes: 200,
+      documents: [
+        {
+          scope: "user",
+          path: "USER.md",
+          revision: 1,
+          totalBytes: 100,
+          includedBytes: 100,
+          truncated: false,
+        },
+      ],
+      omitted: [],
+    } as never);
+    await show(root, <KnowledgeSection botId="fixture" />);
+    expect(host.textContent).toContain("MEMORY.md");
+    expect(host.textContent).not.toContain("USER.md");
+
+    memoryApi.list.mockResolvedValueOnce([
+      { id: "mem", path: "MEMORY.md", content: "# Bot\n\n- active", revision: 1, updatedAt: "" },
+      { id: "usr", path: "USER.md", content: "- legacy profile", revision: 1, updatedAt: "" },
+    ] as never);
+    memoryApi.budget.mockResolvedValueOnce({
+      limitBytes: 32768,
+      usedBytes: 100,
+      documents: [],
+      omitted: [],
+    } as never);
+    await show(root, <KnowledgeSection key="no-shared" botId="fixture" />);
+    expect(host.textContent).toContain("USER.md");
+  } finally {
+    memoryApi.budget.mockReset().mockResolvedValue({
+      limitBytes: 32768,
+      usedBytes: 0,
+      documents: [],
+      omitted: [],
+    });
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
+it("labels SpaceMemorySection as Shared Memory while keeping bot Memory distinct", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  memoryApi.list.mockResolvedValue([
+    { id: "shared-mem", path: "MEMORY.md", content: "# Shared", revision: 1, updatedAt: "" },
+  ] as never);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await show(root, <SpaceMemorySection />);
+    expect(host.querySelector("h3")?.textContent).toBe("Shared Memory");
+    await show(root, <KnowledgeSection botId="fixture" />);
+    expect(host.querySelector("h3")?.textContent).toBe("Memory");
+  } finally {
+    memoryApi.list.mockReset().mockResolvedValue([]);
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
   }
 });

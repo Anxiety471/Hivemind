@@ -847,7 +847,7 @@ it.each([false, true])(
         "Approvals",
         "Vault",
         "Computers",
-        "Memory",
+        "Shared Memory",
         "Voice",
         "Messaging",
         "Labs",
@@ -867,7 +867,7 @@ it.each([false, true])(
         ["Models", "/models"],
         ["Vault", "/vault"],
         ["Computers", "/computers"],
-        ["Memory", "/memory"],
+        ["Shared Memory", "/memory"],
         ["Messaging", "/messaging"],
       ]) {
         events.length = 0;

@@ -168,6 +168,9 @@ export async function consumeRunEvents(
         await recordLiveRunUsage(ctx, event.costUsd);
       } else if (event.type === "done") {
         recordExplicitNoResponse(reply, event.text ?? "");
+        if (event.emptyResponse) reply.emptyResponse = true;
+        if (event.emptyResponseReminders)
+          reply.emptyResponseReminders = event.emptyResponseReminders;
         if (!reply.assembled && event.text) {
           if (reply.publishedMidTurnUserMessage || reply.discardedMidTurnNarration) {
             // Mid-turn narration was already published or discarded (routines).

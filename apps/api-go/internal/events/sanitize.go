@@ -1,9 +1,8 @@
 package events
 
 import (
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"sort"
-	"unicode/utf16"
-	"unicode/utf8"
 )
 
 // SanitizeJSON is sanitizeJsonValue (packages/core/src/events.ts:772-803):
@@ -47,42 +46,11 @@ func SanitizeJSON(value any) any {
 	return value
 }
 
-// sanitizeUTF16ForJSON is sanitizeUtf16ForJson: replace NUL, a high surrogate
-// without a low after it, and a low surrogate without a high before it, each
-// with U+FFFD, per UTF-16 code unit.
-func sanitizeUTF16ForJSON(value string) string {
-	units := utf16.Encode([]rune(value))
-	needsWork := !utf8.ValidString(value)
-	for _, unit := range units {
-		if unit == 0 || (unit >= 0xD800 && unit <= 0xDFFF) {
-			needsWork = true
-			break
-		}
-	}
-	if !needsWork {
-		return value
-	}
-	out := make([]uint16, 0, len(units))
-	for index := 0; index < len(units); index++ {
-		unit := units[index]
-		switch {
-		case unit == 0:
-			out = append(out, 0xFFFD)
-		case unit >= 0xD800 && unit <= 0xDBFF:
-			if index+1 < len(units) && units[index+1] >= 0xDC00 && units[index+1] <= 0xDFFF {
-				out = append(out, unit, units[index+1])
-				index++
-			} else {
-				out = append(out, 0xFFFD)
-			}
-		case unit >= 0xDC00 && unit <= 0xDFFF:
-			out = append(out, 0xFFFD)
-		default:
-			out = append(out, unit)
-		}
-	}
-	return string(utf16.Decode(out))
-}
+// sanitizeUTF16ForJSON is sanitizeUtf16ForJson: NUL and an unpaired UTF-16
+// surrogate become U+FFFD, per code unit. The WTF-8 boundary hands a lone
+// surrogate to this package as its three-byte form, which the shared rule
+// replaces with one U+FFFD.
+func sanitizeUTF16ForJSON(value string) string { return wtf8.SanitizeText(value) }
 
 // itoa avoids importing strconv for one non-negative int.
 func itoa(value int) string {

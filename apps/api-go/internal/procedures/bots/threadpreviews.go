@@ -2,6 +2,7 @@ package bots
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,8 @@ const (
 	botPreviewWindow = 16
 	// botPreviewPages is BOT_PREVIEW_PAGES (bot-previews.ts:11).
 	botPreviewPages = 5
+	// emptyResponseFallbackText is the text a bot reply carries when the run produced nothing.
+	emptyResponseFallbackText = "No response. Try again."
 )
 
 // outlineMessage is ScannedMessage (bot-previews.ts:26). Blocks holds only each block's kind
@@ -34,6 +37,45 @@ type outlineMessage struct {
 type previewPage struct {
 	ThreadID  string
 	BeforeSeq *int32
+}
+
+// isNoResponseMessage mirrors isNoResponseMessage (message-visibility.ts): hides persisted
+// empty, thinking-only, or fallback bot messages from sidebar previews while leaving live
+// placeholders, unloaded outlines, user messages, and non-empty bot replies intact.
+func isNoResponseMessage(message *outlineMessage) bool {
+	if !message.Loaded || message.Role != "bot" || strings.HasPrefix(message.ID, "progress:") {
+		return false
+	}
+	if len(message.Blocks) == 0 {
+		return true
+	}
+	hasThinking := false
+	hasText := false
+	var textCombined strings.Builder
+	for _, entry := range message.Blocks {
+		block, ok := entry.(map[string]any)
+		if !ok {
+			return false
+		}
+		switch blockKind(block) {
+		case "thinking":
+			hasThinking = true
+		case "text":
+			text, ok := block["text"].(string)
+			if !ok {
+				return false
+			}
+			hasText = true
+			textCombined.WriteString(text)
+		default:
+			return false
+		}
+	}
+	trimmed := strings.TrimSpace(textCombined.String())
+	if trimmed == "" {
+		return hasText || hasThinking
+	}
+	return trimmed == emptyResponseFallbackText
 }
 
 // botThreadPreviews is botThreadPreviews (bot-previews.ts:97): the sidebar preview text of a
@@ -131,6 +173,9 @@ func botThreadPreviews(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRi
 						continue
 					}
 					if len(candidates) > 0 {
+						continue
+					}
+					if isNoResponseMessage(message) {
 						continue
 					}
 					if preview := shared.PreviewFromBlocks(message.Blocks); preview != "" {

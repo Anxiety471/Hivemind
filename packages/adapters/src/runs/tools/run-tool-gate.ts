@@ -64,7 +64,7 @@ import { resolveCompletedSecretLeftover } from "../../secrets/run-secret.js";
 import { scheduleRunSecretsExpiry } from "../../secrets/run-secrets-expiry.js";
 import { RAKAZO_DOCS_URLS } from "../../tools/builtin-skills.prompt.js";
 import { CATALOG_LOAD, CATALOG_SEARCH } from "../../tools/lazy-tool-catalog.js";
-import { watchFromTool } from "../../tools/schedule-tools.js";
+import { asksRoutinePrepare, watchFromTool } from "../../tools/schedule-tools.js";
 import type { RunContext, RunTrust } from "../assembly/run-context.js";
 import {
   isRunTainted,
@@ -107,6 +107,8 @@ export interface ToolCall {
   readonly args: Record<string, unknown>;
   readonly executionId: string;
   readonly observer: AgentToolExecutionObserver | undefined;
+  /** A tighter limit on a shell command this call runs, set when a script makes the call. */
+  readonly commandTimeoutMs?: number;
   readonly connectorCall: ConnectorCall;
   /** Idempotency key of this call's effect; also the delivery key of what it sends. */
   readonly effectKey: string;
@@ -159,6 +161,7 @@ export async function gateToolCall(
   ctx: RunContext,
   request: ToolRequest,
   observer: AgentToolExecutionObserver | undefined,
+  commandTimeoutMs?: number,
 ): Promise<GateOutcome> {
   const { deps, run, runId, context } = ctx;
   const { name, executionId, connectorCall, resolvedTool, nextApprovedTool, approvedEffectKey } =
@@ -270,10 +273,11 @@ export async function gateToolCall(
     (await ctx.trust.routineNamesNewSite(String(args.prompt ?? "")));
   const memoryWriteGated = await memoryWriteNeedsApproval(name, () => isRunTainted(ctx));
   // An event trigger opens a standing way in for outside text (a chat app's every message, mail,
-  // a webhook), so once outside content entered this run, adding one needs a person, as above.
+  // a webhook), and a prepare command runs a saved script with the owner's accounts on every run,
+  // so once outside content entered this run, adding either needs a person, as above.
   const routineAddsEvents =
     (name === "schedule_create" || name === "schedule_update" || name === "create_child_routine") &&
-    asksRoutineEvents(args.on) &&
+    (asksRoutineEvents(args.on) || asksRoutinePrepare(args.prepare)) &&
     (await isRunTainted(ctx));
   const { purchase, cardUse, loginUse } = request;
   // Saved logins that ask first require the owner on every use, like saved cards.
@@ -566,11 +570,27 @@ export async function gateToolCall(
   }
 
   const needsApproval = gateDecision === "ask";
+  if (needsApproval && ctx.state.preparing) {
+    // The row only existed to hold this request; a later call by the model asks on its own.
+    if (applied && !applied.duplicate) {
+      await deps.prisma.externalEffect.deleteMany({
+        where: { id: applied.effect.id, status: "intended" },
+      });
+    }
+    await auditToolCall(ctx, name, "denied", { reason: "prepare_unattended" });
+    return {
+      result: refusal(
+        "prepare_needs_approval",
+        `${name} needs approval, and a routine's prepare command cannot ask.`,
+      ),
+    };
+  }
   const call = createToolCall(ctx, {
     name,
     args,
     executionId,
     observer,
+    commandTimeoutMs,
     connectorCall,
     effectKey,
     applied,

@@ -145,6 +145,7 @@ describe("routines.list", () => {
       thinkingLevel: null,
       watch: null,
       watchState: null,
+      prepare: null,
       lastRunAt: null,
       nextRunAt: null,
       createdAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -196,6 +197,7 @@ describe("routines.update", () => {
     modelProvider: null,
     modelId: null,
     thinkingLevel: null,
+    prepare: null,
     lastRunAt: null,
     nextRunAt: null,
     createdAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -509,6 +511,189 @@ describe("routines.update", () => {
   });
 });
 
+describe("routines.setPrepare", () => {
+  const actor = {
+    spaceId: "space-1",
+    userId: "user-1",
+    email: "user@rakazo.test",
+    isDeploymentOwner: false,
+  } satisfies Actor;
+  const routine = {
+    id: "routine-1",
+    botId: "bot-1",
+    spaceId: "space-1",
+    userId: "user-1",
+    name: "Morning",
+    prompt: "Check status",
+    crons: ["0 9 * * *"],
+    timezone: "UTC",
+    active: true,
+    notify: false,
+    inChat: false,
+    webhookEnabled: false,
+    githubEnabled: false,
+    messageProvider: null,
+    emailSenders: null,
+    modelProvider: null,
+    modelId: null,
+    thinkingLevel: null,
+    watch: null,
+    watchState: null,
+    prepare: null,
+    lastRunAt: null,
+    nextRunAt: null,
+    createdAt: new Date("2026-09-01T00:00:00.000Z"),
+  };
+
+  function fixture(
+    options: { saved?: Record<string, unknown>; commands?: string[]; thread?: boolean } = {},
+  ) {
+    const saved = { ...routine, ...options.saved };
+    const update = vi.fn(async (args: { data: Record<string, unknown> }) => ({
+      ...saved,
+      ...Object.fromEntries(
+        Object.entries(args.data).map(([key, value]) => [
+          key,
+          value === Prisma.DbNull ? null : value,
+        ]),
+      ),
+    }));
+    const findCommand = vi.fn(
+      async (args: { where: { spaceId_name: { spaceId: string; name: string } } }) =>
+        args.where.spaceId_name.spaceId === actor.spaceId &&
+        (options.commands ?? ["fetch_status"]).includes(args.where.spaceId_name.name)
+          ? { name: args.where.spaceId_name.name }
+          : null,
+    );
+    const append = vi.fn(async () => undefined);
+    const handler = appHandler({
+      prisma: {
+        routine: { findFirst: vi.fn(async () => saved), update },
+        codeCommand: { findUnique: findCommand },
+        bot: {
+          findFirst: vi.fn(async () => ({
+            id: "bot-1",
+            thread: options.thread === false ? null : { id: "thread-1" },
+            computer: null,
+          })),
+        },
+      },
+      env: { sandboxProvider: "fake" },
+      events: { append },
+    } as unknown as RouterDeps);
+    const call = async (prepare: unknown) => {
+      const response = await handle(
+        handler,
+        new Request("http://127.0.0.1/rpc/routines/setPrepare", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ json: { routineId: "routine-1", prepare } }),
+        }),
+        { prefix: "/rpc", context: { actor } },
+      );
+      const text = await response.text();
+      return { status: response.status, text, body: JSON.parse(text) as { json: unknown } };
+    };
+    return { update, findCommand, append, call };
+  }
+
+  it("saves the command its owner names and tells the bot's chat", async () => {
+    const { update, append, call } = fixture();
+    const response = await call({ command: "fetch_status", args: { limit: 5 } });
+    expect(response.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({
+      where: { id: "routine-1" },
+      data: { prepare: { command: "fetch_status", args: { limit: 5 } } },
+    });
+    expect(append).toHaveBeenCalledWith({
+      spaceId: "space-1",
+      threadId: "thread-1",
+      botId: "bot-1",
+      type: "routine.updated",
+      payload: { routineId: "routine-1", active: true },
+    });
+    expect(response.body.json).toMatchObject({
+      prepare: { command: "fetch_status", args: { limit: 5 } },
+    });
+  });
+
+  it("refuses a member who is not the routine's owner", async () => {
+    const { update, append, call } = fixture({ saved: { userId: "user-2" } });
+    const response = await call({ command: "fetch_status" });
+    expect(response.status).toBe(403);
+    expect(response.text).toContain("Only the routine's owner can change what it runs first.");
+    expect(update).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it("refuses a command the Space does not have", async () => {
+    const { update, call } = fixture({ commands: [] });
+    const response = await call({ command: "fetch_status" });
+    expect(response.status).toBe(400);
+    expect(response.text).toContain("There is no saved command named fetch_status.");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("clears the command with null", async () => {
+    const { update, findCommand, call } = fixture({
+      saved: { prepare: { command: "fetch_status", args: {} } },
+    });
+    const response = await call(null);
+    expect(response.status).toBe(200);
+    expect(findCommand).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith({
+      where: { id: "routine-1" },
+      data: { prepare: Prisma.DbNull },
+    });
+    expect(response.body.json).toMatchObject({ prepare: null });
+  });
+});
+
+describe("routines.commands", () => {
+  it("lists the Space's saved commands by name, with nulls for what they lack", async () => {
+    const actor = {
+      spaceId: "space-1",
+      userId: "user-1",
+      email: "user@rakazo.test",
+      isDeploymentOwner: false,
+    } satisfies Actor;
+    const findMany = vi.fn(async () => [
+      { id: "command-1", name: "alpha", description: "First", icon: null, parameters: null },
+      {
+        id: "command-2",
+        name: "beta",
+        description: "Second",
+        icon: "file-text",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+    const client = createRouterClient(
+      createRouter({
+        prisma: { codeCommand: { findMany } },
+        env: { sandboxProvider: "fake" },
+      } as unknown as RouterDeps),
+      { context: { actor } as never },
+    );
+
+    const commands = await client.routines.commands({});
+    expect(commands).toEqual([
+      { name: "alpha", description: "First", icon: null, parameters: null },
+      {
+        name: "beta",
+        description: "Second",
+        icon: "file-text",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { spaceId: "space-1" },
+      select: { id: true, name: true, description: true, icon: true, parameters: true },
+      orderBy: { name: "asc" },
+      take: 500,
+    });
+  });
+});
+
 describe("routines.remove", () => {
   function fixture() {
     const routine = { id: "routine-1", botId: "bot-1", spaceId: "space-1", userId: "user-a" };
@@ -617,11 +802,11 @@ describe("routine watch creation boundaries", () => {
       client.routines.create({ botId: "bot-1", name: "Check", prompt: "Check changes", watch }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      message: expect.stringContaining("inside the bot's folder"),
+      message: expect.stringContaining("inside the shared workspace"),
     });
     await expect(client.routines.update({ routineId: "routine-1", watch })).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      message: expect.stringContaining("inside the bot's folder"),
+      message: expect.stringContaining("inside the shared workspace"),
     });
     expect(create).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
@@ -634,7 +819,7 @@ describe("routine watch creation boundaries", () => {
       expect(status).toBe(400);
       expect(JSON.parse(body).json).toMatchObject({
         code: "BAD_REQUEST",
-        message: "The watched path must stay inside the bot's folder.",
+        message: "The watched path must stay inside the shared workspace.",
       });
     }
     expect(create).not.toHaveBeenCalled();

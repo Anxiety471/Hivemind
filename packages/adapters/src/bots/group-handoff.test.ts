@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@rakazo/db";
 import { RunHistoryWriteError } from "@rakazo/db";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { handoffToGroupBot, loadBotGroupDirectory } from "./group-handoff.js";
 
 const run = {
@@ -52,7 +52,7 @@ function harness(
     },
     task: { create: vi.fn(async (_args: unknown) => ({ id: "task-b" })) },
     event: {
-      findFirst: vi.fn(async () => ({ seq: 1 })),
+      findFirst: vi.fn(async (): Promise<{ seq: number } | null> => ({ seq: 1 })),
       create: vi.fn(async () => ({ seq: 1 })),
     },
   };
@@ -72,6 +72,8 @@ function harness(
 }
 
 describe("group handoff ownership", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("marks a new ownership transfer as a follow-up with a chain hop", async () => {
     const { deps, messageCreate, runCreate } = harness([{ kind: "text", text: "user request" }]);
 
@@ -185,7 +187,8 @@ describe("group handoff ownership", () => {
     expect(deps.jobs.enqueue).toHaveBeenCalledOnce();
   });
 
-  it("caps a coordinator and worker handing a stage back and forth", async () => {
+  it("caps a coordinator and worker handing a stage back and forth once the fuse is set", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const { deps, runCreate } = harness([
       { kind: "handoff", fromBotId: "bot-b", toBotId: "bot-a", text: "Revise again", hop: 6 },
     ]);
@@ -202,7 +205,8 @@ describe("group handoff ownership", () => {
     expect(runCreate).not.toHaveBeenCalled();
   });
 
-  it("caps longer multi-agent handoff chains", async () => {
+  it("caps longer multi-agent handoff chains once the fuse is set", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const { deps, runCreate } = harness([
       { kind: "handoff", fromBotId: "bot-b", toBotId: "bot-a", text: "Stage six", hop: 6 },
     ]);
@@ -363,6 +367,7 @@ describe("explicit group destinations", () => {
   );
 
   it("keeps the chain limit when a direct conversation continues in a group", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const h = privateTurn();
     h.tx.run.findFirst.mockResolvedValue({
       id: run.id,
@@ -464,6 +469,40 @@ describe("explicit group destinations", () => {
     expect(h.messageCreate).not.toHaveBeenCalled();
     expect(h.runCreate).not.toHaveBeenCalled();
     expect(h.deps.events.notify).toHaveBeenCalledWith("group-thread", 1);
+  });
+
+  it("replays a handoff whose event retention pruned", async () => {
+    const h = privateTurn();
+    h.tx.message.findUnique.mockResolvedValue({
+      id: "message-1",
+      sourceRuns: [{ id: "run-b", botId: "bot-b" }],
+    });
+    h.tx.event.findFirst.mockResolvedValue(null);
+    await expect(
+      handoffToGroupBot(h.deps as never, run, "group-1", {
+        bot_id: "bot-b",
+        message: "Continue",
+      }),
+    ).resolves.toMatchObject({ ok: true, runId: "run-b" });
+    expect(h.messageCreate).not.toHaveBeenCalled();
+    expect(h.runCreate).not.toHaveBeenCalled();
+    // Absence of the event leaves the replay with no sequence to announce.
+    expect(h.deps.events.notify).not.toHaveBeenCalled();
+  });
+
+  it("reports a replayed handoff whose source run is gone", async () => {
+    const h = privateTurn();
+    h.tx.message.findUnique.mockResolvedValue({ id: "message-1", sourceRuns: [] });
+    await expect(
+      handoffToGroupBot(h.deps as never, run, "group-1", {
+        bot_id: "bot-b",
+        message: "Continue",
+      }),
+    ).resolves.toEqual({
+      error: "recorded handoff is incomplete: its source run is missing",
+    });
+    expect(h.messageCreate).not.toHaveBeenCalled();
+    expect(h.runCreate).not.toHaveBeenCalled();
   });
 
   it("rejects unavailable or cross-space groups", async () => {

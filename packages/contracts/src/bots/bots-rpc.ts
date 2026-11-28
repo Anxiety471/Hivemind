@@ -28,7 +28,14 @@ import {
   UpdateBotInput,
 } from "./bot.js";
 import { BotEmailAddressesSchema, BotEmailAddressSchema, BotEmailNameSchema } from "./bot-email.js";
-import { MemoryDocumentSchema, MemoryPromptBudgetSchema, MemoryScopeSchema } from "./bot-memory.js";
+import {
+  MemoryDocumentSchema,
+  MemoryPromptBudgetSchema,
+  MemoryRoamerSettingsSchema,
+  MemoryScopeSchema,
+  SpaceSystemPromptSchema,
+  SYSTEM_PROMPT_APPEND_MAX_CHARS,
+} from "./bot-memory.js";
 import {
   BotSecretMetadata,
   BotSecretPutInput,
@@ -157,6 +164,23 @@ export const botsRpc = {
       )
       .output(SpaceMemoryConfigSchema),
     disconnectProvider: oc.output(z.object({ ok: z.literal(true) })),
+    roamer: oc.output(MemoryRoamerSettingsSchema),
+    setRoamer: oc
+      .input(
+        z.object({
+          enabled: z.boolean(),
+          intervalMinutes: z.number().int().min(15).max(10_080).optional(),
+        }),
+      )
+      .output(MemoryRoamerSettingsSchema),
+    systemPrompt: oc.output(SpaceSystemPromptSchema),
+    setSystemPrompt: oc
+      .input(
+        z.object({
+          append: z.string().max(SYSTEM_PROMPT_APPEND_MAX_CHARS),
+        }),
+      )
+      .output(SpaceSystemPromptSchema),
   },
   scratchpad: {
     list: oc

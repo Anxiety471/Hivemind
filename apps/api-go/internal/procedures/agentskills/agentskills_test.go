@@ -62,7 +62,7 @@ func TestParseGetIssues(t *testing.T) {
 
 func TestBuiltinCatalogAndLookup(t *testing.T) {
 	catalog := builtinCatalog()
-	if len(catalog) != 4 || catalog[0].ID != "builtin:Interrogate" || catalog[1].ID != "builtin:Rakazo" || catalog[2].ID != "builtin:Tasks" || catalog[3].ID != "builtin:History" {
+	if len(catalog) != 8 || catalog[0].ID != "builtin:Interrogate" || catalog[1].ID != "builtin:Rakazo" || catalog[2].ID != "builtin:Tasks" || catalog[3].ID != "builtin:History" || catalog[4].ID != "builtin:Routines" || catalog[5].ID != "builtin:Computer" || catalog[6].ID != "builtin:Subagents" || catalog[7].ID != "builtin:Documents" {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 	if catalog[0].Content == "" || catalog[0].CreatedAt != epoch {
@@ -77,12 +77,21 @@ func TestBuiltinCatalogAndLookup(t *testing.T) {
 	if found := findSkillByName(catalog, "history"); found == nil || found.Name != "History" {
 		t.Fatalf("history lookup = %#v", found)
 	}
+	if found := findSkillByName(catalog, "computer"); found == nil || found.Name != "Computer" {
+		t.Fatalf("computer lookup = %#v", found)
+	}
+	if found := findSkillByName(catalog, "subagents"); found == nil || found.Name != "Subagents" {
+		t.Fatalf("subagents lookup = %#v", found)
+	}
+	if found := findSkillByName(catalog, "documents"); found == nil || found.Name != "Documents" {
+		t.Fatalf("documents lookup = %#v", found)
+	}
 	if found := findSkillByName(catalog, "   "); found != nil {
 		t.Fatalf("blank lookup = %#v", found)
 	}
 	users := []Skill{{ID: "u1", Name: "rakazo"}}
 	merged := mergeBuiltinSkills(catalog, users)
-	if len(merged) != 4 || merged[0].ID != "builtin:Interrogate" || merged[1].ID != "builtin:Tasks" || merged[2].ID != "builtin:History" || merged[3].ID != "u1" {
+	if len(merged) != 8 || merged[0].ID != "builtin:Interrogate" || merged[1].ID != "builtin:Tasks" || merged[2].ID != "builtin:History" || merged[3].ID != "builtin:Routines" || merged[4].ID != "builtin:Computer" || merged[5].ID != "builtin:Subagents" || merged[6].ID != "builtin:Documents" || merged[7].ID != "u1" {
 		t.Fatalf("merged = %#v", merged)
 	}
 }

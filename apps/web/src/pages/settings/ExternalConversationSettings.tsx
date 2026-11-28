@@ -236,7 +236,7 @@ export function ExternalConversationSettings({
       ) : null}
       <div className="mt-6 flex min-h-10 items-center gap-3">
         <Button
-          disabled={save.pending}
+          loading={save.pending}
           onClick={() => {
             setSaved(false);
             save.run({
@@ -249,7 +249,7 @@ export function ExternalConversationSettings({
             });
           }}
         >
-          {save.pending ? <Trans>Saving...</Trans> : <Trans>Save</Trans>}
+          <Trans>Save</Trans>
         </Button>
         {saved ? <SuccessPop label={t`Saved`} /> : null}
       </div>

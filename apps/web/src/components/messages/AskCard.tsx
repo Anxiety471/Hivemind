@@ -1,6 +1,6 @@
 import { t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
-import { ChatMarkdown } from "@rakazo/chat-ui/web";
+import { ChatMarkdown, LinkifiedText } from "@rakazo/chat-ui/web";
 import type { AskReceipt, LoginFieldInput, ThreadMessage } from "@rakazo/contracts";
 import { BOT_INSTRUCTIONS_MAX_LENGTH } from "@rakazo/contracts";
 import {
@@ -17,7 +17,9 @@ import { useState } from "react";
 import type { RpcClient } from "../../lib/query/rpc";
 import { rpc as selectedSpaceRpc } from "../../lib/query/rpc";
 import { errorText } from "../../lib/query/user-error";
+import { useChatReferences } from "../../pages/shell/chat/chat-references";
 import { BuiCard } from "../ai/primitives";
+import { BatchAskCard } from "./BatchAskCard";
 import { OptionRow, optionLetter } from "./OptionRow";
 import { SecretAskCard } from "./SecretAskCard";
 
@@ -131,11 +133,12 @@ export type AskCardProps = {
 
 /** A question, approval or protected-input request from the bot. */
 export function AskCard(props: AskCardProps) {
-  return isSecretAskBlock(props.block) ? (
-    <SecretAskCard {...props} />
-  ) : (
-    <PromptAskCard {...props} />
-  );
+  if (isSecretAskBlock(props.block)) return <SecretAskCard {...props} />;
+  if (props.block.items?.length && !isApprovalAskBlock(props.block))
+    return (
+      <BatchAskCard block={props.block} canAnswer={props.canAnswer} onAnswer={props.onAnswer} />
+    );
+  return <PromptAskCard {...props} />;
 }
 
 function PromptAskCard({
@@ -146,6 +149,7 @@ function PromptAskCard({
   rpc = selectedSpaceRpc,
 }: AskCardProps) {
   const { t } = useLingui();
+  const { referenceContext, openTicket, decideTicket } = useChatReferences();
   const [editing, setEditing] = useState(false);
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
@@ -276,7 +280,18 @@ function PromptAskCard({
               : "mt-2.5 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background px-3 py-2 font-mono text-body-sm leading-[1.6] text-foreground"
           }
         >
-          {block.detail}
+          {block.detailFormat === "text" ? (
+            // Prose keeps its line breaks and links its tickets, pull requests and commits; code does not.
+            <LinkifiedText
+              onOpenTicket={openTicket}
+              onDecideTicket={decideTicket}
+              referenceContext={referenceContext}
+            >
+              {block.detail}
+            </LinkifiedText>
+          ) : (
+            block.detail
+          )}
         </pre>
       ) : null}
       {block.instructionUpdate && editing && canAnswer && !answered ? (
@@ -318,7 +333,18 @@ function PromptAskCard({
               }
               onClick={() => void submitAnswer(action.id)}
             >
-              {pendingAction === action.id ? <Trans>Sending…</Trans> : action.label}
+              {pendingAction === action.id ? (
+                <Trans>Sending…</Trans>
+              ) : (
+                <>
+                  <span className="block">{action.label}</span>
+                  {action.description ? (
+                    <span className="block text-body-sm text-muted-foreground">
+                      {action.description}
+                    </span>
+                  ) : null}
+                </>
+              )}
             </OptionRow>
           ))}
           {canAnswer && !answered ? (

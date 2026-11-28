@@ -362,13 +362,23 @@ func TestNotifyCommittedPublishesExactEnvelope(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	publisher := &events.PGPublisher{Pool: database.Pool}
-	events.NotifyCommitted(ctx, publisher, nil, nil, fixture.threadID, 7, "")
+	events.NotifyCommitted(ctx, publisher, nil, nil, fixture.threadID, 7, "", "skill.saved")
 	notification, err := connection.Conn().WaitForNotification(ctx)
 	if err != nil {
 		t.Fatalf("wait: %v", err)
 	}
-	expected := `{"topic":"thread:` + fixture.threadID + `","payload":"{\"cursor\":7}"}`
+	expected := `{"topic":"thread:` + fixture.threadID + `","payload":"{\"cursor\":7,\"type\":\"skill.saved\"}"}`
 	if notification.Channel != events.RealtimeChannel || notification.Payload != expected {
 		t.Fatalf("notification = %s %s, want %s", notification.Channel, notification.Payload, expected)
+	}
+	// A publisher that names no event type sends the cursor alone (event-stream.ts:41-43).
+	events.NotifyCommitted(ctx, publisher, nil, nil, fixture.threadID, 8, "", "")
+	notification, err = connection.Conn().WaitForNotification(ctx)
+	if err != nil {
+		t.Fatalf("wait untyped: %v", err)
+	}
+	expected = `{"topic":"thread:` + fixture.threadID + `","payload":"{\"cursor\":8}"}`
+	if notification.Channel != events.RealtimeChannel || notification.Payload != expected {
+		t.Fatalf("untyped notification = %s %s, want %s", notification.Channel, notification.Payload, expected)
 	}
 }

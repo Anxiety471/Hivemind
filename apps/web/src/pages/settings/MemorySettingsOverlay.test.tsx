@@ -18,6 +18,10 @@ const memory = vi.hoisted(() => ({
   updateProvider: vi.fn(),
   setDefaultScope: vi.fn(),
   disconnectProvider: vi.fn(),
+  roamer: vi.fn(),
+  setRoamer: vi.fn(),
+  systemPrompt: vi.fn(),
+  setSystemPrompt: vi.fn(),
 }));
 vi.mock("../../lib/query/rpc", () => {
   const client = { memory };
@@ -68,6 +72,23 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const call of Object.values(memory)) call.mockReset();
   memory.providers.mockResolvedValue(providers);
+  memory.roamer.mockResolvedValue({
+    enabled: false,
+    intervalMinutes: 360,
+    lastRunAt: null,
+    lastError: null,
+    lastChanges: 0,
+    lastModel: null,
+    lastFailures: [],
+    lastReport: [],
+    retryAt: null,
+    retryAttempt: 0,
+  });
+  memory.systemPrompt.mockResolvedValue({
+    basePromptPreview: "Base prompt preview.",
+    append: "",
+    hasHostAppend: false,
+  });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -143,7 +164,9 @@ it("connects the provider picked from the ones the server describes", async () =
   memory.connectProvider.mockResolvedValue(saved);
   const { onConfigChange, onBusyChange } = await render(null);
   await click(button("Connect memory provider"));
-  const select = host.querySelector<HTMLElement>('[role="combobox"]')!;
+  const select = [...host.querySelectorAll<HTMLElement>('[role="combobox"]')].find(
+    (candidate) => !candidate.hasAttribute("aria-label"),
+  )!;
   expect(select.textContent).toBe("Notes");
   expect(input("API key")).toBeDefined();
 
@@ -166,6 +189,145 @@ it("connects the provider picked from the ones the server describes", async () =
   expect(onConfigChange).toHaveBeenCalledWith(saved);
   expect(onBusyChange.mock.calls.map(([busy]) => busy)).toContain(true);
   expect(onBusyChange).toHaveBeenLastCalledWith(false);
+});
+
+it("shows every bot's outcome and changes", async () => {
+  memory.roamer.mockResolvedValue({
+    enabled: true,
+    intervalMinutes: 360,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastError: "1 bot failed",
+    lastChanges: 1,
+    lastModel: "deepseek-v4.1-flash",
+    lastFailures: [],
+    lastReport: [
+      {
+        kind: "bot",
+        id: "bot-1",
+        name: "Crumb",
+        status: "ok",
+        model: "deepseek-v4.1-flash",
+        changes: [
+          {
+            scope: "bot",
+            path: "MEMORY.md",
+            action: "update",
+            beforeBytes: 100,
+            afterBytes: 90,
+          },
+        ],
+        checkedAt: "2026-11-22T23:30:32.920Z",
+      },
+      {
+        kind: "bot",
+        id: "bot-2",
+        name: "Hatcha",
+        status: "ok",
+        model: "deepseek-v4.1-flash",
+        changes: [],
+        checkedAt: "2026-11-22T23:30:33.920Z",
+      },
+      {
+        kind: "shared",
+        id: "space-1",
+        name: "Team",
+        status: "failed",
+        error: "model HTTP 429",
+        changes: [],
+        checkedAt: "2026-11-22T23:30:34.920Z",
+      },
+    ],
+    retryAt: null,
+    retryAttempt: 0,
+  });
+  await render(null);
+  expect(host.textContent).toContain("Last run failed");
+  expect(host.textContent).toContain("1 of 3 checks failed");
+  expect(host.textContent).toContain("Shared Memory (Team)");
+  await click(button("View results"));
+  expect(document.body.textContent).toContain("Crumb");
+  expect(document.body.textContent).toContain("MEMORY.md: 100 → 90 bytes");
+  expect(document.body.textContent).toContain("Hatcha");
+  expect(document.body.textContent).toContain("1 with no changes");
+  expect(document.body.textContent).toContain("Shared Memory (Team)");
+  expect(document.body.textContent).toContain("model HTTP 429");
+  await act(async () => {
+    document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await settle();
+  expect(document.querySelector("[data-run-results]")).toBeNull();
+});
+
+it("names the command behind each skill change", async () => {
+  memory.roamer.mockResolvedValue({
+    enabled: true,
+    intervalMinutes: 360,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastError: null,
+    lastChanges: 2,
+    lastModel: "deepseek-v4.1-flash",
+    lastFailures: [],
+    lastReport: [
+      {
+        kind: "skills",
+        id: "space-1",
+        name: "Team",
+        status: "ok",
+        changes: [
+          {
+            command: "skill.update",
+            scope: "skill",
+            path: "Deploy",
+            action: "update",
+            beforeBytes: 400,
+            afterBytes: 520,
+          },
+          {
+            command: "skill.create",
+            scope: "skill",
+            path: "Release notes",
+            action: "create",
+            beforeBytes: 0,
+            afterBytes: 300,
+            created: true,
+          },
+        ],
+        checkedAt: "2026-11-22T23:30:34.920Z",
+      },
+    ],
+    retryAt: null,
+    retryAttempt: 0,
+  });
+  await render(null);
+  await click(button("View results"));
+  expect(document.body.textContent).toContain("Skills (Team)");
+  expect(document.body.textContent).toContain("skill.update Deploy: 400 → 520 bytes");
+  expect(document.body.textContent).toContain("skill.create Release notes: 0 → 300 bytes");
+});
+
+it("shows which targets failed and when the next retry runs", async () => {
+  // The component prints only the time for a same-day moment and adds the date otherwise, so the
+  // retry is anchored to today: a fixed date would change the label as the clock moves on.
+  const retryAt = new Date();
+  retryAt.setHours(7, 45, 0, 0);
+  memory.roamer.mockResolvedValue({
+    enabled: true,
+    intervalMinutes: 360,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastError: "1 bot failed",
+    lastChanges: 0,
+    lastModel: null,
+    lastFailures: [{ kind: "bot", id: "bot-1", name: "Crumb", error: "model HTTP 429" }],
+    retryAt: retryAt.toISOString(),
+    retryAttempt: 1,
+  });
+  await render(null);
+  expect(host.textContent).toContain("Last run failed");
+  expect(host.textContent).toContain("1 bot failed");
+  expect(host.textContent).toContain("Crumb");
+  expect(host.textContent).toContain("Retry at 7:45 AM · attempt 1");
+  await click(button("View results"));
+  expect(document.body.textContent).toContain("model HTTP 429");
 });
 
 it("shows why a connection failed, and keeps the form", async () => {
@@ -259,4 +421,34 @@ it("still shows a connection whose provider the server does not describe", async
   expect(host.textContent).toContain("retired");
   expect(() => button("Edit")).toThrow();
   expect(button("Disconnect")).toBeDefined();
+});
+
+it("shows the base system prompt preview and saves Space system prompt additions", async () => {
+  memory.systemPrompt.mockResolvedValue({
+    basePromptPreview: "Canonical base prompt text.",
+    append: "Initial rule.",
+    hasHostAppend: true,
+  });
+  memory.setSystemPrompt.mockResolvedValue({
+    basePromptPreview: "Canonical base prompt text.",
+    append: "Updated rule.",
+    hasHostAppend: true,
+  });
+  await render(null);
+  expect(host.textContent).toContain("Host append file is also active.");
+  expect(host.textContent).toContain("Canonical base prompt text.");
+  const textarea = host.querySelector("textarea");
+  if (!textarea) throw new Error("Missing system prompt textarea");
+  expect(textarea.value).toBe("Initial rule.");
+  expect(button("Save prompt").disabled).toBe(true);
+
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  await act(async () => {
+    set?.call(textarea, "Updated rule.");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+  expect(button("Save prompt").disabled).toBe(false);
+  await click(button("Save prompt"));
+  expect(memory.setSystemPrompt).toHaveBeenCalledWith({ append: "Updated rule." });
 });

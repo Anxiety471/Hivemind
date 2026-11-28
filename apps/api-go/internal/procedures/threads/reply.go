@@ -1,6 +1,7 @@
 package threads
 
 import (
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"strings"
 	"unicode"
 
@@ -71,7 +72,7 @@ func compactReplyExcerpt(text string) string {
 	if length := len(excerpt); length > 0 && excerpt[length-1] >= 0xd800 && excerpt[length-1] <= 0xdbff {
 		excerpt = excerpt[:length-1]
 	}
-	return fromUnits(excerpt)
+	return wtf8.FromUnits(excerpt)
 }
 
 // splitLines is split(/\r?\n/u).
@@ -84,45 +85,110 @@ func blockString(block map[string]any, key string) string {
 	return text
 }
 
-// replyBlockText is replyBlockText for the kinds a preview reads.
+// replyTexts is replyBlockText (packages/core/src/messages/message-quote.ts:152-206) by kind: what
+// a reply quotes from a block of that kind. message-quote.ts's switch is the same table, and
+// TestReplyTextKindsMatchTypeScript pins the two together. image and file are absent because a
+// preview splits them into `attachment` before it reads a caption, exactly as that function does.
+var replyTexts = map[string]func(map[string]any) string{
+	"text":                   replyText,
+	"ask":                    replyText,
+	"channel_message":        replyText,
+	"computer":               replyText,
+	"meta":                   replyText,
+	"progress":               replyText,
+	"handoff":                replyText,
+	"bot_message_sent":       replyText,
+	"bot_message_received":   replyText,
+	"agent_message_received": replyText,
+	"choice":                 func(block map[string]any) string { return blockString(block, "question") },
+	"card":                   replyCardText,
+	"steps":                  replyStepsText,
+	"voice_call":             replyTitle,
+	"cloud_agent":            replyTitle,
+	"job":                    replyTitle,
+	"page":                   replyTitle,
+	"call_request":           func(block map[string]any) string { return blockString(block, "reason") },
+	"subagent":               replySubagentText,
+	"child_bot":              replyName,
+	"skill_draft":            replyName,
+	"connect":                replyName,
+	"app_connect":            replyName,
+	"mcp_approval":           replyName,
+	"chart":                  replyName,
+	"routine_event":          replyName,
+	"app":                    func(block map[string]any) string { return blockString(block, "server") },
+	"import_setup":           replyImportSetupText,
+	// A delivery's prompt and a thinking block's reasoning are not the reply.
+	"delivery": replyNothing,
+	"thinking": replyNothing,
+}
+
+// replyBlockText is replyBlockText for the kinds a preview reads. delivery and thinking read as
+// nothing: reasoning is not the reply.
 func replyBlockText(block map[string]any) string {
-	switch kind := block["kind"]; kind {
-	case "text", "ask", "channel_message", "computer", "meta", "progress", "handoff",
-		"bot_message_sent", "bot_message_received":
-		return blockString(block, "text")
-	case "choice":
-		return blockString(block, "question")
-	case "card":
-		lines, _ := block["lines"].([]any)
-		parts := make([]string, len(lines))
-		for index, line := range lines {
-			entry := line.(map[string]any)
-			parts[index] = blockString(entry, "k") + ": " + blockString(entry, "v")
-		}
-		return strings.Join(parts, ", ")
-	case "steps":
-		steps, _ := block["steps"].([]any)
-		parts := make([]string, len(steps))
-		for index, entry := range steps {
-			parts[index] = blockString(entry.(map[string]any), "label")
-		}
-		return strings.Join(parts, ", ")
-	case "voice_call", "cloud_agent", "page":
-		return blockString(block, "title")
-	case "call_request":
-		return blockString(block, "reason")
-	case "subagent":
-		if name := blockString(block, "name"); name != "" {
-			return name
-		}
-		return blockString(block, "task")
-	case "child_bot", "skill_draft", "connect", "app_connect", "mcp_approval", "chart", "routine_event":
-		return blockString(block, "name")
-	case "app":
-		return blockString(block, "server")
+	kind, _ := block["kind"].(string)
+	read, known := replyTexts[kind]
+	if !known {
+		return ""
 	}
-	// delivery and thinking: reasoning is not the reply.
-	return ""
+	return read(block)
+}
+
+func replyText(block map[string]any) string { return blockString(block, "text") }
+
+// replyNothing is a kind whose block quotes nothing: a delivery's prompt, a thinking block.
+func replyNothing(map[string]any) string { return "" }
+
+func replyTitle(block map[string]any) string { return blockString(block, "title") }
+
+func replyName(block map[string]any) string { return blockString(block, "name") }
+
+func replyCardText(block map[string]any) string {
+	lines, _ := block["lines"].([]any)
+	parts := make([]string, len(lines))
+	for index, line := range lines {
+		entry, _ := line.(map[string]any)
+		parts[index] = blockString(entry, "k") + ": " + blockString(entry, "v")
+	}
+	return strings.Join(parts, ", ")
+}
+
+func replyStepsText(block map[string]any) string {
+	steps, _ := block["steps"].([]any)
+	parts := make([]string, len(steps))
+	for index, entry := range steps {
+		step, _ := entry.(map[string]any)
+		parts[index] = blockString(step, "label")
+	}
+	return strings.Join(parts, ", ")
+}
+
+func replySubagentText(block map[string]any) string {
+	if name := blockString(block, "name"); name != "" {
+		return name
+	}
+	return blockString(block, "task")
+}
+
+// replyImportSetupText is the checklist's item names: an agent import's rows are what a reply to
+// it quotes, and an undone checklist quotes nothing.
+func replyImportSetupText(block map[string]any) string {
+	if undone, _ := block["undone"].(bool); undone {
+		return ""
+	}
+	items, _ := block["items"].([]any)
+	parts := make([]string, 0, len(items))
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if name, ok := item["name"].(string); ok {
+			parts = append(parts, name)
+			continue
+		}
+		if title, ok := item["title"].(string); ok {
+			parts = append(parts, title)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // isQuestionAsk is isQuestionAskBlock.
@@ -157,7 +223,7 @@ func replyExcerpt(blocks []map[string]any, role string) (excerpt string, plain b
 			if len(source) > maxQuotableSource {
 				source = source[:maxQuotableSource]
 			}
-			visible := fromUnits(source)
+			visible := wtf8.FromUnits(source)
 			if block["kind"] == "text" && role != "user" && !plainMarkdownText(visible) {
 				return "", false
 			}

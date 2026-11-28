@@ -108,6 +108,7 @@ func readScope(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, spac
 		query += fmt.Sprintf(` AND "botId" = $%d`, len(args))
 	}
 	query += ` ORDER BY "updatedAt" DESC, path ASC`
+	// writeaudit:dynamic read: the botId clause is a fixed fragment; args are filters
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -174,11 +175,28 @@ func Budget(ctx context.Context, database *db.DB, actor db.Actor, ring *contentc
 // document first, then the higher revision, then the scope and path by locale comparison.
 func buildPlan(input []promptDocument, maxBytes int) PromptBudget {
 	plan := PromptBudget{LimitBytes: maxBytes, UsedBytes: 0, Documents: []PromptDocumentUse{}, Omitted: []PromptDocumentUse{}}
-	if len(input) == 0 {
+	hasSharedUser := false
+	for _, document := range input {
+		if document.Scope == "user" && document.Path == UserMemoryPath {
+			hasSharedUser = true
+			break
+		}
+	}
+	hot := make([]promptDocument, 0, len(input))
+	for _, document := range input {
+		if IsArchivePath(document.Path) {
+			continue
+		}
+		if hasSharedUser && document.Scope == "bot" && document.Path == UserMemoryPath {
+			continue
+		}
+		hot = append(hot, document)
+	}
+	if len(hot) == 0 {
 		return plan
 	}
 	comparator := collate.New(language.AmericanEnglish)
-	documents := append([]promptDocument(nil), input...)
+	documents := append([]promptDocument(nil), hot...)
 	sort.SliceStable(documents, func(i, j int) bool {
 		left, right := documents[i], documents[j]
 		if leftStamp, rightStamp := memoryTimestamp(left.UpdatedAt), memoryTimestamp(right.UpdatedAt); leftStamp != rightStamp {

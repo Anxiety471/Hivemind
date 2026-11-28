@@ -562,3 +562,38 @@ describe("withMentions", () => {
     ]);
   });
 });
+
+describe("plainTextLinkParts with reference context", () => {
+  const context = {
+    ticketPrefix: "TASK",
+    repositories: [{ url: "https://git.example.test/acme/hivemind" }],
+    tickets: [{ ref: "TASK-397", repository: "https://git.example.test/acme/hivemind" }],
+  };
+
+  it("splits tickets and resolvable pull requests out of the text, unchanged in value", () => {
+    const text = "TASK-397 in PR #19, Run 45952746540 and see https://example.com/a";
+    expect(plainTextLinkParts(text, context)).toEqual([
+      { type: "ticket", value: "TASK-397", ticketRef: "TASK-397" },
+      { type: "text", value: " in " },
+      {
+        type: "link",
+        value: "PR #19",
+        href: "https://git.example.test/acme/hivemind/pull/19",
+      },
+      { type: "text", value: ", Run 45952746540 and see " },
+      { type: "link", value: "https://example.com/a", href: "https://example.com/a" },
+    ]);
+  });
+
+  it("keeps a page link's title out of reference matching", () => {
+    expect(plainTextLinkParts("[TASK-1](page:pg_1)", context)).toEqual([
+      { type: "page", value: "TASK-1", pageId: "pg_1" },
+    ]);
+  });
+
+  it("leaves the text as it is without a context", () => {
+    expect(plainTextLinkParts("TASK-397 PR #19")).toEqual([
+      { type: "text", value: "TASK-397 PR #19" },
+    ]);
+  });
+});

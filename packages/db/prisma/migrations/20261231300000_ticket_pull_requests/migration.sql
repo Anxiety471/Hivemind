@@ -1,0 +1,1 @@
+ALTER TABLE "tickets" ADD COLUMN "pullRequests" JSONB NOT NULL DEFAULT '[]';

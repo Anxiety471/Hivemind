@@ -8,15 +8,17 @@ import {
 } from "@rakazo/adapter-kit";
 import {
   BACKGROUND_HELPER_TRIGGER,
+  canRetryRunError,
   containsSecret,
   displayName,
+  isConversationalRun,
   MISSING_TOOL_FINAL_RESPONSE_ERROR,
   normalizeRunError,
   redactSecrets,
   userRunError,
 } from "@rakazo/core";
 import { isDatabaseUnavailable, retryWhileDatabaseUnavailable } from "@rakazo/db";
-import { getLogger } from "@rakazo/logging";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import { sanitizedError } from "@rakazo/logging/monitoring";
 import { returnBotMessageOutcome } from "../../messaging/bot-messages.js";
 import {
@@ -26,14 +28,18 @@ import {
 import { isStrategicInitiativeRun } from "../../routines/strategic-initiative.js";
 import { rejectedRequestsOf } from "../../runtime/provider-request-shape.js";
 import { returnHelperOutcome } from "../../tasks/background-helpers.js";
+import { CUT_REPLY_CONTINUATION_PROMPT } from "../assembly/continuation.prompt.js";
+import { snapshotReply } from "../assembly/reply-snapshot.js";
 import {
   computerNeedsRecovery,
   computerRunError,
   RunComputerFailedError,
 } from "../assembly/run-computer.js";
 import type { RunContext, RunState } from "../assembly/run-context.js";
+import { saveTurnCheckpoint } from "../assembly/run-context.js";
 import { runPromotesMidTurnNarration } from "../assembly/run-replies.prompt.js";
 import { scheduleRoutineRetry } from "../assembly/run-routines.js";
+import type { TurnCheckpoint } from "../turn/turn-checkpoint.js";
 import {
   computerRetryDelay,
   enqueueSteeringContinuation,
@@ -151,6 +157,33 @@ export async function failRun(
     partialText && !containsSecret(partialText, ctx.secrets)
       ? [{ kind: "text" as const, text: partialText }]
       : [];
+  const shouldPreserveCheckpoint =
+    Boolean(ctx.state.failureCheckpoint) &&
+    !computerFailed &&
+    !ctx.scripted &&
+    isConversationalRun(run.trigger) &&
+    canRetryRunError(message);
+  let savedFailureCheckpoint = false;
+  if (shouldPreserveCheckpoint && ctx.state.failureCheckpoint) {
+    const checkpointToSave =
+      partialReply.length > 0
+        ? checkpointWithPartialReply(ctx.state.failureCheckpoint, partialText)
+        : ctx.state.failureCheckpoint;
+    const replyForCheckpoint = snapshotReply(ctx.state.reply);
+    if (partialReply.length > 0) {
+      replyForCheckpoint.assembled = "";
+      replyForCheckpoint.currentTextSegment = "";
+      replyForCheckpoint.textSinceLastStep = "";
+      replyForCheckpoint.messageSegments = replyForCheckpoint.messageSegments.filter(
+        (block) => block.kind !== "text",
+      );
+    }
+    const saved = await bestEffort(
+      "save failure turn checkpoint",
+      saveTurnCheckpoint(ctx, checkpointToSave, replyForCheckpoint).then(() => true),
+    );
+    savedFailureCheckpoint = saved === true;
+  }
   await ctx.settleRunningHelpers();
   const failed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
@@ -164,6 +197,7 @@ export async function failRun(
     outcome: "failed",
     error: message,
     ...(partialReply.length > 0 ? { partialReply } : {}),
+    ...(savedFailureCheckpoint ? { preserveTurnCheckpoint: true } : {}),
   });
   if (!failed) return;
   if (
@@ -250,4 +284,45 @@ export async function failRun(
       threadId: thread.id,
     });
   }
+}
+
+function checkpointWithPartialReply(checkpointJson: string, partialText: string): string {
+  const checkpoint = JSON.parse(checkpointJson) as TurnCheckpoint;
+  const last = checkpoint.messages.at(-1);
+  if (last?.role === "user" && last.content === CUT_REPLY_CONTINUATION_PROMPT) {
+    return checkpointJson;
+  }
+  const templateAssistant = [...checkpoint.messages]
+    .reverse()
+    .find(
+      (message): message is Extract<TurnCheckpoint["messages"][number], { role: "assistant" }> =>
+        message.role === "assistant",
+    );
+  const now = Date.now();
+  const assistantMessage: Extract<TurnCheckpoint["messages"][number], { role: "assistant" }> = {
+    role: "assistant",
+    content: [{ type: "text", text: partialText }],
+    api: templateAssistant?.api ?? "openai-responses",
+    provider: checkpoint.provider,
+    model: checkpoint.model,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: now,
+  };
+  const continuationMessage: Extract<TurnCheckpoint["messages"][number], { role: "user" }> = {
+    role: "user",
+    content: CUT_REPLY_CONTINUATION_PROMPT,
+    timestamp: now,
+  };
+  return JSON.stringify({
+    ...checkpoint,
+    messages: [...checkpoint.messages, assistantMessage, continuationMessage],
+  });
 }

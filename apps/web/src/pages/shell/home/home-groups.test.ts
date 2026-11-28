@@ -22,6 +22,9 @@ function ticket(id: string, status: Ticket["status"], updatedAt: string): Ticket
     createdAt: updatedAt,
     updatedAt,
     completedAt: null,
+    pullRequests: [],
+    issues: [],
+    repository: null,
   };
 }
 

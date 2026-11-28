@@ -481,4 +481,119 @@ describe("ActivityPanel", () => {
     expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(3);
     expect(container.textContent).toContain("Preparing run…");
   });
+
+  it("shows the active step detail in the live status banner for code_mode runs", () => {
+    renderPanel({
+      live: true,
+      blocks: [
+        stepsBlock([
+          step("Code mode", {
+            startedAtMs: 1_000,
+            status: "running",
+            detail: "cmd.weekly_report, list_fleet",
+          }),
+        ]),
+      ],
+      runMeta: { modelId: "claude-opus-5-5", status: "running" },
+    });
+
+    const bannerCode = panelRoot().querySelector("code");
+    expect(bannerCode?.textContent).toBe("cmd.weekly_report, list_fleet");
+  });
+
+  it("renders called and active skills in the card, timeline, inspector, and RunLogSheet", async () => {
+    renderPanel({
+      live: true,
+      blocks: [
+        stepsBlock(
+          [
+            step("Skill read", {
+              startedAtMs: 1_000,
+              durationMs: 400,
+              status: "done",
+              detail: "pr-watch",
+            }),
+            step("Code mode", {
+              startedAtMs: 1_500,
+              status: "running",
+              detail: "skill_read, shell",
+              skills: ["deploy-check"],
+            }),
+          ],
+          { skills: ["Weekly report"] },
+        ),
+      ],
+      runMeta: { modelId: "claude-opus-5-5", status: "running" },
+    });
+
+    const panel = panelRoot();
+    const skillsRow = panel.querySelector('[data-testid="activity-skills"]');
+    expect(skillsRow?.textContent).toContain("Skills");
+    expect(skillsRow?.textContent).toContain("Weekly report");
+    expect(skillsRow?.textContent).toContain("pr-watch");
+    expect(skillsRow?.textContent).toContain("deploy-check");
+
+    // Only deploy-check is on the currently running step, so only its chip has the live pulse dot.
+    const chips = Array.from(skillsRow?.children ?? []).slice(1);
+    const activeChip = chips.find((el) => el.textContent?.includes("deploy-check"));
+    const doneChip = chips.find((el) => el.textContent?.includes("pr-watch"));
+    expect(activeChip?.querySelector(".animate-pulse")).not.toBeNull();
+    expect(doneChip?.querySelector(".animate-pulse")).toBeNull();
+
+    // Code mode timeline row shows its inline skill badge.
+    const toolRows = panel.querySelector('[data-testid="tool-rows"]');
+    expect(toolRows?.textContent).toContain("deploy-check");
+
+    // Clicking the Code mode row opens StepInspectorPopover with Skills.
+    const codeModeBtn = Array.from(
+      toolRows?.querySelectorAll<HTMLButtonElement>("button[data-step-inspector-trigger]") ?? [],
+    ).find((btn) => btn.textContent?.includes("Code mode"));
+    act(() => {
+      codeModeBtn?.click();
+    });
+    expect(panel.querySelector('[data-testid="step-inspector-skills"]')?.textContent).toContain(
+      "deploy-check",
+    );
+
+    // Opening RunLogSheet shows the Skills section.
+    const logButton = panel.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open execution log"]',
+    );
+    act(() => {
+      logButton?.click();
+    });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Execution trace");
+    });
+    expect(document.body.textContent).toContain("Weekly report");
+    expect(document.body.textContent).toContain("pr-watch");
+    expect(document.body.textContent).toContain("deploy-check");
+  });
+
+  it("omits the skills row when no skills were called and summarizes legacy skill_read on settled cards", () => {
+    renderPanel({
+      live: true,
+      blocks: [stepsBlock([step("Shell", { detail: "ls", status: "running" })])],
+      runMeta: { modelId: "claude-opus-5-5", status: "running" },
+    });
+    expect(panelRoot().querySelector('[data-testid="activity-skills"]')).toBeNull();
+
+    renderPanel({
+      live: false,
+      blocks: [
+        stepsBlock([
+          step("Skill read", { detail: "Tasks", status: "done", durationMs: 200 }),
+          step("Shell", { detail: "gh pr view", status: "done", durationMs: 1_500 }),
+        ]),
+      ],
+      runMeta: { modelId: "claude-opus-5-5", status: "completed" },
+    });
+    act(() => {
+      triggerButton().click();
+    });
+    expect(panelRoot().textContent).toContain("used a skill");
+    expect(panelRoot().querySelector('[data-testid="activity-skills"]')?.textContent).toContain(
+      "Tasks",
+    );
+  });
 });

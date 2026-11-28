@@ -432,12 +432,15 @@ export async function handQueuedRunToWorkingRun(
           threadId: true,
           taskId: true,
           userId: true,
-          routine: { select: { watch: true } },
+          routine: { select: { watch: true, prepare: true } },
         },
       });
-      // Only a saved schedule's own instructions: a watch's note quotes what it read, and other
-      // routine-trigger turns, such as check-ins, run with tools of their own.
-      if (!queued?.routine || queued.routine.watch !== null) return null;
+      // Only a saved schedule's own instructions: a watch's note quotes what it read, a prepare
+      // command's result leads the run it belongs to, and other routine-trigger turns, such as
+      // check-ins, run with tools of their own.
+      if (!queued?.routine || queued.routine.watch !== null || queued.routine.prepare !== null) {
+        return null;
+      }
       await tx.$queryRaw`SELECT id FROM threads WHERE id = ${queued.threadId} FOR UPDATE`;
       const candidates = await tx.run.findMany({
         where: {

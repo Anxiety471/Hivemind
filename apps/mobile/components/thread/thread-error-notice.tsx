@@ -19,7 +19,7 @@ export function ThreadErrorNotice({
   resetAt?: number;
   onDetails?: () => void;
   /** The one action that fixes the failure. */
-  action?: { label: string; onPress: () => void } | null;
+  action?: { label: string; onPress: () => void; disabled?: boolean } | null;
 }) {
   const { t } = useLingui();
   const locale = useUiLocale();
@@ -67,7 +67,13 @@ export function ThreadErrorNotice({
           {upcomingReset ? (
             <Text style={{ color: tokens.mutedForeground, fontSize: 14 }}>{upcomingReset}</Text>
           ) : null}
-          {action ? <RunErrorAction label={action.label} onPress={action.onPress} /> : null}
+          {action ? (
+            <RunErrorAction
+              label={action.label}
+              onPress={action.onPress}
+              disabled={action.disabled}
+            />
+          ) : null}
           {summary && onDetails ? (
             <RunErrorTextAction label={t`Details`} onPress={onDetails} />
           ) : null}

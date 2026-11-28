@@ -40,6 +40,7 @@ export const railwayComputer: ComputerProviderDefinition = {
       maxWorkspaceFileBytes: opts.railwayMaxWorkspaceFileBytes,
       region: opts.railwaySandboxRegion,
       unreferencedMachines: opts.unreferencedMachines,
+      packageMirrorUrl: opts.packageMirrorUrl,
     });
   },
 };

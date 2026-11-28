@@ -48,6 +48,7 @@ export const kubernetesComputer: ComputerProviderDefinition = {
       homeClaim: opts.kubernetesHomeClaim,
       homeColocateNamespace: opts.kubernetesHomeColocateNamespace,
       homeColocateLabels: opts.kubernetesHomeColocateLabels,
+      packageMirrorUrl: opts.packageMirrorUrl,
     });
   },
 };

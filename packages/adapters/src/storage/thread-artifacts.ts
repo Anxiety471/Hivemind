@@ -23,10 +23,13 @@ import {
   attachmentComputerPath,
   inferAttachmentMimeType,
   messageBlockForArtifact,
+  normalizeFileSlug,
+  slugifyFileName,
   validateAttachmentMimeType,
 } from "@rakazo/core";
 import type { Artifact, Prisma, PrismaClient } from "@rakazo/db";
 import {
+  ensureBotDriveFolder,
   THREAD_LOCK_TRANSACTION_OPTIONS,
   withResolvedArtifactVersion,
   withTransactionRetry,
@@ -61,6 +64,8 @@ export async function attachWorkspaceFileToThread(
     operationId: string;
     name?: string;
     description?: string;
+    slug?: string;
+    folderId?: string | null;
     /** Checkpoint a caller's durable state atomically with attachment creation. */
     onAttached?: (tx: Prisma.TransactionClient, artifact: Artifact) => Promise<void>;
   },
@@ -76,6 +81,7 @@ export async function attachWorkspaceFileToThread(
   if (input.bytes.byteLength > maxBytes) {
     throw new Error(`file exceeds the ${attachmentSizeLabel(maxBytes)} attachment limit`);
   }
+  const slug = input.slug?.trim() ? normalizeFileSlug(input.slug) : slugifyFileName(name);
 
   const context = {
     operationId: input.operationId,
@@ -87,6 +93,16 @@ export async function attachWorkspaceFileToThread(
   };
   const stored = await deps.artifacts.put({ name, mimeType, bytes: input.bytes }, context);
   const hash = createHash("sha256").update(input.bytes).digest("hex");
+  const folderId =
+    input.folderId !== undefined
+      ? input.folderId
+      : "fileFolder" in deps.prisma && deps.prisma.fileFolder
+        ? await ensureBotDriveFolder(deps.prisma, {
+            spaceId: input.spaceId,
+            userId: input.userId,
+            botId: input.botId,
+          })
+        : null;
   // Concurrent runs in one thread contend for its sequence counters when onAttached posts
   // a message; Postgres aborts a deadlock victim, which commits nothing, so retry it.
   const row = await withTransactionRetry(() =>
@@ -96,6 +112,7 @@ export async function attachWorkspaceFileToThread(
         spaceId: input.spaceId,
         botId: input.botId,
         groupId: input.groupId,
+        folderId,
         name,
       },
       async (tx, { rootArtifactId, version }) => {
@@ -105,9 +122,11 @@ export async function attachWorkspaceFileToThread(
             userId: input.userId,
             botId: input.botId,
             groupId: input.groupId,
+            folderId,
             runId: input.runId,
             source: "bot",
             name,
+            slug,
             description:
               input.description?.trim().slice(0, ARTIFACT_DESCRIPTION_MAX_LENGTH) || null,
             mimeType,

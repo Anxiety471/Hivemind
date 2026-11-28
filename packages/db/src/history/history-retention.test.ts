@@ -4,6 +4,8 @@ import { chatHistoryRetentionDays, pruneChatHistory } from "./history-retention.
 
 const NOW = new Date("2026-11-17T00:00:00.000Z");
 const CUTOFF = new Date("2026-10-18T00:00:00.000Z");
+/** Read with no time bound elsewhere, so the pruner must never select them. */
+const KEPT_EVENT_TYPES = ["thread.cleared", "group.handoff", "skill.draft.created"];
 
 type Fixture = {
   thread?: null;
@@ -98,7 +100,13 @@ describe("pruneChatHistory", () => {
       where: { threadId: "thread-1", seq: { lte: 2 } },
     });
     expect(tx.event.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { threadId: "thread-1", createdAt: { lt: CUTOFF } } }),
+      expect.objectContaining({
+        where: {
+          threadId: "thread-1",
+          createdAt: { lt: CUTOFF },
+          type: { notIn: KEPT_EVENT_TYPES },
+        },
+      }),
     );
     expect(tx.event.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["e1", "e2"] } } });
   });
@@ -170,7 +178,13 @@ describe("pruneChatHistory", () => {
       expect.objectContaining({ where: { threadId: "thread-1", seq: { gt: 0 } } }),
     );
     expect(tx.event.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { threadId: "thread-1", createdAt: { lt: stays } } }),
+      expect.objectContaining({
+        where: {
+          threadId: "thread-1",
+          createdAt: { lt: stays },
+          type: { notIn: KEPT_EVENT_TYPES },
+        },
+      }),
     );
   });
 

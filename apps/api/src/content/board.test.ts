@@ -145,11 +145,14 @@ it.each([
   [[], [], false],
   [["board"], ["board"], true],
   [["retired", "board"], ["board"], true],
+  [["code"], ["code"], false],
+  [["codeFirst"], ["codeFirst"], false],
+  [["retired", "codeFirst", "code", "board"], ["board", "code", "codeFirst"], true],
 ])("reports the account's labs in me (%j)", async (stored, labs, ticketBoardEnabled) => {
   const { client } = meDeps(stored);
   await expect(client.me()).resolves.toMatchObject({
     labs,
-    labsAvailable: ["board"],
+    labsAvailable: ["board", "code", "codeFirst"],
     ticketBoardEnabled,
   });
 });
@@ -158,7 +161,7 @@ it("reports a feature the deployment turns on as on and not switchable", async (
   const { client } = meDeps([], ["board"]);
   await expect(client.me()).resolves.toMatchObject({
     labs: ["board"],
-    labsAvailable: [],
+    labsAvailable: ["code", "codeFirst"],
     ticketBoardEnabled: true,
   });
 });
@@ -185,4 +188,56 @@ it("does not save a feature the deployment turns on as the account's choice", as
     labs: ["board"],
   });
   expect(update).toHaveBeenCalledWith({ where: { id: actor.userId }, data: { labs: [] } });
+});
+
+it("persists normalized repositories on rename without touching the name", async () => {
+  const update = vi.fn(async () => ({
+    id: "board-1",
+    spaceId: "space-1",
+    name: "Board",
+    ticketPrefix: "RAK",
+    repositories: [],
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  }));
+  const prisma = {
+    user: { findUnique: vi.fn(async () => ({ labs: ["board"] })) },
+    board: {
+      findUnique: vi.fn(async () => ({
+        id: "board-1",
+        spaceId: "space-1",
+        name: "Board",
+        ticketPrefix: "RAK",
+        nextNumber: 1,
+        repositories: [],
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      })),
+      update,
+    },
+  };
+  const client = createRouterClient(createRouter({ prisma, env: {} } as unknown as RouterDeps), {
+    context: { actor },
+  });
+
+  const board = await client.boards.rename({
+    repositories: [
+      { url: " HTTPS://GitHub.com/Acme/App.git ", aliases: [" app ", "APP"], isDefault: true },
+      { url: "https://github.com/acme/app", isDefault: true },
+    ],
+  });
+
+  expect(update).toHaveBeenCalledWith({
+    where: { id: "board-1" },
+    data: {
+      repositories: [
+        {
+          url: "https://github.com/acme/app",
+          aliases: ["app"],
+          isDefault: true,
+        },
+      ],
+    },
+  });
+  expect(board.repositories).toEqual([]);
 });

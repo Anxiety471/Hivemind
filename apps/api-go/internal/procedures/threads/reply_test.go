@@ -69,3 +69,45 @@ func TestPlainMarkdownTextRefusesMarkers(t *testing.T) {
 		}
 	}
 }
+
+// TestReplyPreviewNamesTheJobTitle covers a reply to a job card: the preview names the job, the
+// same as TypeScript's `case "voice_call", "cloud_agent", "job", "page": return block.title`
+// (packages/core/src/messages/message-quote.ts:171-175).
+func TestReplyPreviewNamesTheJobTitle(t *testing.T) {
+	cases := []struct {
+		name  string
+		block map[string]any
+	}{
+		{
+			name:  "minimal legacy card",
+			block: map[string]any{"kind": "job", "jobId": "job-1", "title": "mcp-job-card", "state": "working"},
+		},
+		{
+			name: "rich coding card",
+			block: map[string]any{
+				"kind": "job", "jobId": "job-1", "title": "mcp-job-card", "agent": "pi",
+				"branch": "example-org/job-card", "state": "finished", "startedAt": 1_770_000_000_000,
+				"reply": "Ported the job card.", "finishedAt": 1_770_000_060_000, "turn": 3,
+				"repo": "example-org/example-repo", "commit": "fakesha0000", "model": "gpt-5.5",
+				"summary": "Adds the coding details to the job card.", "prLabel": "#1",
+				"stats": map[string]any{"filesChanged": 4, "costUsd": 0.42},
+				"files": []any{map[string]any{"path": "tool-card.ts", "status": "modified"}},
+				"steps": []any{map[string]any{"kind": "tool", "name": "grep", "status": "ok"}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			preview, plain := replyPreview([]any{tc.block}, "bot", nil, nil)
+			if !plain {
+				t.Fatal("a job card's title needs no Markdown render")
+			}
+			if preview["text"] != tc.block["title"] {
+				t.Fatalf("preview text = %v, want the title %v", preview["text"], tc.block["title"])
+			}
+			if preview["role"] != "bot" {
+				t.Fatalf("preview role = %v", preview["role"])
+			}
+		})
+	}
+}

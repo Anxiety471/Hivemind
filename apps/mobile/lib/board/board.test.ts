@@ -1,6 +1,6 @@
 import type { Ticket, TicketStatus } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { boardSections, ticketStatusLabel } from "./board";
+import { boardSections, ticketLinkStateLabel, ticketStatusLabel } from "./board";
 
 const ticket = (id: string, status: TicketStatus): Ticket => ({
   id,
@@ -21,6 +21,9 @@ const ticket = (id: string, status: TicketStatus): Ticket => ({
   createdAt: "2026-10-01T00:00:00.000Z",
   updatedAt: "2026-10-01T00:00:00.000Z",
   completedAt: null,
+  pullRequests: [],
+  issues: [],
+  repository: null,
 });
 
 describe("boardSections", () => {
@@ -50,5 +53,13 @@ describe("ticketStatusLabel", () => {
     expect(ticketStatusLabel("blocked")).toBe("Blocked");
     expect(ticketStatusLabel("done")).toBe("Done");
     expect(ticketStatusLabel("closed")).toBe("Won't do");
+  });
+});
+
+describe("ticketLinkStateLabel", () => {
+  it("names every linked pull request or issue state", () => {
+    expect(ticketLinkStateLabel("open")).toBe("Open");
+    expect(ticketLinkStateLabel("merged")).toBe("Merged");
+    expect(ticketLinkStateLabel("closed")).toBe("Closed");
   });
 });

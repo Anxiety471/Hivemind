@@ -33,6 +33,13 @@ type Config struct {
 	SignupAllowlist []string
 	// OIDCBypass mirrors OIDC_ALLOW_SIGNUP_BYPASS for a configured OIDC issuer.
 	OIDCBypass bool
+	// CookieDomain mirrors COOKIE_DOMAIN: a renewed session cookie keeps the domain it was set for.
+	CookieDomain string
+	// AfterDeleteSession mirrors env.afterDeleteSession
+	// (apps/api/src/app.ts:616-624, called from packages/auth/src/index.ts:899-912):
+	// better-auth runs it after it deletes a session row, and a cleanup failure
+	// must not fail the request.
+	AfterDeleteSession func(ctx context.Context, userID, sessionID string)
 }
 
 // Service validates sessions against the API's own tables.
@@ -78,7 +85,7 @@ func (s *Service) Authenticate(ctx context.Context, r *http.Request) (*Session, 
 		if cookie, err := s.renew(ctx, session); err == nil {
 			renewal = cookie
 		} else if db.IsUnavailable(err) {
-			return nil, nil, orpc.Unavailable()
+			return nil, nil, sessionFailure(err)
 		}
 	}
 	return session, renewal, nil
@@ -129,10 +136,7 @@ func (s *Service) load(ctx context.Context, token string) (*Session, *orpc.Error
 		return nil, orpc.Unauthorized()
 	}
 	if err != nil {
-		if db.IsUnavailable(err) {
-			return nil, orpc.Unavailable()
-		}
-		return nil, orpc.Internal()
+		return nil, sessionFailure(err)
 	}
 	return &session, nil
 }
@@ -144,7 +148,11 @@ func (s *Service) load(ctx context.Context, token string) (*Session, *orpc.Error
 func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error {
 	if time.Now().After(session.ExpiresAt) {
 		// better-auth deletes the row on a POST read; a failure here is harmless.
-		_, _ = s.database.Pool.Exec(ctx, `DELETE FROM session WHERE token = $1`, session.Token)
+		if _, err := s.database.Pool.Exec(ctx, `DELETE FROM session WHERE token = $1`, session.Token); err == nil && s.config.AfterDeleteSession != nil {
+			// The session change already happened, so a cleanup failure must not
+			// fail the request (afterDeleteSession's .catch in app.ts:617-619).
+			s.config.AfterDeleteSession(ctx, session.UserID, session.ID)
+		}
 		return orpc.Unauthorized()
 	}
 	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(session.Email)), messagingSuffix) {
@@ -158,10 +166,7 @@ func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error 
 		return orpc.Unauthorized()
 	}
 	if err != nil {
-		if db.IsUnavailable(err) {
-			return orpc.Unavailable()
-		}
-		return orpc.Internal()
+		return sessionFailure(err)
 	}
 	if deactivated != nil {
 		return orpc.Unauthorized()
@@ -172,10 +177,7 @@ func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error 
 	if s.config.OIDCBypass {
 		var exists bool
 		if err := s.database.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM account WHERE "userId" = $1 AND "providerId" = 'oidc')`, session.UserID).Scan(&exists); err != nil {
-			if db.IsUnavailable(err) {
-				return orpc.Unavailable()
-			}
-			return orpc.Internal()
+			return sessionFailure(err)
 		}
 		if exists {
 			return nil
@@ -189,7 +191,7 @@ func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error 
 
 func (s *Service) renew(ctx context.Context, session *Session) (*http.Cookie, error) {
 	expires := time.Now().Add(sessionLifetime)
-	if _, err := s.database.Pool.Exec(ctx, `UPDATE session SET "expiresAt" = $2, "updatedAt" = now() WHERE token = $1`, session.Token, expires); err != nil {
+	if _, err := s.database.Pool.Exec(ctx, `UPDATE session SET "expiresAt" = $2, "updatedAt" = now() WHERE token = $1`, append([]any{session.Token}, db.Data(expires)...)...); err != nil {
 		return nil, err
 	}
 	session.ExpiresAt = expires
@@ -198,6 +200,7 @@ func (s *Service) renew(ctx context.Context, session *Session) (*http.Cookie, er
 		Name:     session.CookieName,
 		Value:    value,
 		Path:     "/",
+		Domain:   s.config.CookieDomain,
 		MaxAge:   int(sessionLifetime.Seconds()),
 		HttpOnly: true,
 		Secure:   strings.HasPrefix(session.CookieName, "__Secure-"),
@@ -250,7 +253,7 @@ func (s *Service) Actor(ctx context.Context, session *Session, requestedSpace st
 		}
 		tag, err := tx.Exec(ctx, `UPDATE session SET "activeOrganizationId" = $2
 			WHERE id = $1 AND "userId" = $3 AND "activeOrganizationId" IS NOT DISTINCT FROM NULLIF($4, '')`,
-			session.ID, chosen, session.UserID, pinned)
+			append(append([]any{session.ID}, db.Data(chosen)...), session.UserID, pinned)...)
 		if err != nil {
 			return err
 		}
@@ -284,10 +287,20 @@ func (s *Service) Actor(ctx context.Context, session *Session, requestedSpace st
 }
 
 func (s *Service) actorFailure(err error) (db.Actor, *orpc.Error) {
+	return db.Actor{}, sessionFailure(err)
+}
+
+// sessionFailure maps an error out of a session lookup: 503 when Postgres is unreachable, 500
+// otherwise, keeping the cause for the server's log (rpc-errors.ts logs it under
+// "<procedure> failed"). It is not shared.Failure because shared imports drive, which
+// imports this package.
+func sessionFailure(err error) *orpc.Error {
+	answer := orpc.Internal()
 	if db.IsUnavailable(err) {
-		return db.Actor{}, orpc.Unavailable()
+		answer = orpc.Unavailable()
 	}
-	return db.Actor{}, orpc.Internal()
+	answer.Cause = err
+	return answer
 }
 
 func firstMembership(ctx context.Context, tx pgx.Tx, userID, organizationID string) (string, error) {

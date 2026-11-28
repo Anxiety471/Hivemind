@@ -42,8 +42,8 @@ func (s *Service) deployment() shared.Deployment {
 	return shared.Deployment{BoardLab: s.BoardLab, Signals: s.Signals, Content: s.Content}
 }
 
-// LoadContext returns a bot's open assigned Kanban tickets plus any explicitly
-// referenced tickets from promptText.
+// LoadContext returns a bot's open assigned Kanban tickets, any explicitly referenced
+// tickets from promptText, and open Space tickets awaiting a user decision.
 func (s *Service) LoadContext(ctx context.Context, req ContextRequest) (ContextResponse, error) {
 	if req.SpaceID == "" || req.UserID == "" || req.BotID == "" {
 		return ContextResponse{}, errors.New("spaceId, userId, and botId are required")
@@ -83,17 +83,25 @@ func (s *Service) LoadContext(ctx context.Context, req ContextRequest) (ContextR
 		resp.AssignedContext = RenderAssignedTickets(open, maxBytes)
 
 		refNumbers := ExtractTicketNumbers(req.PromptText, board.Prefix)
+		assignedIDs := make(map[string]bool, len(open))
+		excludeIDs := make([]string, 0, len(open))
+		for _, t := range open {
+			assignedIDs[t.ID] = true
+			excludeIDs = append(excludeIDs, t.ID)
+		}
+		refs := []ReferencedTicketEntry{}
 		if len(refNumbers) > 0 {
-			assignedIDs := make(map[string]bool, len(open))
-			for _, t := range open {
-				assignedIDs[t.ID] = true
-			}
-			refs, err := loadReferencedTickets(ctx, tx, req.SpaceID, board, refNumbers, assignedIDs)
+			refs, err = loadReferencedTickets(ctx, tx, req.SpaceID, board, refNumbers, assignedIDs)
 			if err != nil {
 				return err
 			}
-			resp.ReferencedContext = RenderReferencedTickets(refs, maxBytes)
 		}
+		pending, err := loadPendingDecisionTickets(ctx, tx, req.SpaceID, board, refNumbers, excludeIDs, MaxPendingDecisionTicketsInContext)
+		if err != nil {
+			return err
+		}
+		refs = append(refs, pending...)
+		resp.ReferencedContext = RenderReferencedTickets(refs, maxBytes)
 		return nil
 	})
 	return resp, err
@@ -522,7 +530,7 @@ func insertDetectedTicket(
 		SET "nextNumber" = "nextNumber" + 1, "updatedAt" = $2
 		WHERE id = $1
 		RETURNING "nextNumber" - 1
-	`, board.ID, at).Scan(&nextNumber)
+	`, append([]any{board.ID}, db.Data(at)...)...).Scan(&nextNumber)
 	if err != nil {
 		return AppliedTicket{}, OpenTicket{}, false, err
 	}
@@ -548,10 +556,10 @@ func insertDetectedTicket(
 	var decisionJSON *string
 	if action.Decision != nil {
 		if normalized, ok := tickets.NormalizeTicketDecision(*action.Decision); ok {
-			if encoded, err := json.Marshal(normalized); err == nil {
-				s := string(encoded)
-				decisionJSON = &s
-			}
+			// Prisma sanitizes the decision object as a json write value: NUL and an
+			// unpaired surrogate become U+FFFD in every string leaf and key.
+			encoded := db.JSON(normalized)
+			decisionJSON = &encoded
 		}
 	}
 	title := shared.StoredText(action.Title)
@@ -562,8 +570,8 @@ func insertDetectedTicket(
 			"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
 			"createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $17)
-	`, id, board.ID, spaceID, nextNumber, title, desc, status, priority,
-		assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, botID, userID, at, completedAt, decisionJSON)
+	`, db.Data(id, board.ID, spaceID, nextNumber, title, desc, status, priority,
+		assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, botID, userID, at, completedAt, decisionJSON)...)
 	if err != nil {
 		return AppliedTicket{}, OpenTicket{}, false, err
 	}
@@ -697,14 +705,13 @@ func applyUpdateToTicket(
 		}
 	}
 
-	nextDecision := currentDecision
+	var nextDecision any = currentDecision
 	decisionChanged := false
 	if action.Decision != nil {
 		if normalized, ok := tickets.NormalizeTicketDecision(*action.Decision); ok {
-			if encoded, err := json.Marshal(normalized); err == nil {
-				nextDecision = encoded
-				decisionChanged = string(currentDecision) != string(encoded)
-			}
+			encoded := db.JSON(normalized)
+			nextDecision = encoded
+			decisionChanged = string(currentDecision) != encoded
 		}
 	}
 
@@ -731,8 +738,8 @@ func applyUpdateToTicket(
 		    "assigneeBotId" = $6, "ownerUserId" = $7, "ownerBotId" = $8, "workerBotIds" = $9,
 		    "completedAt" = $10, "updatedAt" = $11, decision = $12
 		WHERE id = $1
-	`, target.ID, nextTitle, nextDescription, nextStatus, nextPriority,
-		nextAssigneeBotID, nextOwnerUserID, nextOwnerBotID, nextWorkerBotIDs, completedAt, at, nextDecision)
+	`, append([]any{target.ID}, db.Data(nextTitle, nextDescription, nextStatus, nextPriority,
+		nextAssigneeBotID, nextOwnerUserID, nextOwnerBotID, nextWorkerBotIDs, completedAt, at, nextDecision)...)...)
 	if err != nil {
 		return AppliedTicket{}, false, err
 	}
@@ -756,7 +763,7 @@ func loadOpenAssignedTickets(
 	limit int,
 ) ([]OpenTicket, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, number, title, description, status, priority
+		SELECT id, number, title, description, status, priority, decision
 		FROM tickets
 		WHERE "spaceId" = $1
 		  AND "boardId" = $2
@@ -779,8 +786,9 @@ func loadOpenAssignedTickets(
 			description *string
 			status      string
 			priority    *string
+			decision    []byte
 		)
-		if err := rows.Scan(&id, &number, &title, &description, &status, &priority); err != nil {
+		if err := rows.Scan(&id, &number, &title, &description, &status, &priority, &decision); err != nil {
 			return nil, err
 		}
 		prio := "normal"
@@ -797,21 +805,16 @@ func loadOpenAssignedTickets(
 			Status:      status,
 			Priority:    prio,
 			Description: description,
+			Decision:    tickets.ReadStoredDecision(decision),
 		})
 	}
 	return out, rows.Err()
 }
 
-func loadReferencedTickets(
-	ctx context.Context,
-	tx pgx.Tx,
-	spaceID string,
-	board tickets.Board,
-	numbers []int64,
-	skipIDs map[string]bool,
-) ([]ReferencedTicketEntry, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT t.id, t.number, t.title, t.status,
+// ticketEntrySelect selects the fields of a ticket summary line; the caller appends
+// the FROM-clause WHERE it needs.
+const ticketEntrySelect = `
+		SELECT t.id, t.number, t.title, t.status, t.decision,
 		       COALESCE((
 		           SELECT string_agg(b.name, ', ' ORDER BY b.name)
 		           FROM bots b
@@ -825,39 +828,67 @@ func loadReferencedTickets(
 		           LIMIT 1
 		       ), '')
 		FROM tickets t
-		WHERE t."spaceId" = $1 AND t."boardId" = $2 AND t.number = ANY($3)
-	`, spaceID, board.ID, numbers)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+`
 
-	byNumber := make(map[int64]ReferencedTicketEntry, len(numbers))
+// numberedEntry is a ticket summary keyed by its board number.
+type numberedEntry struct {
+	number int64
+	entry  ReferencedTicketEntry
+}
+
+// scanTicketEntries reads ticketEntrySelect rows in query order, skipping tickets whose id is in skipIDs.
+func scanTicketEntries(rows pgx.Rows, prefix string, skipIDs map[string]bool) ([]numberedEntry, error) {
+	defer rows.Close()
+	out := []numberedEntry{}
 	for rows.Next() {
 		var (
 			id          string
 			number      int64
 			title       string
 			status      string
+			decision    []byte
 			assignee    string
 			lastComment string
 		)
-		if err := rows.Scan(&id, &number, &title, &status, &assignee, &lastComment); err != nil {
+		if err := rows.Scan(&id, &number, &title, &status, &decision, &assignee, &lastComment); err != nil {
 			return nil, err
 		}
 		if skipIDs[id] {
 			continue
 		}
-		byNumber[number] = ReferencedTicketEntry{
-			Ref:         fmt.Sprintf("%s-%d", board.Prefix, number),
+		out = append(out, numberedEntry{number: number, entry: ReferencedTicketEntry{
+			Ref:         fmt.Sprintf("%s-%d", prefix, number),
 			Title:       title,
 			Status:      status,
 			Assignee:    strings.TrimSpace(assignee),
 			LastComment: strings.TrimSpace(lastComment),
-		}
+			Decision:    tickets.ReadStoredDecision(decision),
+		}})
 	}
-	if err := rows.Err(); err != nil {
+	return out, rows.Err()
+}
+
+func loadReferencedTickets(
+	ctx context.Context,
+	tx pgx.Tx,
+	spaceID string,
+	board tickets.Board,
+	numbers []int64,
+	skipIDs map[string]bool,
+) ([]ReferencedTicketEntry, error) {
+	rows, err := tx.Query(ctx, ticketEntrySelect+`
+		WHERE t."spaceId" = $1 AND t."boardId" = $2 AND t.number = ANY($3)
+	`, spaceID, board.ID, numbers)
+	if err != nil {
 		return nil, err
+	}
+	found, err := scanTicketEntries(rows, board.Prefix, skipIDs)
+	if err != nil {
+		return nil, err
+	}
+	byNumber := make(map[int64]ReferencedTicketEntry, len(found))
+	for _, f := range found {
+		byNumber[f.number] = f.entry
 	}
 
 	entries := make([]ReferencedTicketEntry, 0, len(byNumber))
@@ -865,6 +896,47 @@ func loadReferencedTickets(
 		if entry, ok := byNumber[n]; ok {
 			entries = append(entries, entry)
 		}
+	}
+	return entries, nil
+}
+
+// loadPendingDecisionTickets returns the most recently updated open Space tickets that
+// still await a user decision, leaving out tickets already listed (by id or number).
+func loadPendingDecisionTickets(
+	ctx context.Context,
+	tx pgx.Tx,
+	spaceID string,
+	board tickets.Board,
+	excludeNumbers []int64,
+	excludeIDs []string,
+	limit int,
+) ([]ReferencedTicketEntry, error) {
+	// pgx binds a nil slice as SQL NULL, which would exclude every row.
+	if excludeNumbers == nil {
+		excludeNumbers = []int64{}
+	}
+	if excludeIDs == nil {
+		excludeIDs = []string{}
+	}
+	rows, err := tx.Query(ctx, ticketEntrySelect+`
+		WHERE t."spaceId" = $1 AND t."boardId" = $2
+		  AND t.status NOT IN ('done', 'closed')
+		  AND t.decision IS NOT NULL AND COALESCE(t.decision->>'answer', '') = ''
+		  AND NOT (t.number = ANY($3))
+		  AND NOT (t.id = ANY($4))
+		ORDER BY t."updatedAt" DESC, t.id DESC
+		LIMIT $5
+	`, spaceID, board.ID, excludeNumbers, excludeIDs, limit)
+	if err != nil {
+		return nil, err
+	}
+	found, err := scanTicketEntries(rows, board.Prefix, nil)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]ReferencedTicketEntry, 0, len(found))
+	for _, f := range found {
+		entries = append(entries, f.entry)
 	}
 	return entries, nil
 }

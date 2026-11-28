@@ -27,7 +27,11 @@ import { pacerTokensPerMinute, sharedTokenPacer } from "../../models/endpoints/t
 import { estimateModelContextTokens } from "../../models/model-context.js";
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "../../models/model-vision.js";
 import { ModelImageLimitError, pruneForRebuild } from "../context/context-pruning.js";
-import { ContextBudgetError } from "../context/context-selection.js";
+import {
+  ContextBudgetError,
+  estimateContextTokens,
+  providerContextPrefix,
+} from "../context/context-selection.js";
 import { reportedContextWindow } from "../context/reported-context-window.js";
 import {
   isThinkingSignatureMismatch,
@@ -236,7 +240,9 @@ function fallbackIncompatibility(
       return "Conversation exceeds the backup model's context limit.";
     throw error;
   }
-  const inputTokens = estimateModelContextTokens(context, estimatePiImageTokens);
+  const inputTokens = prepareForTarget
+    ? estimateContextTokens(providerContextPrefix("", [], context.messages), estimatePiImageTokens)
+    : estimateModelContextTokens(context, estimatePiImageTokens);
   const outputTokens = resolveCompletionMaxTokens(
     candidate.model.maxTokens,
     candidate.config.maxTokens,
@@ -471,6 +477,15 @@ export function fallbackAwareModelStream(
       sizingFailure = undefined;
       lengthRecovered = false;
       emptyRetries = 0;
+    };
+    const flushBuffered = () => {
+      for (const pending of buffered) output.push(pending);
+      buffered = [];
+    };
+    const finishStream = (event: AssistantMessageEvent, message: AssistantMessage) => {
+      flushBuffered();
+      output.push(event);
+      output.end(message);
     };
     const continuingCutReply = Boolean(state.continuingCutReply);
     state.continuingCutReply = false;
@@ -800,20 +815,14 @@ export function fallbackAwareModelStream(
               state.selfRecoveries += 1;
               state.cutReplies.set(cut.content, "connection");
               state.continuingCutReply = true;
-              for (const pending of buffered) output.push(pending);
-              buffered = [];
-              output.push({ type: "done", reason: "stop", message: cut });
-              output.end(cut);
+              finishStream({ type: "done", reason: "stop", message: cut }, cut);
               return;
             }
-            for (const pending of buffered) output.push(pending);
-            buffered = [];
             const terminal =
               sawVisibleOutput && event.error.content.length === 0 && lastPartial
                 ? { ...event, error: { ...event.error, content: lastPartial.content } }
                 : terminalEvent;
-            output.push(terminal);
-            output.end(terminal.error);
+            finishStream(terminal, terminal.error);
             return;
           }
           if (event.type === "done") {
@@ -846,10 +855,7 @@ export function fallbackAwareModelStream(
                     ? MODEL_OUTPUT_CUT_ERROR
                     : MODEL_OUTPUT_LIMIT_ERROR,
                 };
-                for (const pending of buffered) output.push(pending);
-                buffered = [];
-                output.push({ type: "error", reason: "error", error: failure });
-                output.end(failure);
+                finishStream({ type: "error", reason: "error", error: failure }, failure);
                 return;
               }
               state.selfRecoveries += 1;
@@ -890,14 +896,12 @@ export function fallbackAwareModelStream(
                   outputCap,
                 );
               }
-              for (const pending of buffered) output.push(pending);
-              buffered = [];
-              output.push(
+              finishStream(
                 message.stopReason === "stop"
                   ? { type: "done", reason: "stop", message }
                   : { type: "error", reason: "error", error: message },
+                message,
               );
-              output.end(message);
               return;
             }
             const recovery =
@@ -958,10 +962,7 @@ export function fallbackAwareModelStream(
                 break;
               }
             }
-            for (const pending of buffered) output.push(pending);
-            buffered = [];
-            output.push(event);
-            output.end(event.message);
+            finishStream(event, event.message);
             return;
           }
           lastPartial = {
@@ -970,8 +971,7 @@ export function fallbackAwareModelStream(
           };
           if (eventHasVisibleText(event, blankIsEmpty)) {
             sawVisibleOutput = true;
-            for (const pending of buffered) output.push(pending);
-            buffered = [];
+            flushBuffered();
             output.push(event);
           } else if (sawVisibleOutput) {
             output.push(event);
@@ -980,12 +980,12 @@ export function fallbackAwareModelStream(
           }
         }
       } catch (error) {
-        for (const pending of buffered) output.push(pending);
+        flushBuffered();
         finishWithThrownError(target, error);
         return;
       }
       if (restart) continue;
-      for (const pending of buffered) output.push(pending);
+      flushBuffered();
       finishWithThrownError(target, new Error("Model stream ended without a terminal event"));
       return;
     }

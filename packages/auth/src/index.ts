@@ -113,6 +113,8 @@ export interface AuthEnv {
   /** Admits a new account only while there is none, for a deployment that serves one person. */
   singleAccount?: boolean;
   extraOrigins?: string[];
+  /** Shares the session cookie with every host under this domain, such as the Drive app. */
+  cookieDomain?: string;
   /** SHA-256 signing certificate fingerprints of Android apps allowed to use this server's passkeys. */
   androidAppCertFingerprints?: string[];
   email?: TransactionalEmailProvider;
@@ -317,7 +319,12 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
       },
     },
     rateLimit: authRateLimitOptions(),
-    advanced: { ipAddress: { ipAddressHeaders: [CLIENT_IP_HEADER] } },
+    advanced: {
+      ipAddress: { ipAddressHeaders: [CLIENT_IP_HEADER] },
+      ...(env.cookieDomain
+        ? { crossSubDomainCookies: { enabled: true, domain: env.cookieDomain } }
+        : {}),
+    },
     socialProviders: {
       ...(google
         ? {

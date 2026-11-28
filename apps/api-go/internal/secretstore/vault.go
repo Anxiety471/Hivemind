@@ -75,11 +75,16 @@ func NewestVaultKeyID(ctx context.Context, q QueryRower, scope string) (string, 
 	return id, true, nil
 }
 
-// Sealer is the write side of the credential store a vault value falls back to
+// Sealer is the write side of the credential store a vault value falls back to: a value is only
+// sealed under a vault key when the store is this API's own encrypted one (vault-values.ts:65,
+// `store.describe().id === "app-encrypted"`).
 // while its vault has no key (SecretStore.put). A *Writer publishes the change;
 // a *Store seals without announcing.
 type Sealer interface {
 	Put(ctx context.Context, plaintext string, options PutOptions) (Record, error)
+	// ID is describe().id: an external store keeps its own key material, so the vault key ring
+	// must not be used with it.
+	ID() string
 }
 
 // Loader is the read side (SecretStore.load).
@@ -100,7 +105,7 @@ func SealVaultValue(
 	row VaultRow,
 	plaintext string,
 ) (string, error) {
-	if ring != nil && ring.EncryptWrites {
+	if ring != nil && ring.EncryptWrites && store != nil && store.ID() == "app-encrypted" {
 		keyID, ok, err := NewestVaultKeyID(ctx, q, VaultScope(row))
 		if err != nil {
 			return "", err

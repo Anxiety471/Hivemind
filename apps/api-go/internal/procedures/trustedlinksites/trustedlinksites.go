@@ -6,12 +6,13 @@ package trustedlinksites
 import (
 	"context"
 	"encoding/json"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const maxSiteLength = 253
@@ -37,7 +38,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor) ([]string, *orpc
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, failure(err)
+		return nil, shared.Failure(err)
 	}
 	return sites, nil
 }
@@ -53,7 +54,7 @@ func Remove(ctx context.Context, database *db.DB, actor db.Actor, input orpc.Inp
 		return err
 	})
 	if err != nil {
-		return nil, failure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -79,14 +80,13 @@ func parseRemove(input orpc.Input) (string, *orpc.Error) {
 	if !ok {
 		return "", typeIssue("string", jsType(raw), "site")
 	}
-	length := utf8.RuneCountInString(site)
-	if length < 1 {
+	if !wtf8.ZodMinPass(site, 1) {
 		return "", orpc.InvalidInput(map[string]any{
 			"origin": "string", "code": "too_small", "minimum": 1, "inclusive": true,
 			"path": []string{"site"}, "message": "Too small: expected string to have >=1 characters",
 		})
 	}
-	if length > maxSiteLength {
+	if !wtf8.ZodMaxPass(site, maxSiteLength) {
 		return "", orpc.InvalidInput(map[string]any{
 			"origin": "string", "code": "too_big", "maximum": maxSiteLength, "inclusive": true,
 			"path": []string{"site"}, "message": "Too big: expected string to have <=253 characters",
@@ -121,11 +121,4 @@ func jsType(value any) string {
 	default:
 		return "number"
 	}
-}
-
-func failure(err error) *orpc.Error {
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
 }

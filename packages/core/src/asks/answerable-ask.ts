@@ -74,3 +74,29 @@ export function resolveAskChoice(
   const lower = trimmed.toLowerCase();
   return actions.find((action) => action.label.trim().toLowerCase() === lower);
 }
+
+/** Parses a batch answer `{ "answers": { [itemId]: choiceId | custom text } }`; null if not one. */
+export function parseBatchAskAnswer(raw: string): Record<string, string> | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isPlainRecord(json) || Object.keys(json).join() !== "answers") return null;
+  const entries = isPlainRecord(json.answers) ? Object.entries(json.answers) : [];
+  const answers: Record<string, string> = {};
+  for (const [key, value] of entries) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    answers[key] = value.trim();
+  }
+  return entries.length ? answers : null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function formatBatchAskAnswer(answers: Record<string, string>): string {
+  return JSON.stringify({ answers });
+}

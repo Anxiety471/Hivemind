@@ -16,15 +16,28 @@ const fixtureOrigin = "http://127.0.0.1:5173";
 // A canary: the person's name must never reach a model request.
 const personName = "Dana Q. Example";
 
-/** What a model reads after the system message, as role and text, less the per-turn clock line. */
+const AUTOMATED_LABEL = "[Automated message from Rakazo, not from the user]";
+const PRE_TURN_PREFIX = AUTOMATED_LABEL + " Pre-turn memory search";
+
+/**
+ * The pre-turn memory note (packages/adapters/src/runtime/pi/pi-pre-turn-memory.prompt.ts) is
+ * joined into the same user message: at the front of a first turn, and between the earlier history
+ * and the new line on a later group turn. It is model-facing context, not something the person
+ * wrote, so drop that block before comparing turns, and only that block.
+ */
+const withoutPreTurnMemoryNote = (text: string) =>
+  text
+    .split("\n\n")
+    .filter((block) => !block.startsWith(PRE_TURN_PREFIX))
+    .join("\n\n");
+
 const turns = (request: ModelEmulatorRequest) =>
   request.messages
     .filter((message) => message.role !== "system")
     .map((message) => ({
       role: message.role,
-      text: (typeof message.content === "string"
-        ? message.content
-        : JSON.stringify(message.content)
+      text: withoutPreTurnMemoryNote(
+        typeof message.content === "string" ? message.content : JSON.stringify(message.content),
       ).replace(/\n\n<current_time>.*$/s, ""),
     }));
 

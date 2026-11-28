@@ -288,6 +288,31 @@ describe("Docker sandbox", () => {
       { headers: { "content-type": "application/x-ndjson" } },
     );
 
+  it("hands each command the package mirror registries, and lets the command override them", async () => {
+    const fetchMock = vi.fn(async () => commandOutput(""));
+    vi.stubGlobal("fetch", fetchMock);
+    const computer = { id: "computer", botId: "bot", kind: "docker", providerRef: "computer" };
+    const sent = async (url: string | undefined, env?: Record<string, string>) => {
+      fetchMock.mockClear();
+      const provider = new DockerSandboxProvider("http://supervisor.test", "test-token", url);
+      for await (const _event of provider.execute(
+        { ...computer, kind: "docker" },
+        { argv: ["pnpm", "add", "x"], env },
+        context,
+      ));
+      const init = (fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1];
+      return JSON.parse(init.body).env as Record<string, string>;
+    };
+
+    const withMirror = await sent("https://mirror.example", {
+      PIP_INDEX_URL: "https://own.example",
+    });
+    expect(withMirror.npm_config_registry).toBe("https://mirror.example/npm/");
+    expect(withMirror.GOPROXY).toBe("https://mirror.example/go,direct");
+    expect(withMirror.PIP_INDEX_URL).toBe("https://own.example");
+    expect(await sent(undefined)).toEqual({});
+  });
+
   describe("before a computer is used", () => {
     const computer = {
       id: "computer",

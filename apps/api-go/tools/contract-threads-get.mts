@@ -102,6 +102,16 @@ export function threadGetCases(system: System): Case[] {
       },
     });
 
+  // Runs of one thread are read newest first by `createdAt` alone; insert them a millisecond
+  // apart per seed so their order cannot depend on two now() defaults landing in the same
+  // millisecond. Keyed by the seed object: the harness seeds each side afresh, and both sides
+  // must write the same instants.
+  const runOrders = new WeakMap<Seeded, number>();
+  const runAt = (seeded: Seeded) => {
+    const next = runOrders.get(seeded) ?? 0;
+    runOrders.set(seeded, next + 1);
+    return new Date(Date.UTC(2020, 0, 1) + next);
+  };
   const run = async (
     seeded: Seeded,
     key: string,
@@ -130,6 +140,7 @@ export function threadGetCases(system: System): Case[] {
         userId: seeded.userId,
         status: "running",
         trigger: "user",
+        createdAt: runAt(seeded),
         ...fields,
       },
     });
@@ -833,7 +844,15 @@ export function threadGetCases(system: System): Case[] {
         await run(seeded, "c", "b2", "b2", { status: "queued", trigger: "tickets" });
         await run(seeded, "d", "b2", "b2", { status: "leased", trigger: "helper" });
       },
-      { declines: false },
+      {
+        declines: false,
+        // Four seeded runs with no wakeAt/lease expiry: TypeScript's in-process
+        // run reconciler (a 30 s tick) can pick them up inside the capture window
+        // and publish one space-changes "runs" frame each, while Go only enqueues
+        // the job to a worker the harness does not run. The body comparison keeps
+        // this case's coverage; the frames are a TypeScript-background artefact.
+        ignoreSignals: true,
+      },
     ),
 
     // Replies and their previews.
@@ -1113,7 +1132,7 @@ export function threadGetCases(system: System): Case[] {
       { declines: false },
     ),
     get(
-      "block-ask-with-credential-goes-to-typescript",
+      "block-ask-with-credential-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1130,10 +1149,10 @@ export function threadGetCases(system: System): Case[] {
           },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
-      "block-one-time-code-goes-to-typescript",
+      "block-one-time-code-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1141,10 +1160,10 @@ export function threadGetCases(system: System): Case[] {
           { kind: "ask", text: "code?", oneTimeCode: { origin: "https://example.com" } },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
-      "block-import-setup-goes-to-typescript",
+      "block-import-setup-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1152,7 +1171,7 @@ export function threadGetCases(system: System): Case[] {
           { kind: "import_setup", items: [{ kind: "routine", routineId: "r", name: "n" }] },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
       "blocks-not-a-list",
@@ -1278,11 +1297,15 @@ export function threadGetCases(system: System): Case[] {
           controlHolder: "user",
           controlBotId: id(seeded, "b1"),
           controlLeaseId: "lease-1",
+          controlLeaseExpiresAt: new Date(Date.now() + 600_000),
           controlUserId: id(seeded, "other"),
         });
         await bot(seeded, "b1", { computer: "c1" });
       },
-      { declines: false },
+      // A live lease: a missing/expired one enqueues computer.control-expire, whose job
+      // writes an event and a thread cursor on whichever side's window it lands in. The
+      // settle only covers late publishes; the case itself stays a pure read.
+      { declines: false, settleMs: 5000 },
     ),
     get(
       "computer-states",

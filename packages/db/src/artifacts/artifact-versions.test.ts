@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { PrismaClient } from "../database/client.js";
+import { Prisma } from "../database/client.js";
 import {
   LISTED_ARTIFACT,
   resolveNextArtifactVersion,
   withResolvedArtifactVersion,
 } from "./artifact-versions.js";
-import type { PrismaClient } from "../database/client.js";
-import { Prisma } from "../database/client.js";
 
 function versionConflict(): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {

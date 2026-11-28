@@ -13,9 +13,12 @@ import {
   fileUploadSizeFromEnv,
   inferAttachmentMimeType,
   isStaticPng,
+  normalizeFileSlug,
   normalizeVoiceTranscript,
   PNG_ANIMATION_HEADER_BYTES,
   promptTextForAttachments,
+  sanitizeDriveFolderName,
+  slugifyFileName,
   toolStepsHistoryText,
   userTurnMessageForRun,
   validateAttachmentMimeType,
@@ -673,5 +676,29 @@ describe("isStaticPng", () => {
     const bytes = new Uint8Array(png.length + 10);
     bytes.set(png, 5);
     expect(isStaticPng(bytes.subarray(5, 5 + png.length))).toBe(true);
+  });
+});
+
+describe("slug and folder helpers", () => {
+  it("normalizes slugs to lowercase kebab-case and rejects empty slugs", () => {
+    expect(normalizeFileSlug("  Q3_Board Deck v2!!  ")).toBe("q3-board-deck-v2");
+    expect(normalizeFileSlug("A".repeat(200)).length).toBe(120);
+    expect(() => normalizeFileSlug("   ")).toThrow(AttachmentValidationError);
+    expect(() => normalizeFileSlug("---!!!---")).toThrow(AttachmentValidationError);
+  });
+
+  it("derives searchable slugs from filenames without extensions", () => {
+    expect(slugifyFileName("Quarterly_Report 2026.pdf")).toBe("quarterly-report-2026");
+    expect(slugifyFileName("archive.tar.gz")).toBe("archive-tar");
+    expect(slugifyFileName("Makefile")).toBe("makefile");
+    expect(slugifyFileName("???.bin")).toBe("file");
+  });
+
+  it("sanitizes arbitrary bot names into safe folder names", () => {
+    expect(sanitizeDriveFolderName("  Research / Ops Bot \n ")).toBe("Research Ops Bot");
+    expect(sanitizeDriveFolderName("..")).toBe("Bot");
+    expect(sanitizeDriveFolderName(".")).toBe("Bot");
+    expect(sanitizeDriveFolderName("../..")).toBe(".. ..");
+    expect(sanitizeDriveFolderName("   ", "Custom")).toBe("Custom");
   });
 });

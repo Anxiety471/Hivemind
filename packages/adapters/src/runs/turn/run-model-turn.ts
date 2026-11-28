@@ -1,6 +1,6 @@
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
-import { BACKGROUND_HELPER_TRIGGER, redactSecrets } from "@rakazo/core";
+import { BACKGROUND_HELPER_TRIGGER, mergeSkillNames, redactSecrets } from "@rakazo/core";
 import { isDatabaseUnavailable, RunHistoryWriteError, recordUsage } from "@rakazo/db";
 import { bestEffort, getLogger } from "@rakazo/logging";
 import { isStrategicInitiativeRun } from "../../routines/strategic-initiative.js";
@@ -22,13 +22,23 @@ import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { completeRun } from "../lifecycle/run-complete.js";
 import { failRun, handoffEndedTurn, requeueRunAfterDatabaseOutage } from "../lifecycle/run-fail.js";
 import { recordLiveRunUsage } from "../lifecycle/run-progress.js";
-import { followUpsOffered, offeredFleetTools } from "../tools/run-tool-selection.js";
+import {
+  codeModeCallableTools,
+  followUpsOffered,
+  offeredFleetTools,
+} from "../tools/run-tool-selection.js";
 import { applyTool } from "../tools/run-tools.js";
+import { preTurnMemorySearch } from "../tools/run-tools-memory.js";
+import { finalReplyDecisionJudge } from "./final-reply-judge.js";
 import { consumeRunEvents } from "./run-turn.js";
 import { claimRunSteering } from "./run-turn-images.js";
 import { appendToolCompletionAudit, toolCompletionOutcome } from "./tool-completion-audit.js";
 import { toolResultFingerprint } from "./tool-loop.js";
 import { keepToolStepResult } from "./tool-step-calls.js";
+import {
+  summarizeToolCompletionDetail,
+  summarizeToolCompletionSkills,
+} from "./tool-step-detail.js";
 
 export async function runModelTurn(
   services: RunExecutorServices,
@@ -63,11 +73,11 @@ export async function runModelTurn(
         }),
       )
       .catch((error: unknown) => getLogger().warn("run.prompt_version_failed", { error }));
-    if ((state.reply.attempt ?? 1) > 1) {
+    if ((state.reply.attempt ?? 1) > 1 || turn.prompt.turnCheckpoint) {
       const checkpointBlock = state.reply.messageSegments.findLast(
         (block): block is Extract<MessageBlock, { kind: "steps" }> => block.kind === "steps",
       );
-      if (checkpointBlock) {
+      if (checkpointBlock && checkpointBlock.steps.length > 0) {
         await bestEffort(
           "append run.checkpointed event",
           deps.events
@@ -79,12 +89,13 @@ export async function runModelTurn(
               type: "run.checkpointed",
               payload: {
                 steps: checkpointBlock.steps,
-                attempts: state.reply.attempt,
+                attempts: state.reply.attempt ?? 1,
                 ...(state.reply.costUsd ? { costUsd: state.reply.costUsd } : {}),
                 ...(checkpointBlock.modelId ? { modelId: checkpointBlock.modelId } : {}),
                 ...(checkpointBlock.modelProvider
                   ? { modelProvider: checkpointBlock.modelProvider }
                   : {}),
+                ...(checkpointBlock.skills?.length ? { skills: checkpointBlock.skills } : {}),
               },
             })
             .catch((error: unknown) => {
@@ -162,9 +173,11 @@ function modelTurnRequest(
     sourceMessage,
     userComputer,
   } = turn.capabilities;
-  const { strategicBuiltins, taskCatalogInstruction, tools } = turn.tools;
+  const { strategicBuiltins, taskCatalogInstruction, tools, listedTools, codeFirst } = turn.tools;
   const { computerInstruction, workspaceInstruction } = turn.computerInstructions;
   const {
+    operatorInstruction,
+    spaceSystemPromptAppend,
     agentSkillsLine,
     botDirectory,
     historicalContext,
@@ -260,6 +273,10 @@ function modelTurnRequest(
             )
           : disabledBuiltinTools,
       offeredFleetTools: offeredFleetTools(strategicBuiltins),
+      operatorInstruction,
+      spaceSystemPromptAppend,
+      offeredToolNames: new Set(tools.map((tool) => tool.name)),
+      codeFirst,
       followUpsOffered: followUpsOffered(strategicBuiltins, ownerStartedRun),
       backgroundHelpersAllowed: backgroundHelpersAllowed({
         trigger: run.trigger,
@@ -278,7 +295,11 @@ function modelTurnRequest(
         currentTurnFiles.length &&
         !turnBlocks?.some((block) => block.kind === "image" && block.imageHandling === "confirm"),
     ),
-    tools,
+    tools: listedTools,
+    ...(codeFirst ? { codeModeTools: codeModeCallableTools(tools).map((tool) => tool.name) } : {}),
+    ...(tools.some((tool) => tool.name === "recall_memory" || tool.name === "search_memory_docs")
+      ? { preTurnMemorySearch: (input) => preTurnMemorySearch(turn.ctx, input) }
+      : {}),
     // The live array: secrets learned later in the run redact too.
     secrets: runSecrets,
     model: mainRunModel,
@@ -342,12 +363,28 @@ function modelTurnRequest(
     onCheckpoint: async (capture, executionId) => {
       effects.pendingTurnCheckpoints.set(executionId, capture);
     },
+    onFailureCheckpoint: async (checkpoint) => {
+      state.failureCheckpoint = checkpoint;
+    },
     resumeToolResult: {
       content: [{ type: "text", text: takeoverResume?.promptNote ?? taskPrompt }],
     },
     script,
     allowSilentEmpty: allowSilentEmptyRun,
+    optionalReply: groupReplyOptional,
     emptyResponseText,
+    // A reply that leaves a decision in prose gets one corrective turn toward ask_user. Voice
+    // turns are excluded: their instructions forbid option cards.
+    finalReplyJudge:
+      listedTools.some((tool) => tool.name === "ask_user") && !ctx.source.voiceCall
+        ? finalReplyDecisionJudge({
+            deps,
+            scope: { userId: run.userId, spaceId: run.spaceId, botId: bot.id },
+            fallbackModel: mainRunModel,
+            secrets: runSecrets,
+            registerSecrets: (values) => runSecrets.push(...values),
+          })
+        : undefined,
     executeTool: scripted
       ? undefined
       : (name, args, executionId, route, observer) =>
@@ -370,6 +407,19 @@ function modelTurnRequest(
         });
       }
       keepToolStepResult(state.reply, completion, runSecrets);
+      const completedDetail = summarizeToolCompletionDetail(completion, runSecrets);
+      if (completedDetail) {
+        state.reply.toolDetails ??= new Map();
+        state.reply.toolDetails.set(completion.executionId, completedDetail);
+      }
+      const completedSkills = summarizeToolCompletionSkills(completion, runSecrets);
+      if (completedSkills?.length) {
+        state.reply.toolSkills ??= new Map();
+        state.reply.toolSkills.set(
+          completion.executionId,
+          mergeSkillNames(state.reply.toolSkills.get(completion.executionId), completedSkills),
+        );
+      }
       const audited = appendToolCompletionAudit(
         deps,
         {

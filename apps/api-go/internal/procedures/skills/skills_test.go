@@ -2,6 +2,8 @@ package skills
 
 import (
 	"encoding/json"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"strings"
 	"testing"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
@@ -151,5 +153,17 @@ func TestParseDraftNeedsEveryPlaybookField(t *testing.T) {
 	wrong := `{"skillId":"s","name":7,"playbook":{"whenToUse":"w","inputs":[],"steps":[],"howToCheck":"c","whatToReturn":"r","approvalBoundaries":"a","failureHandling":"f"}}`
 	if _, failure := parseDraft(input(wrong)); failure == nil {
 		t.Fatal("a non-string name is refused")
+	}
+}
+
+func TestPlaybookJSONSanitizesASurrogateOnce(t *testing.T) {
+	surrogate := "a" + string([]byte{0xED, 0xB0, 0x80}) + "b"
+	playbook := Playbook{WhenToUse: surrogate, Steps: []string{"x"}}
+	stored := db.JSONText(mustJSON(playbook))
+	if strings.Count(stored, "\uFFFD") != 1 {
+		t.Fatalf("stored = %s", stored)
+	}
+	if !strings.Contains(stored, "a\uFFFDb") {
+		t.Fatalf("stored = %s", stored)
 	}
 }

@@ -3,10 +3,7 @@ import { createServer } from "node:http";
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
-import {
-  RAKAZO_PLATFORM_INSTRUCTION,
-  userTurnInstructions,
-} from "../../runs/assembly/run-instructions.prompt.js";
+import { userTurnInstructions } from "../../runs/assembly/run-instructions.prompt.js";
 import { PiAgentRuntime } from "./pi-runtime.js";
 import { resolveRuntimeModel } from "./pi-runtime-models.js";
 
@@ -338,11 +335,11 @@ describe("Pi outgoing provider prefixes", () => {
       ]);
       for (const request of requests) {
         expect(request.messages[0]?.role).toBe("system");
-        expect(
-          String(request.messages[0]?.content).startsWith(
-            `${RAKAZO_PLATFORM_INSTRUCTION}\n\nStable guidance.\nStable constraints.`,
-          ),
-        ).toBe(true);
+        const content = String(request.messages[0]?.content);
+        expect(content).toContain("Stable guidance.\nStable constraints.");
+        expect(content.indexOf("Stable workspace guidance.")).toBeLessThan(
+          content.indexOf("Stable guidance.\nStable constraints."),
+        );
       }
       const first = requests[0]!.messages[0]!.content;
       const second = requests[1]!.messages[0]!.content;

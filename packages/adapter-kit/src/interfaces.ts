@@ -292,6 +292,8 @@ export interface UnreferencedMachineRecords {
 export interface ConnectorProvider {
   describe(): AdapterDescriptor<ConnectorCapabilities>;
   discoverTools(context: AdapterContext): Promise<ConnectorTool[]>;
+  /** Full underlying tool list even when `discoverTools` returns lazy catalog wrappers. */
+  listCatalogTools?(context: AdapterContext): Promise<ConnectorTool[]>;
   /** Resolve a lazy catalog call to its authoritative authorized tool before approval. */
   resolveCall?(
     call: ConnectorCall,

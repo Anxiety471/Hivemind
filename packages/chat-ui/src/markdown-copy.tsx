@@ -9,6 +9,9 @@ export type MarkdownCopy = {
   copied: string;
   copyCode: string;
   copyDiagramSource: string;
+  /** A long code block folds to a few lines; these are its two states. */
+  expandCode: string;
+  collapseCode: string;
   /** Scrollable regions and the expanded dialog's title. */
   table: string;
   markdownTable: string;
@@ -39,12 +42,25 @@ export type MarkdownCopy = {
   checksProgress: (passed: number, total: number) => string;
   checkStates: Record<CommitCheckState, string>;
   checkSeconds: (seconds: number) => string;
+  /** Reference hover cards: a ticket's status and priority, its PR count, and PR and commit titles. */
+  openTicket: string;
+  ticketStatus: (status: string) => string;
+  ticketPriority: (priority: string) => string;
+  pullRequestCount: (count: number) => string;
+  pullRequestTitle: (number: number) => string;
+  pullRequestState: (state: string) => string;
+  commitTitle: string;
+  /** A ticket's pending decision: the badge on its recommended option, and the resolved line. */
+  recommended?: string;
+  decided?: (label: string) => string;
 };
 
-export const defaultMarkdownCopy: MarkdownCopy = {
+export const defaultMarkdownCopy: Required<MarkdownCopy> = {
   copied: "Copied",
   copyCode: "Copy code",
   copyDiagramSource: "Copy diagram source",
+  expandCode: "Expand code",
+  collapseCode: "Collapse code",
   table: "Table",
   markdownTable: "Markdown table",
   noRows: "No rows",
@@ -80,6 +96,24 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   },
   checkSeconds: (seconds) =>
     seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
+  openTicket: "Open ticket",
+  ticketStatus: (status) =>
+    ({
+      todo: "To do",
+      doing: "In progress",
+      review: "Review",
+      blocked: "Blocked",
+      done: "Done",
+      closed: "Closed",
+    })[status] ?? status,
+  ticketPriority: (priority) =>
+    ({ low: "Low", high: "High", urgent: "Urgent" })[priority] ?? priority,
+  pullRequestCount: (count) => `${count} ${count === 1 ? "PR" : "PRs"}`,
+  pullRequestTitle: (number) => `Pull request #${number}`,
+  pullRequestState: (state) => state,
+  commitTitle: "Commit",
+  recommended: "Recommended",
+  decided: (label) => `Decided: ${label}`,
 };
 
 const MarkdownCopyContext = createContext<MarkdownCopy>(defaultMarkdownCopy);

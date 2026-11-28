@@ -212,11 +212,11 @@ func storeBotWebhookKey(
 		vault.Persistence.TrackWrite(state, secretstore.Secret, record.ID, record.Ciphertext)
 		if _, err := tx.Exec(ctx, `INSERT INTO secrets (id, "userId", "spaceId", kind, ciphertext)
 			VALUES ($1, $2, $3, $4, $5)`,
-			record.ID, actor.UserID, actor.SpaceID, webhookSecretKind, record.Ciphertext); err != nil {
+			db.Data(record.ID, actor.UserID, actor.SpaceID, webhookSecretKind, record.Ciphertext)...); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE bots SET "webhookSecretId" = $2, "updatedAt" = $3 WHERE id = $1`,
-			botID, record.ID, time.Now().UTC().Truncate(time.Millisecond)); err != nil {
+			append([]any{botID}, db.Data(record.ID, time.Now().UTC().Truncate(time.Millisecond))...)...); err != nil {
 			return err
 		}
 		if previous != "" {

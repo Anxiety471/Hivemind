@@ -194,11 +194,9 @@ describe("native host computer transport", () => {
     expect(events.at(-1), JSON.stringify(events)).toEqual({ type: "exit", code: 0 });
   });
 
-  it("creates and cleans Team folders without Unix command tools", async () => {
+  it("leaves Team workspace root free of per-bot subdirectories", async () => {
     await ensureComputerWorkspaceLayout(client, computer, "team", "bot-1", context);
-    expect(await client.workspaceDirectories(computer, { action: "list" }, context)).toEqual([
-      "bots/bot-1",
-    ]);
+    expect(await client.workspaceDirectories(computer, { action: "list" }, context)).toEqual([]);
     await client.writeFile(
       computer,
       { path: "bots/bot-1/file.txt", content: new TextEncoder().encode("test") },
@@ -216,6 +214,7 @@ describe("native host computer transport", () => {
     const home = path.join(root, "desktop-computers", directory!);
     const outside = path.join(root, "outside");
     await mkdir(outside);
+    await mkdir(path.join(home, "bots"), { recursive: true });
     await writeFile(path.join(outside, "keep.txt"), "keep");
     await symlink(
       outside,

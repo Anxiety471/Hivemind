@@ -47,10 +47,88 @@ export const MemoryPromptBudgetSchema = z.object({
 });
 export type MemoryPromptBudget = z.infer<typeof MemoryPromptBudgetSchema>;
 
+/** The memory roamer's default interval, in minutes. */
+export const MEMORY_ROAMER_DEFAULT_INTERVAL = 360;
+
+/** One bot or Space that did not finish the last roamer pass. */
+export const MemoryRoamerFailureSchema = z.object({
+  kind: z.enum(["bot", "shared", "skills"]),
+  id: z.string(),
+  name: z.string(),
+  error: z.string(),
+});
+export type MemoryRoamerFailure = z.infer<typeof MemoryRoamerFailureSchema>;
+
+export const MemoryRoamerFailuresSchema = z.array(MemoryRoamerFailureSchema).max(50);
+
+/** One document change in a roamer run. */
+export const MemoryRoamerChangeSchema = z.object({
+  /** The named command that made the change, such as memory.write or skill.update. */
+  command: z.string().optional(),
+  scope: z.enum(["bot", "user", "skill"]),
+  path: z.string(),
+  action: z.string(),
+  beforeBytes: z.number().int().nonnegative(),
+  afterBytes: z.number().int().nonnegative(),
+  created: z.boolean().optional(),
+});
+
+/** One bot or Space's result in the latest roamer run. */
+export const MemoryRoamerTargetSchema = z.object({
+  kind: z.enum(["bot", "shared", "skills"]),
+  id: z.string(),
+  name: z.string(),
+  status: z.enum(["ok", "failed"]),
+  error: z.string().optional(),
+  model: z.string().optional(),
+  inputHash: z.string().optional(),
+  changes: z.array(MemoryRoamerChangeSchema),
+  checkedAt: z.string(),
+});
+export type MemoryRoamerTarget = z.infer<typeof MemoryRoamerTargetSchema>;
+
+export const MemoryRoamerReportSchema = z.array(MemoryRoamerTargetSchema).max(200);
+
+/** What the background roamer is doing, and how its last pass went. */
+export const MemoryRoamerSettingsSchema = z.object({
+  enabled: z.boolean(),
+  intervalMinutes: z.number().int().min(15).max(10_080),
+  lastRunAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  lastChanges: z.number().int().nonnegative(),
+  lastModel: z.string().nullable(),
+  lastFailures: MemoryRoamerFailuresSchema,
+  lastReport: MemoryRoamerReportSchema,
+  retryAt: z.string().nullable(),
+  retryAttempt: z.number().int().nonnegative(),
+});
+export type MemoryRoamerSettings = z.infer<typeof MemoryRoamerSettingsSchema>;
+
+/** Maximum length for Space-level system prompt additions. */
+export const SYSTEM_PROMPT_APPEND_MAX_CHARS = 8_000;
+
+export const SpaceSystemPromptSchema = z.object({
+  basePromptPreview: z.string(),
+  append: z.string(),
+  hasHostAppend: z.boolean(),
+});
+export type SpaceSystemPrompt = z.infer<typeof SpaceSystemPromptSchema>;
+
 /** Every bot and Space keeps its MEMORY.md index; other memory documents can be deleted. */
 export const MEMORY_INDEX_PATH = "MEMORY.md";
+/** Consolidated Space-level user profile path. */
+export const USER_MEMORY_PATH = "USER.md";
+/** Cold archive prefix excluded from automatic prompt injection. */
+export const MEMORY_ARCHIVE_PREFIX = "archive/";
 /** What a bot may write to its memory. People can still write more by hand. */
 export const BOT_MEMORY_MAX_BYTES = 4 * 1024;
+/** Hard cap for Space-level USER.md. */
+export const USER_MEMORY_MAX_BYTES = 2 * 1024;
+/** Hard cap for Space-level MEMORY.md. */
+export const SHARED_MEMORY_MAX_BYTES = 6 * 1024;
+export function isArchiveMemoryPath(path: string): boolean {
+  return path.startsWith(MEMORY_ARCHIVE_PREFIX);
+}
 export function isDeletableMemoryDocument(path: string): boolean {
   return path !== MEMORY_INDEX_PATH;
 }

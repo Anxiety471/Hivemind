@@ -177,8 +177,8 @@ async function withOwnToolHistory<
 }
 
 /** Marks the bot message that keeps the reply text of a run that failed partway through it. */
-export function partialReplyClientNonce(runId: string): string {
-  return `partial-reply:${runId}`;
+export function partialReplyClientNonce(runId: string, fence?: number): string {
+  return fence && fence > 1 ? `partial-reply:${runId}:${fence}` : `partial-reply:${runId}`;
 }
 
 export function isPartialReplyClientNonce(clientNonce: string | null | undefined): boolean {

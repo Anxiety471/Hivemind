@@ -717,7 +717,7 @@ describe("tickRoutineWatch on a computer", () => {
       computer,
       {
         argv: ["sh", "-c", FILES_SCRIPT, "watch", scope === "team" ? "." : "", "./inbox"],
-        cwd: scope === "team" ? "bots/bot-1" : undefined,
+        cwd: undefined,
         timeoutMs: 60_000,
       },
       expect.anything(),
@@ -754,7 +754,7 @@ describe("tickRoutineWatch on a computer", () => {
     expect((await checkRoutineWatch(deps, routine)).state.detail).toBe("note.txt");
     expect(execute).toHaveBeenCalledWith(
       computer,
-      { argv: ["sh", "-lc", "ls inbox"], cwd: "bots/bot-1", timeoutMs: 60_000 },
+      { argv: ["sh", "-lc", "ls inbox"], cwd: undefined, timeoutMs: 60_000 },
       expect.anything(),
     );
   });
@@ -809,7 +809,7 @@ describe("tickRoutineWatch on a computer", () => {
       expect.anything(),
       {
         argv: ["sh", "-lc", "gh api user"],
-        cwd: "bots/bot-1",
+        cwd: undefined,
         timeoutMs: 60_000,
         env: { GH_TOKEN: secret },
         unsetEnv: ["STRIPE_API_KEY"],
@@ -1291,7 +1291,7 @@ describe("tickRoutineWatch on a computer", () => {
       await checkRoutineWatch(deps, routine);
       expect(execute).toHaveBeenCalledWith(
         computer,
-        expect.objectContaining({ argv, cwd: "bots/bot-1" }),
+        expect.objectContaining({ argv, cwd: undefined }),
         expect.anything(),
       );
     }
@@ -1368,7 +1368,7 @@ describe("tickRoutineWatch on a computer", () => {
     const { deps, routine, updateMany } = setupComputer(
       { kind: "files", paths: ["a", "b"] },
       {
-        stdout: "/home/rakazo/bots/bot-1/b/x.txt\t1\t5.25\n",
+        stdout: "/home/rakazo/b/x.txt\t1\t5.25\n",
         stderr: "find: a: Permission denied",
         code: 1,
       },
@@ -1395,7 +1395,7 @@ describe("tickRoutineWatch on a computer", () => {
     });
     const { deps, routine, updateMany } = setupComputer(
       { kind: "files", paths: ["a"] },
-      { stdout: "/home/rakazo/bots/bot-1/a/x.txt\t1\t5.25\n" },
+      { stdout: "/home/rakazo/a/x.txt\t1\t5.25\n" },
     );
     routine.watchState = {
       checkedAt: "x",
@@ -1548,9 +1548,8 @@ describe("tickRoutineWatch on a computer", () => {
 });
 
 describe("watchFolder", () => {
-  // A team computer refuses "." as a bot path, which failed every files watch live.
-  it("is the bot's own folder on a team computer and the workspace on a private one", () => {
-    expect(watchFolder("team", "bot-1")).toBe("/home/rakazo/bots/bot-1");
+  it("uses the workspace root for both team and private computers", () => {
+    expect(watchFolder("team", "bot-1")).toBe("/home/rakazo");
     expect(watchFolder("dedicated", "bot-1")).toBe("/home/rakazo");
   });
 });
@@ -1595,16 +1594,16 @@ describe("toolResultText", () => {
 });
 
 describe("file watch boundaries", () => {
-  it("allows normalized team paths inside the bot folder", () => {
-    expect(resolveWatchPath("team", "bot-1", "/home/rakazo/bots/bot-1/inbox/../notes")).toBe(
-      "/home/rakazo/bots/bot-1/notes",
+  it("allows normalized team paths inside the shared workspace", () => {
+    expect(resolveWatchPath("team", "bot-1", "/home/rakazo/inbox/../notes")).toBe(
+      "/home/rakazo/notes",
     );
-    expect(resolveWatchPath("team", "bot-1", "notes")).toBe("/home/rakazo/bots/bot-1/notes");
+    expect(resolveWatchPath("team", "bot-1", "notes")).toBe("/home/rakazo/notes");
   });
-  it.each(["/etc", "../bot-2", "/home/rakazo/bots/bot-1/../../shared", "shared/../../other"])(
+  it.each(["/etc", "../bot-2", "/home/rakazo/../other", "shared/../../other"])(
     "refuses team escape %s",
     (path) => {
-      expect(() => resolveWatchPath("team", "bot-1", path)).toThrow("inside the bot's folder");
+      expect(() => resolveWatchPath("team", "bot-1", path)).toThrow("inside the shared workspace");
     },
   );
   it("keeps dedicated computers unrestricted", () => {

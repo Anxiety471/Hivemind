@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import type { ThreadMessage } from "@rakazo/contracts";
 import { foldPeerReplies } from "@rakazo/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps, ReactNode, RefObject } from "react";
 import { act } from "react";
 import { flushSync } from "react-dom";
@@ -24,7 +25,7 @@ vi.mock("@lingui/core/macro", () => ({
     (count === 1 ? forms.one : forms.other).replace("#", String(count)),
 }));
 
-vi.mock("../../../lib/query/rpc", () => ({ rpc: {} }));
+vi.mock("../../../lib/query/rpc", () => ({ rpc: {}, selectedSpaceId: () => null }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -97,6 +98,7 @@ function baseProps(messages: readonly ThreadMessage[]): ComponentProps<typeof Tr
     scrollRequest: null,
     onScrollRequestHandled: vi.fn(),
     followRequest: 0,
+    threadLoading: false,
     callHoldsSpeaker: false,
     artifactTarget: { botId: "bot" },
     transcript: foldPeerReplies(messages, { includePeerReceipts: true }),
@@ -130,8 +132,14 @@ function baseProps(messages: readonly ThreadMessage[]): ComponentProps<typeof Tr
   };
 }
 
+// A job card saves through the query client, so the transcript mounts under one as the app does.
+const queries = new QueryClient();
+function withQueries(ui: ReactNode) {
+  return <QueryClientProvider client={queries}>{ui}</QueryClientProvider>;
+}
+
 function render(props: ComponentProps<typeof Transcript>) {
-  act(() => root.render(<Transcript {...props} />));
+  act(() => root.render(withQueries(<Transcript {...props} />)));
 }
 
 function selectText(element: Element, text: string, notify = true) {
@@ -162,9 +170,9 @@ it("shares the armed quote action with the pill and replaces quotes on new selec
       run: (shortcut) => shortcut.type === "quote-selection" && (armed.current?.() ?? false),
       onTyping: () => {},
     });
-    return <Transcript {...props} onQuoteShortcutChange={register} />;
+    return withQueries(<Transcript {...props} onQuoteShortcutChange={register} />);
   }
-  act(() => root.render(<Harness />));
+  act(() => root.render(withQueries(<Harness />)));
   const press = () => {
     const event = new KeyboardEvent("keydown", {
       key: "L",
@@ -348,7 +356,7 @@ it("drops the quote pill when an edit removes only one end of the selection", as
 /** Renders outside act, so the first commit is visible before the transition mounts the rest. */
 async function renderFirstFrame(props: ComponentProps<typeof Transcript>) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
-  flushSync(() => root.render(<Transcript {...props} />));
+  flushSync(() => root.render(withQueries(<Transcript {...props} />)));
   const first = [...container.querySelectorAll("[data-message-id]")].map((row) =>
     row.getAttribute("data-message-id"),
   );
@@ -385,7 +393,7 @@ it("does not spend the first frame on rows hidden tool activity would leave blan
   });
   const props = { ...baseProps([...shown, ...tools]), running: false };
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
-  flushSync(() => root.render(<Transcript {...props} />));
+  flushSync(() => root.render(withQueries(<Transcript {...props} />)));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   expect(
     [...container.querySelectorAll("[data-message-id]")].map((row) =>
@@ -537,4 +545,70 @@ it("holds the new reply, not older history that loads after the send", () => {
     followRequest: 1,
   });
   expect(scrollTo).toHaveBeenLastCalledWith({ top: 900, behavior: "auto" });
+});
+
+function jobMessage(
+  id: string,
+  jobId: string,
+  state: "working" | "finished",
+  title = "mcp-job-card",
+): ThreadMessage {
+  seq += 1;
+  return {
+    id,
+    threadId: "thread",
+    seq,
+    role: "bot",
+    createdAt: at(seq),
+    blocks: [
+      {
+        kind: "job",
+        jobId,
+        title,
+        agent: "pi",
+        branch: "example/mcp-job-card",
+        state,
+        startedAt: Date.now() - 250_000,
+        url: "https://code.example.test",
+      },
+    ],
+  };
+}
+
+function jobCards() {
+  return [...container.querySelectorAll<HTMLElement>('[data-testid="job-card"]')];
+}
+
+it("shows only a job's newest card, so its old one stops counting", async () => {
+  render(
+    baseProps([
+      jobMessage("card-1", "job-1", "working"),
+      jobMessage("card-2", "job-1", "finished"),
+    ]),
+  );
+  // The card's code loads on demand, so it is awaited before it is read.
+  await vi.waitFor(() => expect(jobCards()).toHaveLength(1));
+
+  const cards = jobCards();
+  expect(cards).toHaveLength(1);
+  expect(cards[0]?.textContent).toContain("Finished");
+  expect(cards[0]?.textContent).not.toContain("Working");
+  // No clock at all: the working card that kept counting is gone with its message.
+  expect(cards[0]?.textContent).not.toMatch(/\d+:\d{2}/);
+  expect(container.querySelector('[data-message-id="card-1"]')).toBeNull();
+});
+
+it("keeps a card for each job", async () => {
+  render(
+    baseProps([
+      jobMessage("card-1", "job-1", "working"),
+      jobMessage("card-2", "job-2", "finished", "billing-worker"),
+    ]),
+  );
+  await vi.waitFor(() => expect(jobCards()).toHaveLength(2));
+
+  expect(jobCards().map((card) => card.textContent)).toEqual([
+    expect.stringContaining("mcp-job-card"),
+    expect.stringContaining("billing-worker"),
+  ]);
 });

@@ -362,8 +362,10 @@ describe("dispatchTool audit outcomes", () => {
 });
 
 describe("isToolError", () => {
-  it("counts errors and the internal owner-settings refusal as failures", () => {
+  it("counts errors, MCP isError results, and the internal owner-settings refusal as failures", () => {
     expect(isToolError({ error: "Denied" })).toBe(true);
+    expect(isToolError({ isError: true, content: [{ type: "text", text: "boom" }] })).toBe(true);
+    expect(isToolError({ isError: false, content: [] })).toBe(false);
     expect(isToolError(terminatingToolResult("refused", { refused: "owner-settings" }))).toBe(true);
   });
 

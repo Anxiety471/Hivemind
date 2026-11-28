@@ -54,7 +54,7 @@ vi.mock("./models/pi-openai-compatible-provider.js", () => ({
 }));
 
 import { PiAgentRuntime } from "./pi-runtime.js";
-import { isHistoryReply, toHistory } from "./pi-runtime-history.js";
+import { isHistoryReply, scriptToolMap, toHistory } from "./pi-runtime-history.js";
 
 const OFFERED = new Set(["shell", "SLACK_FIND_CHANNELS", "read_file"]);
 
@@ -427,6 +427,57 @@ describe("replaying an earlier reply's tool steps", () => {
         {
           type: "text",
           text: '{"stdout":"","stderr":"","code":0}\n[shell is not available to you now.]',
+        },
+      ],
+    });
+  });
+
+  it("points a replayed call at code_mode when a script reaches its tool", () => {
+    const [, result] = toHistory(
+      [toolReply],
+      "",
+      undefined,
+      new Set(["code_mode"]),
+      scriptToolMap(["shell"]),
+    );
+    expect(result).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: '{"stdout":"","stderr":"","code":0}\n[shell was called directly then. Call it from a code_mode script as codemode.shell(...).]',
+        },
+      ],
+    });
+  });
+
+  it("uses bracket syntax in replay notes for non-identifier tool names", () => {
+    const hyphenatedReply = {
+      ...toolReply,
+      segments: [
+        {
+          steps: [
+            {
+              label: "List zones",
+              tool: "mcp__cloudflare__list-zones",
+              count: 1,
+              calls: [{ arguments: "{}", result: "{}" }],
+            },
+          ],
+        },
+      ],
+    };
+    const [, result] = toHistory(
+      [hyphenatedReply],
+      "",
+      undefined,
+      new Set(["code_mode"]),
+      scriptToolMap(["mcp__cloudflare__list-zones"]),
+    );
+    expect(result).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: '{}\n[mcp__cloudflare__list-zones was called directly then. Call it from a code_mode script as codemode["mcp__cloudflare__list-zones"](...).]',
         },
       ],
     });

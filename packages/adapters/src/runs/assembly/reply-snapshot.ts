@@ -10,6 +10,7 @@ const ReplySnapshotSchema = z.object({
   messageSegments: z.array(MessageBlock),
   pendingToolNames: z.array(z.string()),
   pendingToolDetails: z.array(z.string().nullable()).optional(),
+  pendingToolSkills: z.array(z.array(z.string()).nullable()).optional(),
   pendingToolTimings: z
     .array(
       z
@@ -32,6 +33,9 @@ const ReplySnapshotSchema = z.object({
       ]),
     )
     .optional(),
+  toolDetails: z.array(z.tuple([z.string(), z.string()])).optional(),
+  toolSkills: z.array(z.tuple([z.string(), z.array(z.string())])).optional(),
+  invokedSkills: z.array(z.string()).optional(),
   toolOutcomes: z.array(z.tuple([z.string(), z.enum(["succeeded", "failed", "stopped"])])),
   toolStepCalls: z.array(z.tuple([z.string(), ToolStepCallSchema])),
   costUsd: z.number().optional(),
@@ -47,6 +51,8 @@ const ReplySnapshotSchema = z.object({
   discardedMidTurnNarration: z.boolean(),
   lastDiscardedMidTurnNarration: z.string(),
   explicitNoResponse: z.boolean(),
+  emptyResponse: z.boolean().optional(),
+  emptyResponseReminders: z.number().int().nonnegative().optional(),
   publishedTerminalSubagent: z.boolean(),
   computerTaskStarted: z.boolean(),
   assistantTurnBreakPending: z.boolean(),
@@ -80,6 +86,9 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     ...(reply.pendingToolDetails.some(Boolean)
       ? { pendingToolDetails: reply.pendingToolDetails }
       : {}),
+    ...(reply.pendingToolSkills?.some(Boolean)
+      ? { pendingToolSkills: reply.pendingToolSkills }
+      : {}),
     ...(reply.pendingToolTimings?.some(Boolean)
       ? { pendingToolTimings: reply.pendingToolTimings }
       : {}),
@@ -87,6 +96,11 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     ...(reply.toolTimings && reply.toolTimings.size > 0
       ? { toolTimings: [...reply.toolTimings] }
       : {}),
+    ...(reply.toolDetails && reply.toolDetails.size > 0
+      ? { toolDetails: [...reply.toolDetails] }
+      : {}),
+    ...(reply.toolSkills && reply.toolSkills.size > 0 ? { toolSkills: [...reply.toolSkills] } : {}),
+    ...(reply.invokedSkills?.length ? { invokedSkills: reply.invokedSkills } : {}),
     toolOutcomes: [...reply.toolOutcomes],
     toolStepCalls: [...reply.toolStepCalls],
     ...(reply.costUsd ? { costUsd: reply.costUsd } : {}),
@@ -108,6 +122,10 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     discardedMidTurnNarration: reply.discardedMidTurnNarration,
     lastDiscardedMidTurnNarration: reply.lastDiscardedMidTurnNarration,
     explicitNoResponse: reply.explicitNoResponse,
+    ...(reply.emptyResponse ? { emptyResponse: true } : {}),
+    ...(reply.emptyResponseReminders
+      ? { emptyResponseReminders: reply.emptyResponseReminders }
+      : {}),
     publishedTerminalSubagent: reply.publishedTerminalSubagent,
     computerTaskStarted: reply.computerTaskStarted,
     assistantTurnBreakPending: reply.assistantTurnBreakPending,
@@ -144,15 +162,21 @@ export function restoreReply(reply: ReplyState, saved: unknown, runId: string): 
     toolOutcomes,
     toolStepCalls,
     pendingToolDetails,
+    pendingToolSkills,
     pendingToolTimings,
     toolTimings,
+    toolDetails,
+    toolSkills,
     version: _,
     ...rest
   } = parsed.data;
   Object.assign(reply, rest);
   reply.pendingToolDetails = pendingToolDetails ?? rest.pendingToolNames.map(() => null);
+  reply.pendingToolSkills = pendingToolSkills ?? rest.pendingToolNames.map(() => null);
   reply.pendingToolTimings = pendingToolTimings ?? rest.pendingToolNames.map(() => null);
   reply.toolTimings = new Map(toolTimings ?? []);
+  reply.toolDetails = new Map(toolDetails ?? []);
+  reply.toolSkills = new Map(toolSkills ?? []);
   reply.toolOutcomes = new Map(toolOutcomes);
   reply.toolStepCalls = new Map(toolStepCalls);
   const mimeType = latestScreenshot && storedImageMimeType(latestScreenshot.mimeType);

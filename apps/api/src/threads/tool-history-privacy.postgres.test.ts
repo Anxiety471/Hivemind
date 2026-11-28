@@ -143,6 +143,7 @@ describePostgres("a reply's kept tool calls (PostgreSQL)", () => {
         kind: "steps",
         steps: [{ label: "Shell", count: 1, outcomes: { succeeded: 1 } }],
         durationMs: expect.any(Number),
+        status: "completed",
       });
     });
 

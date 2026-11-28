@@ -1179,45 +1179,17 @@ describe("export.bot", () => {
     },
   );
 
-  it("exports only the bot's own folder from a Team Computer", async () => {
+  it("exports no workspace files for a Team Computer, whose workspace the Space shares", async () => {
     const home = await homeWith({
-      "bots/bot-1/notes/result.txt": "mine",
-      "bots/bot-1/project/.gitignore": "dist",
-      "bots/bot-1/.cache/pip/wheel": "cache",
-      "bots/bot-10/notes.txt": "prefix-sharing bot",
-      "bots/bot-2/private.txt": "other bot",
-      "shared/handoff.txt": "shared",
+      "notes/result.txt": "mine",
+      "notes/other.txt": "another bot",
+      "project/.gitignore": "dist",
       ".cache/fontconfig/cache-1": Uint8Array.from([0, 159, 146, 150]),
       ".browser-profiles/chromium-bot-1/Cookies": "session",
     });
-    const own = path.join(home.pathFor("home-1"), "bots/bot-1");
-    await symlink("../bot-2", path.join(own, "peer-dir"));
-    await symlink("../bot-2/private.txt", path.join(own, "peer-file"));
-    await symlink("../../shared", path.join(own, "shared-link"));
-    await symlink(".cache/pip/wheel", path.join(own, "wheel.txt"));
 
-    expect(await exportFiles("team", home)).toEqual([
-      { path: "notes/result.txt", content: "mine" },
-      { path: "project/.gitignore", content: "dist" },
-    ]);
-  });
-
-  it("keeps the bot's files that another bot links to", async () => {
-    const home = await homeWith({
-      "bots/bot-1/attachments/photo.bin": Uint8Array.from([0, 255]),
-      "bots/bot-00/notes.txt": "other bot",
-    });
-    await symlink("../bot-1/attachments", path.join(home.pathFor("home-1"), "bots/bot-00/grab"));
-
-    expect((await exportFiles("team", home)).map((file) => file.path)).toEqual([
-      "attachments/photo.bin",
-    ]);
-  });
-
-  it("exports nothing when the bot's Team Computer folder is a link", async () => {
-    const home = await homeWith({ "bots/bot-2/private.txt": "other bot" });
-    await symlink("bot-2", path.join(home.pathFor("home-1"), "bots/bot-1"));
-
+    // Files under the shared root belong to the Space, not to one bot, so a bot export leaves
+    // them out; the account export carries the Space's home and its Drive files.
     expect(await exportFiles("team", home)).toEqual([]);
   });
 

@@ -105,7 +105,15 @@ function fixture(
       },
       artifact: {
         ...empty,
-        findMany: async () => [{ id: "fixture-image", storageKey: "fixture-image-key" }],
+        findMany: async () => [
+          {
+            id: "fixture-image",
+            name: "reply.png",
+            mimeType: "image/png",
+            size: 4,
+            storageKey: "fixture-image-key",
+          },
+        ],
       },
       message: {
         ...empty,

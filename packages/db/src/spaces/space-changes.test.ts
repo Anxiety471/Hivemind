@@ -22,11 +22,12 @@ function fakeFanout() {
   };
 }
 
+/** Every kind a fresh follower learns on open, in the order the contract lists them. */
+const KINDS = SpaceChangeKind.options;
+
 async function opened(iterator: AsyncGenerator<string>) {
   const kinds = [];
-  for (let i = 0; i < SpaceChangeKind.options.length; i += 1) {
-    kinds.push((await iterator.next()).value);
-  }
+  for (let i = 0; i < KINDS.length; i += 1) kinds.push((await iterator.next()).value);
   return kinds;
 }
 
@@ -34,7 +35,7 @@ describe("followSpaceChanges", () => {
   it("signals every kind on open, then each change in its own Space only", async () => {
     const fanout = fakeFanout();
     const iterator = followSpaceChanges(fanout as never, "space-1");
-    expect(await opened(iterator)).toEqual([...SpaceChangeKind.options]);
+    expect(await opened(iterator)).toEqual(KINDS);
 
     const next = iterator.next();
     let signalled = false;
@@ -91,7 +92,7 @@ describe("followSpaceChanges", () => {
     const iterator = followSpaceChanges(fanout as never, "space-1");
     await opened(iterator);
     await fanout.publish("space-changes:space-1", "");
-    expect(await opened(iterator)).toEqual([...SpaceChangeKind.options]);
+    expect(await opened(iterator)).toEqual(KINDS);
     await iterator.return(undefined);
   });
 });

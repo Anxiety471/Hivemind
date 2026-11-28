@@ -23,6 +23,7 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
     health: { status: "unknown", message: null, toolCount: null, checkedAt: null },
     enabled: true,
     verbatimResults: false,
+    sendCallerIdentity: false,
     revision: 1,
     createdAt: "2026-11-04T00:00:00.000Z",
     updatedAt: "2026-11-04T00:00:00.000Z",

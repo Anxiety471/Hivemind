@@ -73,3 +73,24 @@ func TestSniffSafeUploadAndInlineDisposition(t *testing.T) {
 		t.Fatalf("category = %q, want video", got)
 	}
 }
+
+func TestSlugAndFolderNameHelpers(t *testing.T) {
+	if got, err := NormalizeSlug("  Q3_Board Deck v2!! "); err != nil || got != "q3-board-deck-v2" {
+		t.Fatalf("NormalizeSlug = (%q, %v), want q3-board-deck-v2", got, err)
+	}
+	if _, err := NormalizeSlug("   ---   "); err == nil {
+		t.Fatal("expected empty/punctuation slug to fail")
+	}
+	if got := SlugifyFilename("Quarterly_Report 2026.pdf"); got != "quarterly-report-2026" {
+		t.Fatalf("SlugifyFilename = %q, want quarterly-report-2026", got)
+	}
+	if got := SlugifyFilename("???.bin"); got != "file" {
+		t.Fatalf("SlugifyFilename fallback = %q, want file", got)
+	}
+	if got := SanitizeFolderName("  Research / Ops Bot \n ", "Bot"); got != "Research Ops Bot" {
+		t.Fatalf("SanitizeFolderName = %q", got)
+	}
+	if got := SanitizeFolderName("..", "Bot"); got != "Bot" {
+		t.Fatalf("SanitizeFolderName dotdot = %q, want Bot", got)
+	}
+}

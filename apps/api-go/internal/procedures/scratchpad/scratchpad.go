@@ -16,7 +16,6 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
-	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -156,7 +155,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return items, nil
 }
@@ -218,11 +217,11 @@ func Create(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		var err error
 		item, err = scanItem(tx.QueryRow(ctx, `INSERT INTO scratchpad_items (id, "spaceId", "botId", "userId", title, status, notes, "createdAt", "updatedAt")
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING `+columns,
-			effects.NewID(), actor.SpaceID, input.BotID, actor.UserID, input.Title, input.Status, input.Notes, now()))
+			db.Data(effects.NewID(), actor.SpaceID, input.BotID, actor.UserID, input.Title, input.Status, input.Notes, now())...))
 		return err
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return item, nil
 }
@@ -288,9 +287,12 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		if len(sets) == 1 {
 			item, err = scanItem(tx.QueryRow(ctx, `SELECT `+columns+` FROM scratchpad_items WHERE id = $1 AND "spaceId" = $2`, input.ItemID, actor.SpaceID))
 		} else {
+			dataCount := len(args)
 			args = append(args, input.ItemID, actor.SpaceID)
+			arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
+			//writeaudit:dynamic the SET list is built from optional fields; args[:dataCount] is wrapped with db.Data and the suffix holds only filters
 			item, err = scanItem(tx.QueryRow(ctx, `UPDATE scratchpad_items SET `+strings.Join(sets, ", ")+
-				` WHERE id = $`+strconv.Itoa(len(args)-1)+` AND "spaceId" = $`+strconv.Itoa(len(args))+` RETURNING `+columns, args...))
+				` WHERE id = $`+strconv.Itoa(len(args)-1)+` AND "spaceId" = $`+strconv.Itoa(len(args))+` RETURNING `+columns, arguments...))
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errIsolation
@@ -298,7 +300,7 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return err
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return item, nil
 }
@@ -324,7 +326,7 @@ func Remove(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return nil
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }

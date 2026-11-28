@@ -8,11 +8,12 @@
  *   set -a; . /home/hitori/go-port/fixture-db/.env; set +a
  *   GO_BINARY=/tmp/rakazo-gateway node_modules/.bin/tsx apps/api-go/tools/contract.mts
  */
+import { AssertionError } from "node:assert";
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -21,19 +22,38 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
 import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
+import { jobCases } from "./contract-job.mts";
+import { replyPreviewCases } from "./contract-reply.mts";
+import { askCases } from "./contract-ask.mts";
+import { blockCases } from "./contract-blocks.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
+import { laneKCases, laneKState } from "./contract-k-mcp.mts";
+import { laneKReviewCases } from "./contract-k-review.mts";
+import { laneLPushCases, laneLPushState } from "./contract-l-push.mts";
+import { laneMReviewCases } from "./contract-m-review.mts";
+import { laneMSecretCases, laneMState } from "./contract-m-secrets.mts";
+import { oStreamErrorCases } from "./contract-o-wired.mts";
+import { laneLReviewCases } from "./contract-l-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
+import {
+  clearVerified,
+  digestMismatchHint,
+  maskedVerified,
+  registerVerified,
+} from "./contract-norm.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
+import { run1Cases } from "./contract-run1.mts";
 import { threadAdversarialCases } from "./contract-threads-adversarial.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
 import { threadMoreCases } from "./contract-threads-more.mts";
+import { url1Cases } from "./contract-url1.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -50,6 +70,11 @@ const RUN_TAG = process.env.RUN_TAG ? `-${process.env.RUN_TAG}` : "";
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 const GO_PORT = process.env.GO_PORT ?? "3201";
 const GO_URL = `http://127.0.0.1:${GO_PORT}`;
+// Fault-injection only: a second gateway whose table is entirely proxy. One concurrent call in
+// CONTRACT_PROXY_ONE_CONCURRENT proves the served_by count rejects a partial proxy window.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const PROXY_PORT = process.env.GO_PROXY_PORT ?? String(Number(GO_PORT) + 2);
+const PROXY_URL = `http://127.0.0.1:${PROXY_PORT}`;
 // The gateway's upstream: a bridge to the in-process TypeScript app, so a request Go declines is
 // answered the way production's proxy answers it. UPSTREAM_PORT separates runs on one host.
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
@@ -69,6 +94,9 @@ const CONTRACT_EMAIL = {
 // computer quota the restore cases exercise. Test values only; each side sees the same ones.
 const INBOUND_EMAIL_DOMAIN = "bots.contract.test";
 const INBOUND_EMAIL_SECRET = "contract-inbound-email-secret-0123456789";
+// The address a case marked `admin` signs in with; only those cases replace the seeded user's
+// email, so me.isAdmin and every other admin gate stay false elsewhere.
+const CONTRACT_ADMIN_EMAIL = "contract-admin@example.test";
 const MAX_COMPUTERS_PER_USER = "2";
 // resolveMaxComputersPerUser reads process.env at call time on the TypeScript side.
 process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
@@ -76,6 +104,13 @@ process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
 // sides (phoneCallSettings reads process.env, and the Go child inherits it).
 process.env.PHONE_CALLS_ENABLED = "true";
 process.env.PHONE_CALL_RING_SECONDS = "45";
+// The elected reconciler runs the audit retention pruner hourly
+// (createRetentionPruner "audit.event", via createAuditLogReconciler) and its default keeps
+// 365 days (DEFAULT_AUDIT_EVENT_RETENTION_DAYS, packages/db/src/account/audit-events.ts). Cases
+// seed audit rows dated 2021; the second tick would otherwise delete them mid-pass. Go has no
+// pruner, so nothing on that side reads this.
+process.env.AUDIT_EVENT_RETENTION_DAYS = "10000";
+
 
 export type Seeded = {
   userId: string;
@@ -90,6 +125,9 @@ export type Seeded = {
   cookie: string;
   activeSpace?: number;
 };
+
+/** The parts of one side's result that a retry predicate may inspect. */
+export type SideOutcome = { status: number; body?: any };
 
 export type Case = {
   name: string;
@@ -114,12 +152,37 @@ export type Case = {
   unorderedSections?: boolean;
   /** Runs only with CONTRACT_EMAIL=1 (email delivery configured on both sides); otherwise only without it. */
   email?: boolean;
+  /** Signs the seeded user in as CONTRACT_ADMIN_EMAIL, for admin-only procedures. */
+  admin?: boolean;
   /**
    * Pause between the two sides' windows so a TypeScript background job's Space changes (the
    * in-process wakeup queue may finish a restored routine seconds after the response; the Go
    * side only enqueues its job and nothing executes it here) land in neither window.
    */
   gapMs?: number;
+  /**
+   * Wait this long after each side's response before the quiet-loop snapshot, for a case whose
+   * asynchronous effects legitimately publish late on both sides (the routine-resume restore
+   * cases). Gives each side's roster/Space publishes time to land in its own window instead of
+   * racing the next side's capture.
+   */
+  settleMs?: number;
+  /**
+   * Re-run this case (both sides, fresh seeds) when the comparison mismatches, up to this many
+   * extra attempts. Only for a state one side answers nondeterministically; `retryReason` must
+   * name that nondeterminism, `retryWhen` must name the exact failure signature, and the runner
+   * prints every retry as `RETRY <name>`.
+   */
+  retries?: number;
+  /** Why this case may be retried. Required whenever `retries` is set. */
+  retryReason?: string;
+  /**
+   * The only failure this case may re-run on, called with the failed comparison (always an
+   * AssertionError), the TypeScript result and the Go result. A comparison the predicate rejects,
+   * and any check or transport error, fails on the first attempt — so a deterministic regression
+   * cannot be absorbed by a lucky counterpart that happens to match once.
+   */
+  retryWhen?: (error: AssertionError, ts: SideOutcome, go: SideOutcome) => boolean;
   /**
    * Skip the realtime-signal comparison: a procedure that creates a board or ticket with a
    * database-generated id publishes a frame whose payload necessarily names different ids on
@@ -131,6 +194,17 @@ export type Case = {
    * bridge sees it), false when Go must answer it itself. Unset skips the check.
    */
   declines?: boolean;
+  /** Compare the secret-store-change announcements each side published during the call. */
+  secretAnnouncements?: boolean;
+  /** Run this many identical calls concurrently; results are compared as a sorted list of status/body. */
+  concurrent?: number;
+  /** Extra evidence checked immediately after each side's request, before the next seed resets rows. */
+  check?: (context: {
+    seeded: Seeded;
+    result: { status: number; headers: unknown; body: any; notifications?: unknown[] };
+    side: "ts" | "go";
+    gatewayLog: string;
+  }) => void | Promise<void>;
 };
 
 function cookieFor(token: string) {
@@ -150,6 +224,7 @@ const handles = await createApp({
   nodeEnv: "test",
   signupsEnabled: "true",
   agentRuntime: "scripted",
+  adminEmails: [CONTRACT_ADMIN_EMAIL],
   // The same inbound-email configuration the Go child gets through the environment.
   inboundEmail: { domain: INBOUND_EMAIL_DOMAIN, secret: INBOUND_EMAIL_SECRET },
   sandboxProvider: "fake",
@@ -185,6 +260,10 @@ await new Promise<void>((resolve) =>
 );
 
 let go: ChildProcess | undefined;
+let proxyGo: ChildProcess | undefined;
+// The Go side's stderr/stdout for the current request window. URL cases use this to prove a share
+// token is never logged, while still passing the lines through to the harness output.
+let gatewayLog = "";
 const routesFile = join(dataDir, "routes.json");
 await writeFile(
   routesFile,
@@ -212,6 +291,10 @@ await writeFile(
       "messaging.channels.leave": { mode: "go" },
       "messaging.connections.list": { mode: "go", readOnly: true },
       "messaging.connections.revoke": { mode: "go" },
+      "threads.subscribe": { mode: "go" },
+      "threads.helperSubscribe": { mode: "go" },
+      "notifications.subscribe": { mode: "go" },
+      "notifications.subscribeCalls": { mode: "go" },
       "threads.head": { mode: "go", readOnly: true },
       "threads.get": { mode: "go", readOnly: true },
       "threads.messages": { mode: "go", readOnly: true },
@@ -236,6 +319,12 @@ await writeFile(
       "computer.updates": { mode: "go", readOnly: true },
       "mcp.assignments.all": { mode: "go", readOnly: true },
       "mcp.assignments.list": { mode: "go", readOnly: true },
+      "mcp.assignments.approve": { mode: "go" },
+      "mcp.assignments.dismiss": { mode: "go" },
+      "mcp.assignments.replace": { mode: "go" },
+      "mcp.servers.agents": { mode: "go" },
+      "mcp.servers.remove": { mode: "go" },
+      "mcp.oauth.disconnect": { mode: "go" },
       "models.backups": { mode: "go", readOnly: true },
       "models.role": { mode: "go", readOnly: true },
       "models.setRole": { mode: "go" },
@@ -272,6 +361,7 @@ await writeFile(
       "groups.restore": { mode: "go" },
       "routines.listForMentions": { mode: "go", readOnly: true },
       "routines.list": { mode: "go", readOnly: true },
+      "routines.testRun": { mode: "go" },
       "routines.history": { mode: "go", readOnly: true },
       "agentSkills.list": { mode: "go", readOnly: true },
       "agentSkills.get": { mode: "go", readOnly: true },
@@ -297,6 +387,7 @@ await writeFile(
       "organizations.invitations.cancel": { mode: "go" },
       "bots.templates": { mode: "go", readOnly: true },
       "skills.list": { mode: "go", readOnly: true },
+      "skills.testRun": { mode: "go" },
       "onboarding.start": { mode: "go", readOnly: true },
       "agentSecrets.list": { mode: "go", readOnly: true },
       "audit.events": { mode: "go", readOnly: true },
@@ -304,6 +395,13 @@ await writeFile(
       "bots.rotateWebhookSecret": { mode: "go" },
       "vault.list": { mode: "go", readOnly: true },
       "botSecrets.list": { mode: "go", readOnly: true },
+      "agentSecrets.put": { mode: "go" },
+      "agentSecrets.remove": { mode: "go" },
+      "botSecrets.put": { mode: "go" },
+      "botSecrets.remove": { mode: "go" },
+      "vault.put": { mode: "go" },
+      "vault.remove": { mode: "go" },
+      "vault.reveal": { mode: "go", readOnly: true },
       "mcp.servers.list": { mode: "go", readOnly: true },
       "models.credentials": { mode: "go", readOnly: true },
       "bots.revealWebhookSecret": { mode: "go", readOnly: true },
@@ -313,19 +411,78 @@ await writeFile(
       "boards.list": { mode: "go" },
       "boards.get": { mode: "go" },
       "boards.rename": { mode: "go" },
+      "integrationSetup.get": { mode: "go", readOnly: true },
+      "marketplace.submissions": { mode: "go", readOnly: true },
+      "pages.setVisibility": { mode: "go" },
+      "notifications.registerPush": { mode: "go" },
+      "notifications.registerCallPush": { mode: "go" },
+      "notifications.unregisterPush": { mode: "go" },
     },
   }),
 );
+type RouteConfig = { default?: string; routes?: Record<string, { mode?: string }> };
+const routeConfig = JSON.parse(await readFile(routesFile, "utf8")) as RouteConfig;
+const routeMode = (procedure: string) =>
+  routeConfig.routes?.[procedure]?.mode ?? routeConfig.default ?? "proxy";
+
+/** Count this procedure's local answers in the captured gateway log. */
+function servedByGoCount(log: string, procedure: string) {
+  const procedureField = `"procedure":${JSON.stringify(procedure)}`;
+  return log
+    .split("\n")
+    .filter((line) => line.includes('"served_by":"go"') && line.includes(procedureField)).length;
+}
+
+/**
+ * Option 2: local.Server.log's completion lines carry no request id (only method, path, status,
+ * duration, procedure and served_by), so there is no id to correlate. Wait for a quiet gateway
+ * log before clearing the window; exact counts plus this boundary barrier keep a late same-
+ * procedure line from the previous case out of the next case's window.
+ */
+async function drainGatewayLog() {
+  let previous = gatewayLog.length;
+  for (let waited = 0; waited < 4000; waited += 200) {
+    await sleep(200);
+    const current = gatewayLog.length;
+    if (current === previous) return;
+    previous = current;
+  }
+  throw new Error("gateway log did not go quiet");
+}
 process.on("uncaughtException", (error) => {
   go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
   console.error(error);
   process.exit(1);
 });
 process.on("unhandledRejection", (error) => {
   go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
   console.error(error);
   process.exit(1);
 });
+const gatewayEnv = {
+  ...process.env,
+  DATABASE_URL,
+  BETTER_AUTH_SECRET: SECRET,
+  BETTER_AUTH_URL: WEB_ORIGIN,
+  WEB_ORIGIN,
+  // The credential store both sides seal with. The same test key the TypeScript app uses.
+  ENCRYPTION_KEY: CONTRACT_ENCRYPTION_KEY,
+  CONTENT_ENCRYPTION: "on",
+  MAX_UPLOAD_SIZE_MB: "10",
+  // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
+  SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
+  EMAIL_PROVIDER: "",
+  EMAIL_EMULATOR: "",
+  // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
+  INBOUND_EMAIL_DOMAIN,
+  INBOUND_EMAIL_SECRET,
+  RAKAZO_ADMIN_EMAILS: CONTRACT_ADMIN_EMAIL,
+  SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
+  PHONE_CALLS_ENABLED: "true",
+  PHONE_CALL_RING_SECONDS: "45",
+};
 go = spawn(
   GO_BINARY,
   [
@@ -338,31 +495,14 @@ go = spawn(
     "-build-id-file",
     BUILD_ID_FILE,
   ],
-  {
-    env: {
-      ...process.env,
-      DATABASE_URL,
-      BETTER_AUTH_SECRET: SECRET,
-      BETTER_AUTH_URL: WEB_ORIGIN,
-      WEB_ORIGIN,
-      // The credential store both sides seal with. The same test key the TypeScript app uses.
-      ENCRYPTION_KEY: CONTRACT_ENCRYPTION_KEY,
-      CONTENT_ENCRYPTION: "on",
-      MAX_UPLOAD_SIZE_MB: "10",
-      // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
-      SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
-      EMAIL_PROVIDER: "",
-      EMAIL_EMULATOR: "",
-      // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
-      INBOUND_EMAIL_DOMAIN,
-      INBOUND_EMAIL_SECRET,
-      SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
-      PHONE_CALLS_ENABLED: "true",
-      PHONE_CALL_RING_SECONDS: "45",
-    },
-    stdio: ["ignore", "inherit", "inherit"],
-  },
+  { env: gatewayEnv, stdio: ["ignore", "pipe", "pipe"] },
 );
+const captureGateway = (chunk: Buffer) => {
+  gatewayLog += chunk.toString();
+  process.stdout.write(chunk);
+};
+go.stdout?.on("data", captureGateway);
+go.stderr?.on("data", captureGateway);
 for (let attempt = 0; attempt < 100; attempt += 1) {
   try {
     const response = await fetch(`${GO_URL}/healthz`);
@@ -372,6 +512,42 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   }
   if (attempt === 99) throw new Error("go gateway did not start");
   await sleep(50);
+}
+
+// Fault-injection only. A second gateway with an empty route table answers entirely through the
+// TypeScript upstream; CONTRACT_PROXY_ONE_CONCURRENT sends one of a concurrent case's Go calls
+// here, so the served_by:go count must reject the partially proxied window.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+if (process.env.CONTRACT_PROXY_ONE_CONCURRENT === "1") {
+  const proxyRoutesFile = join(dataDir, "routes-proxy.json");
+  await writeFile(proxyRoutesFile, JSON.stringify({ default: "proxy", routes: {} }));
+  proxyGo = spawn(
+    GO_BINARY,
+    [
+      "-listen",
+      `127.0.0.1:${PROXY_PORT}`,
+      "-upstream",
+      `http://127.0.0.1:${UPSTREAM_PORT}`,
+      "-routes",
+      proxyRoutesFile,
+      "-build-id-file",
+      BUILD_ID_FILE,
+    ],
+    { env: gatewayEnv, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const captureProxyGateway = (chunk: Buffer) => process.stderr.write(chunk);
+  proxyGo.stdout?.on("data", captureProxyGateway);
+  proxyGo.stderr?.on("data", captureProxyGateway);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const response = await fetch(`${PROXY_URL}/healthz`);
+      if (response.ok) break;
+    } catch {
+      // still starting
+    }
+    if (attempt === 99) throw new Error("fault proxy gateway did not start");
+    await sleep(50);
+  }
 }
 
 // A listener on the realtime channel: TypeScript and Go must publish identical signals.
@@ -585,23 +761,74 @@ const cases: Case[] = [
   ...modelBackupCases(),
   ...membershipCases(system),
   ...pageWriteCases(),
+  ...url1Cases(system),
   ...modelRenameCases(),
   ...artifactCases(),
   ...laneDCases(system),
   ...routineResumeCases(system),
   ...routineCases(system),
+  ...run1Cases(system),
   ...memoryCases(),
   ...laneGCases(),
   ...laneGCases2(),
   ...laneHCases(system),
   ...laneICases(system),
   ...laneJCases(system),
+  ...laneKCases(system),
+  ...laneKReviewCases(system),
   ...modelsCases(system),
   ...threadGetCases(system),
+  ...jobCases(system),
+  ...askCases(system),
+  ...blockCases(system),
+  ...replyPreviewCases(system),
   ...spaceRunCases(system),
   ...threadAdversarialCases(system),
   ...threadMoreCases(system),
+  ...laneLPushCases(system),
+  ...laneMSecretCases(system),
+  ...laneMReviewCases(system),
+  ...laneLReviewCases(system),
+  ...oStreamErrorCases(),
 ];
+
+// A retried case must say why and exactly which failure may be rerun: a comparison allowed to be
+// rerun has to name the behaviour that is nondeterministic and the pair of answers it produces,
+// so the list cannot grow silently and a real regression cannot ride along.
+for (const testCase of cases) {
+  if (testCase.retries === undefined) {
+    if (testCase.retryWhen !== undefined)
+      throw new Error(`${testCase.name}: retryWhen requires retries`);
+    continue;
+  }
+  if (!Number.isInteger(testCase.retries) || testCase.retries < 1)
+    throw new Error(`${testCase.name}: retries must be a positive integer`);
+  if (!testCase.retryReason?.trim())
+    throw new Error(`${testCase.name}: retries requires a retryReason`);
+  if (typeof testCase.retryWhen !== "function")
+    throw new Error(`${testCase.name}: retries requires a retryWhen predicate`);
+}
+
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+if (process.env.CONTRACT_ROUTE_AUDIT === "1") {
+  const silentlyProxied = cases.filter((testCase) => {
+    const mode = routeMode(testCase.procedure);
+    return mode !== "go" && mode !== "shadow";
+  });
+  console.log(
+    `route audit: ${cases.length} cases; ${silentlyProxied.length} not routed go/shadow`,
+  );
+  for (const testCase of silentlyProxied)
+    console.log(
+      `route audit: ${testCase.name} (${testCase.procedure}) -> ${routeMode(testCase.procedure)}`,
+    );
+  go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
+  upstreamServer.close();
+  await handles.stop();
+  await rm(dataDir, { recursive: true, force: true });
+  process.exit(silentlyProxied.length > 0 ? 1 : 0);
+}
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
 
@@ -1546,6 +1773,10 @@ type MessagingSeed = {
   oddConnection?: boolean;
 };
 
+// A code the fixture seeds directly, so a procedure that fails to issue a fresh one is caught
+// instead of having the seeded value registered as this side's random code.
+const SEEDED_LINK_CODE = "AAAAAAAA";
+
 function seedMessaging(config: MessagingSeed = {}) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
@@ -1559,6 +1790,10 @@ function seedMessaging(config: MessagingSeed = {}) {
       },
     });
     const old = new Date(Date.UTC(2020, 0, 1));
+    // messaging.channels.list reads identities ordered by createdAt alone; identities seeded with
+    // the column default would otherwise share a wall-clock millisecond and order arbitrarily. One
+    // millisecond per identity, reset per side with the seed invocation, keeps that order total.
+    let identityOrder = 0;
     const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
     const bot = (
       id: string,
@@ -1601,6 +1836,7 @@ function seedMessaging(config: MessagingSeed = {}) {
           userId: owner,
           spaceId,
           botId: `${user}-${botId}`,
+          createdAt: new Date(old.getTime() + identityOrder++),
           updatedAt: old,
           ...extra,
         },
@@ -1638,7 +1874,7 @@ function seedMessaging(config: MessagingSeed = {}) {
       await system.messagingLinkCode.create({
         data: {
           id: `${user}-oldcode`,
-          code: "AAAAAAAA",
+          code: SEEDED_LINK_CODE,
           userId: user,
           spaceId: seeded.spaces[0],
           botId: `${user}-mb2`,
@@ -1749,7 +1985,40 @@ function messagingCases(): Case[] {
       seed: seedMessaging(),
       ...extra,
     });
-  const link = mk("link.start", "link");
+  // The response carries the code with its display hyphen; the row keeps it without. Proving they
+  // are the same value lets the comparison mask this side's random code; a seeded code is compared
+  // exactly, and a wrong generated code fails here before it can be registered.
+  const linkCodeCheck: NonNullable<Case["check"]> = async ({ seeded, result, side }) => {
+    const payload = result.body?.json as { code?: unknown; expiresAt?: unknown } | undefined;
+    if (result.status !== 200 || !payload || typeof payload.code !== "string") return;
+    const rows = await system.messagingLinkCode.findMany({
+      where: { userId: seeded.userId },
+      select: { code: true, expiresAt: true },
+    });
+    assert.equal(rows.length, 1, "messaging.link.start: expected one stored code");
+    assert.notEqual(
+      rows[0]!.code,
+      SEEDED_LINK_CODE,
+      "messaging.link.start: kept the seeded code instead of issuing a fresh one",
+    );
+    assert.equal(
+      payload.code.replace("-", ""),
+      rows[0]!.code,
+      "messaging.link.start: returned code != stored code",
+    );
+    assert.equal(
+      payload.expiresAt,
+      rows[0]!.expiresAt.toISOString(),
+      "messaging.link.start: returned expiry != stored expiry",
+    );
+    registerVerified(side, payload.code, "<link-code>");
+    registerVerified(side, rows[0]!.code, "<link-code>");
+  };
+  const link = (
+    name: string,
+    input: unknown,
+    extra: Partial<Case> = {},
+  ): Case => mk("link.start", "link")(name, input, { check: linkCodeCheck, ...extra });
   const setBot = mk("identities.setBot", "setbot");
   const unlink = mk("identities.unlink", "unlink");
   const channels = mk("channels.list", "chlist");
@@ -2159,11 +2428,30 @@ async function run(
   input: unknown,
   seeded: Seeded,
 ) {
+  if (testCase.concurrent) {
+    const results = await Promise.all(
+      Array.from({ length: testCase.concurrent }, () =>
+        call(testCase.procedure, input, called(seeded, testCase)),
+      ),
+    );
+    const combined = results
+      .map((result) => ({ status: result.status, json: result.body?.json }))
+      .sort((left, right) => (JSON.stringify(left) < JSON.stringify(right) ? -1 : 1));
+    return {
+      status: results[0]!.status,
+      headers: results[0]!.headers,
+      body: { json: combined },
+      calls: testCase.concurrent,
+    };
+  }
   if (!testCase.paginate) {
     const raw = await call(testCase.procedure, input, called(seeded, testCase));
     const result = testCase.unordered ? sortedById(raw) : raw;
     const settled = testCase.unorderedSections ? sortedSections(result) : result;
-    return testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled;
+    return {
+      ...(testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled),
+      calls: 1,
+    };
   }
   const pages: Awaited<ReturnType<typeof call>>[] = [];
   let cursor: string | undefined;
@@ -2181,6 +2469,7 @@ async function run(
     status: pages[0]!.status,
     headers: pages[0]!.headers,
     body: pages.map((page) => page.body),
+    calls: pages.length,
   };
 }
 
@@ -2245,6 +2534,12 @@ function seedThreads(config: ThreadSeed = {}) {
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
+    // Every threads.* case reloads bots.list, groups.list and spaces.list (AFTER), which order
+    // bots by createdAt and groups by updatedAt alone; the seeds below would otherwise share `old`
+    // or a wall-clock millisecond. One millisecond per seeded row, reset per side with the seed
+    // invocation, keeps those orders total.
+    let botOrder = 0;
+    let groupOrder = 0;
     const bot = (id: string, spaceId: string, name: string, extra: Record<string, unknown> = {}) =>
       system.bot.create({
         data: {
@@ -2253,6 +2548,7 @@ function seedThreads(config: ThreadSeed = {}) {
           userId: user,
           name,
           color: "blue",
+          createdAt: new Date(old.getTime() + botOrder++),
           updatedAt: old,
           ...extra,
         },
@@ -2285,17 +2581,21 @@ function seedThreads(config: ThreadSeed = {}) {
     await thread("th-tbfresh", seeded.spaces[0], { botId: `${user}-tbfresh` }, 10);
     await thread("th-tbarch", seeded.spaces[0], { botId: `${user}-tbarch` }, 10);
     await thread("th-tbx", seeded.spaces[1], { botId: `${user}-tbx` }, 10);
-    const group = (id: string, name: string, extra: Record<string, unknown> = {}) =>
-      system.chatGroup.create({
+    const group = (id: string, name: string, extra: Record<string, unknown> = {}) => {
+      const at = new Date(old.getTime() + groupOrder);
+      groupOrder += 1;
+      return system.chatGroup.create({
         data: {
           id: `${user}-${id}`,
           spaceId: seeded.spaces[0],
           userId: user,
           name,
-          updatedAt: old,
+          createdAt: at,
+          updatedAt: at,
           ...extra,
         },
       });
+    };
     await group("tg1", "Group one");
     await group("tg2", "Group two");
     await group("tgone", "Group of one");
@@ -2526,6 +2826,10 @@ function seedConversations() {
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
+    // messaging.channels lists conversations ordered by updatedAt alone; the three seeded
+    // conversations would otherwise share `old` and order arbitrarily. One millisecond per row,
+    // reset per side with the seed invocation, keeps that order total.
+    let conversationOrder = 0;
     await system.bot.create({
       data: {
         id: `${user}-tb1`,
@@ -2546,8 +2850,10 @@ function seedConversations() {
         updatedAt: old,
       },
     });
-    const conversation = (id: string, owner: string, spaceId: string, botId: string) =>
-      system.externalConversation.create({
+    const conversation = (id: string, owner: string, spaceId: string, botId: string) => {
+      const at = new Date(old.getTime() + conversationOrder);
+      conversationOrder += 1;
+      return system.externalConversation.create({
         data: {
           id: `${user}-${id}`,
           provider: "telegram",
@@ -2560,9 +2866,11 @@ function seedConversations() {
           teamChatAmbientEnabled: true,
           teamChatRules: "old rules",
           automatedSenderPolicies: { old: { name: "Old", mode: "ignore" } },
-          updatedAt: old,
+          createdAt: at,
+          updatedAt: at,
         },
       });
+    };
     await conversation("ec1", user, seeded.spaces[0], "tb1");
     await conversation("ec2", other, seeded.spaces[0], "tb1");
     await conversation("ec3", user, seeded.spaces[1], "tbx");
@@ -5993,6 +6301,9 @@ async function reset(seeded: ReturnType<typeof ids>) {
     await owner.query("TRUNCATE usage_records");
     await owner.query("COMMIT");
   }
+  await system.run.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.task.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.taughtSkill.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.botMcpServer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.mcpServerSpace.deleteMany({ where: { userId: own } });
   await system.computerUpdate.deleteMany({ where: { computerId: { startsWith: userId } } });
@@ -6014,6 +6325,7 @@ async function reset(seeded: ReturnType<typeof ids>) {
     where: { OR: [{ organizationId: orgId }, { actorId: userId }] },
   });
   await system.page.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.pluginSubmission.deleteMany({ where: { id: { startsWith: `${userId}-` } } });
   await system.chatGroup.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.trustedLinkSite.deleteMany({
     where: { userId: { in: [userId, `${userId}-other`] } },
@@ -6083,6 +6395,10 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
       createdAt: new Date(),
     },
   });
+  // spaces.list orders memberships by createdAt alone; the default Spaces' memberships would
+  // otherwise share a wall-clock millisecond and order arbitrarily. Fixed instants, one
+  // millisecond apart in the order the Spaces are seeded, keep that order total on both sides.
+  const membershipBase = Date.UTC(2026, 0, 1);
   for (const [index, spaceId] of caseIds.spaces.entries()) {
     await system.space.create({
       data: {
@@ -6099,7 +6415,7 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
         organizationId: caseIds.orgId,
         userId: caseIds.userId,
         role: "owner",
-        createdAt: new Date(),
+        createdAt: new Date(membershipBase + index),
       },
     });
   }
@@ -7598,7 +7914,21 @@ async function tsCall(procedure: string, input: unknown, seeded: Seeded) {
 }
 
 async function goCall(procedure: string, input: unknown, seeded: Seeded) {
-  const response = await fetch(`${GO_URL}/rpc/${procedure.replaceAll(".", "/")}`, {
+  return gatewayCall(GO_URL, procedure, input, seeded);
+}
+
+/** Fault-injection path: one request through the all-proxy gateway. */
+async function proxyCall(procedure: string, input: unknown, seeded: Seeded) {
+  return gatewayCall(PROXY_URL, procedure, input, seeded);
+}
+
+async function gatewayCall(
+  base: string,
+  procedure: string,
+  input: unknown,
+  seeded: Seeded,
+) {
+  const response = await fetch(`${base}/rpc/${procedure.replaceAll(".", "/")}`, {
     method: "POST",
     headers: callHeaders(seeded),
     body: input === undefined ? undefined : JSON.stringify({ json: input }),
@@ -7624,6 +7954,14 @@ function callHeaders(seeded: Seeded) {
 }
 
 const WRITE_PROCEDURES = new Set([
+  "routines.testRun",
+  "skills.testRun",
+  "mcp.assignments.approve",
+  "mcp.assignments.dismiss",
+  "mcp.assignments.replace",
+  "mcp.servers.agents",
+  "mcp.servers.remove",
+  "mcp.oauth.disconnect",
   "spendingLimit.set",
   "botSections.create",
   "botSections.update",
@@ -7665,15 +8003,24 @@ const WRITE_PROCEDURES = new Set([
   "boards.get",
   "boards.rename",
   "bots.rotateWebhookSecret",
+  "agentSecrets.put",
+  "agentSecrets.remove",
+  "botSecrets.put",
+  "botSecrets.remove",
+  "vault.put",
+  "vault.remove",
   "pages.remove",
+  "pages.setVisibility",
+  "notifications.registerPush",
+  "notifications.registerCallPush",
+  "notifications.unregisterPush",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
-// The credential store's record ids are 12 random bytes as hex; a webhook secret is 32 random
-// bytes as unpadded base64url. Both sides generate their own, so only the shape is compared.
+// The credential store's record ids are 12 random bytes as hex. Both sides generate their own, so
+// only the shape is compared. This is an id, not a digest: nothing derives it from content.
 const SECRET_ID = /^[0-9a-f]{24}$/;
-const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{43}$/;
-const LINK_CODE = /^(?:[A-HJKMNP-TV-Z2-9]{4}-[A-HJKMNP-TV-Z2-9]{4}|[A-HJKMNP-TV-Z2-9]{8})$/;
+const PAGE_SHARE_URL = /^(.*\/p\/[^/?#]*?)([A-Za-z0-9_-]{43})$/;
 const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const HARNESS_START = Date.now() - 3_600_000;
 
@@ -7682,16 +8029,22 @@ const HARNESS_START = Date.now() - 3_600_000;
  * since the harness started becomes "<now>", so shape and recency are still compared exactly. An artifact
  * list cursor carries the instant its sequence started (asOf), which each side takes from its own clock: that
  * one field is read like any other time, and the rest of the cursor is compared as is.
+ *
+ * Digest-shaped values (SHA-256, a 32-byte secret, a link code) are NOT masked by shape: a check must
+ * register the value on its side after recomputing it from its random source (contract-norm.mts).
+ * Everything else, deterministic digests included, is compared exactly.
  */
-function normalize<T>(value: T): T {
+function normalize<T>(value: T, side: "ts" | "go"): T {
   const visit = (node: unknown): unknown => {
     if (typeof node === "string") {
       const cursor = artifactCursor(node);
       if (cursor) return cursor;
+      const share = PAGE_SHARE_URL.exec(node);
+      if (share) return `${share[1]}<share-token>`;
+      const verified = maskedVerified(side, node);
+      if (verified) return verified;
       if (CUID.test(node)) return "<cuid>";
       if (SECRET_ID.test(node)) return "<secret-id>";
-      if (WEBHOOK_SECRET.test(node)) return "<webhook-secret>";
-      if (LINK_CODE.test(node)) return "<code>";
       // Times near now (link-code expiry is minutes ahead) vary per run; instants days away are the case's own data.
       if (
         ISO_TIME.test(node) &&
@@ -7802,7 +8155,33 @@ async function observed(
     // A board frame carries the instant it was made; each side takes its own clock.
     .map(normalizeSignal)
     .sort();
-  return { ...result, notifications };
+  return { ...result, notifications, secretStore: secretStoreSignals(realtimeSignals) };
+}
+
+/**
+ * The secret-store-change announcements in a window, as shapes: each side seals its own refs and
+ * carries its own process origin, so the kind and the order are what must match. A lane whose
+ * writes publish them opts in with `secretAnnouncements: true`.
+ *
+ * Duplicates are collapsed: a repeated announcement is the same cache invalidation a second time,
+ * and a cleanup that can run twice (a transaction retried once, a delete and its drop) publishes
+ * the same ref again. What must match is which refs were announced, not how many times.
+ */
+function secretStoreSignals(payloads: readonly string[]) {
+  const out: string[] = [];
+  for (const payload of payloads) {
+    try {
+      const signal = JSON.parse(payload) as { topic?: unknown; payload?: unknown };
+      if (signal.topic !== "secret-store-change" || typeof signal.payload !== "string") continue;
+      const event = JSON.parse(signal.payload) as { ref?: unknown };
+      const ref = typeof event.ref === "string" ? event.ref : "";
+      const kind = ref.startsWith("rkz1:") ? "<rkz1>" : ref.startsWith("v2:") ? "<v2>" : "<ref>";
+      out.push(JSON.stringify({ ref: kind }));
+    } catch {
+      // Ignore malformed notifications, as the client does.
+    }
+  }
+  return [...new Set(out)].sort();
 }
 
 /** Whether a person is one the case added beside its own (a member seeded for an organization case). */
@@ -8029,12 +8408,29 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     where: { spaceId: { in: seeded.spaces } },
     orderBy: [{ spaceId: "asc" }, { userId: "asc" }],
   });
-  // Which credentials exist, never what they hold.
-  const vaultCredentials = await system.vaultCredential.findMany({
-    where: { userId: settingsOwners },
-    select: { id: true, userId: true, spaceId: true },
-    orderBy: { id: "asc" },
-  });
+  // Which credentials exist, never what they hold. A row a case creates has a random id on each
+  // side, so these are ordered by the fields that are compared (a name is unique per vault).
+  const vaultCredentials = (
+    await system.vaultCredential.findMany({
+      where: { userId: settingsOwners },
+      select: { id: true, userId: true, spaceId: true, name: true },
+      orderBy: { id: "asc" },
+    })
+  )
+    .sort(
+      (
+        left: { userId: string; spaceId: string | null; name: string },
+        right: { userId: string; spaceId: string | null; name: string },
+      ) =>
+        `${left.userId}\u0000${left.spaceId ?? ""}\u0000${left.name}`.localeCompare(
+          `${right.userId}\u0000${right.spaceId ?? ""}\u0000${right.name}`,
+        ),
+    )
+    .map((row: { id: string; userId: string; spaceId: string | null }) => ({
+      id: row.id,
+      userId: row.userId,
+      spaceId: row.spaceId,
+    }));
   const connections = await system.connection.findMany({
     where: { spaceId: { in: seeded.spaces } },
     select: {
@@ -8322,6 +8718,56 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     },
     orderBy: { id: "asc" },
   });
+  const run1Rows =
+    procedure === "routines.testRun" || procedure === "skills.testRun"
+      ? {
+          run1Tasks: await system.task.findMany({
+            where: { spaceId: { in: seeded.spaces } },
+            select: {
+              id: true,
+              spaceId: true,
+              botId: true,
+              threadId: true,
+              userId: true,
+              prompt: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+            orderBy: { id: "asc" },
+          }),
+          run1Runs: await system.run.findMany({
+            where: { spaceId: { in: seeded.spaces } },
+            select: {
+              id: true,
+              spaceId: true,
+              botId: true,
+              threadId: true,
+              taskId: true,
+              userId: true,
+              status: true,
+              trigger: true,
+              modelProvider: true,
+              modelId: true,
+              thinkingLevel: true,
+              modelPinned: true,
+              clientNonce: true,
+              routineId: true,
+              wakeAt: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+            orderBy: { id: "asc" },
+          }),
+        }
+      : {};
+  const run1Assignments =
+    procedure === "mcp.assignments.approve"
+      ? await system.botMcpServer.findMany({
+          where: { spaceId: { in: seeded.spaces } },
+          orderBy: { id: "asc" },
+        })
+      : [];
   const botEmailAddresses = await system.botEmailAddress.findMany({
     where: { name: { startsWith: `ct${RUN_TAG}-` } },
     select: { name: true, botId: true, createdAt: true },
@@ -8385,6 +8831,8 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     spaceMemoryConfigs,
     routines,
     routineNotices,
+    ...run1Rows,
+    run1Assignments,
     messagingIdentities,
     messagingLinkCodes,
     messagingMemberships,
@@ -8418,6 +8866,9 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     invitations,
     ...(await laneHState(system, seeded)),
     ...(await laneJState(system, seeded, procedure)),
+    ...(await laneKState(system, seeded, procedure)),
+    ...(await laneLPushState(system, seeded)),
+    ...(await laneMState(system, seeded)),
     // computer.updates is a read; the API's in-process reconciler can drain the seeded
     // ComputerUpdate rows between the two sides' captures, so those volatile rows are not
     // compared for it (the response body and the other tables still are).
@@ -8431,9 +8882,14 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
 await system.spaceInvite.deleteMany({});
 
 let failures = 0;
-let caseIndex = 0;
-for (const testCase of cases) {
-  const position = caseIndex++;
+// Retries already used by the case at `position`. Kept across the retry's re-entry into the same
+// position; reset after a match or a final failure.
+let retryAttempts = 0;
+// The pass-level retry total, printed with the summary so a standalone run reports it too.
+let retryTotal = 0;
+const retriedCases = new Set<string>();
+for (let position = 0; position < cases.length; position += 1) {
+  const testCase = cases[position]!;
   // CASE_FROM=<n> resumes a run at a case index after a timeout; cases keep their order.
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FROM && position < Number(process.env.CASE_FROM)) continue;
@@ -8441,24 +8897,47 @@ for (const testCase of cases) {
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;
   if (Boolean(testCase.email) !== EMAIL_ON) continue;
+  const mode = routeMode(testCase.procedure);
+  if (mode !== "go" && mode !== "shadow") {
+    failures += 1;
+    console.error(
+      `FAIL ${testCase.name}: ${testCase.procedure} is routed ${mode}, not go/shadow`,
+    );
+    continue;
+  }
   const caseIds = ids(testCase.name);
+  // Random values are registered per side by the case checks; nothing from the previous case may
+  // mask a value here (a seeded literal could otherwise collide with an earlier random one).
+  clearVerified();
   COMPUTER_UPDATE_BASE = Date.now() - 30_000;
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
   const settle =
-    WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.")
+    testCase.settleMs ??
+    (WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.")
       ? 400
-      : 40;
+      : 40);
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
+  if (testCase.admin)
+    await system.user.update({
+      where: { id: seeded.userId },
+      data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
+    });
   const tsResult = await observed(
     settle,
     () => run(testCase, tsCall, input, seeded),
     seeded,
     testCase.procedure,
   );
-  const tsState = normalize(await databaseState(caseIds, testCase.procedure));
+  let tsCheckError: unknown;
+  try {
+    await testCase.check?.({ seeded, result: tsResult, side: "ts", gatewayLog });
+  } catch (error) {
+    tsCheckError = error;
+  }
+  const tsState = normalize(await databaseState(caseIds, testCase.procedure), "ts");
 
   // A TypeScript background job (a restored routine's first run, say) publishes its Space changes
   // after the request returned; the Go side enqueues the same job but nothing executes it in the
@@ -8468,40 +8947,124 @@ for (const testCase of cases) {
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
+  if (testCase.admin)
+    await system.user.update({
+      where: { id: seeded.userId },
+      data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
+    });
   const hitsBefore = upstreamHits;
+  await drainGatewayLog();
+  gatewayLog = "";
+  let goCallForCase = goCall;
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+  if (process.env.CONTRACT_PROXY_ONE_CONCURRENT === "1" && testCase.concurrent) {
+    let dispatched = 0;
+    goCallForCase = (procedure, caseInput, caseSeeded) => {
+      dispatched += 1;
+      return dispatched === 1
+        ? proxyCall(procedure, caseInput, caseSeeded)
+        : goCall(procedure, caseInput, caseSeeded);
+    };
+  }
   const goResult = await observed(
     settle,
-    () => run(testCase, goCall, input, seeded),
+    () => run(testCase, goCallForCase, input, seeded),
     seeded,
     testCase.procedure,
   );
-  const goState = normalize(await databaseState(caseIds, testCase.procedure));
+  await drainGatewayLog();
+  let goCheckError: unknown;
+  try {
+    await testCase.check?.({ seeded, result: goResult, side: "go", gatewayLog });
+  } catch (error) {
+    goCheckError = error;
+  }
+  const goState = normalize(await databaseState(caseIds, testCase.procedure), "go");
 
   try {
+    if (tsCheckError) throw tsCheckError;
+    if (goCheckError) throw goCheckError;
     if (testCase.declines !== undefined)
       assert.equal(
         upstreamHits - hitsBefore,
         testCase.declines ? 1 : 0,
         `${testCase.name}: ${testCase.declines ? "Go should decline" : "Go should answer"}`,
       );
+    // Every request in the Go window must be a local answer, not a proxy fallback. The gateway
+    // completion line has no request id, so this is exact rather than per-id: the window is
+    // drained before it is cleared and again after the request, and the count is ===.
+    // Shadow comparisons call the same local server and log the same marker; they run after the
+    // TypeScript response, inside the observed settle window. `after` reloads are TypeScript-only
+    // and never appear in the gateway log, so they cannot inflate this count.
+    if (mode === "go" || mode === "shadow") {
+      if (testCase.declines !== true) {
+        const expectedCalls = goResult.calls ?? 1;
+        const served = servedByGoCount(gatewayLog, testCase.procedure);
+        assert.equal(
+          served,
+          expectedCalls,
+          `${testCase.name}: ${served} served_by:go entries for ${expectedCalls} expected calls`,
+        );
+      }
+    }
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
-    assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
+    const tsBody = normalize(tsResult.body, "ts");
+    const goBody = normalize(goResult.body, "go");
+    assert.deepEqual(
+      goBody,
+      tsBody,
+      `${testCase.name}: body${digestMismatchHint(tsBody, goBody, "body")}`,
+    );
     if (!testCase.ignoreSignals)
       assert.deepEqual(
         goResult.notifications,
         tsResult.notifications,
         `${testCase.name}: realtime signals`,
       );
-    assert.deepEqual(goState, tsState, `${testCase.name}: database state`);
+    if (testCase.secretAnnouncements)
+      assert.deepEqual(
+        goResult.secretStore,
+        tsResult.secretStore,
+        `${testCase.name}: secret-store announcements ${JSON.stringify({ go: goResult.secretStore, ts: tsResult.secretStore })}`,
+      );
+    assert.deepEqual(
+      goState,
+      tsState,
+      `${testCase.name}: database state${digestMismatchHint(tsState, goState, "database state")}`,
+    );
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {
+    // Only the failure signature the case declares is retried: the comparison itself must have
+    // failed (a check or transport error never is), and the per-case predicate must accept this
+    // exact pair of answers. Anything else fails on the first attempt, so the retry cannot hide a
+    // deterministic difference that merely happens to match once on the flaky side.
+    const retryable =
+      error instanceof AssertionError &&
+      retryAttempts < (testCase.retries ?? 0) &&
+      testCase.retryWhen?.(error, tsResult, goResult) === true;
+    if (retryable) {
+      // The loop's `position += 1` cancels this decrement, so the same case runs again from the
+      // top, where seed() resets the fixture and re-seeds both sides.
+      retryAttempts += 1;
+      retryTotal += 1;
+      retriedCases.add(testCase.name);
+      console.error(
+        `RETRY ${testCase.name} (attempt ${retryAttempts}/${(testCase.retries ?? 0) + 1} failed): ${testCase.retryReason}`,
+      );
+      console.error(error);
+      console.error("typescript:", JSON.stringify(tsResult));
+      console.error("go:        ", JSON.stringify(goResult));
+      position -= 1;
+      continue;
+    }
     failures += 1;
     console.error(`FAIL ${testCase.name}`);
     console.error(error);
     console.error("typescript:", JSON.stringify(tsResult));
     console.error("go:        ", JSON.stringify(goResult));
   }
+  retryAttempts = 0;
   await reset(caseIds);
 }
 
@@ -8509,6 +9072,7 @@ await realtime.end();
 await owner?.end();
 
 go?.kill("SIGTERM");
+proxyGo?.kill("SIGTERM");
 upstreamServer.close();
 await handles.stop();
 await rm(dataDir, { recursive: true, force: true });
@@ -8517,3 +9081,6 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(`contract: ${cases.length} cases match`);
+console.log(
+  `retries: ${retryTotal}${retryTotal > 0 ? ` (${[...retriedCases].join(", ")})` : ""}`,
+);

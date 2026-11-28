@@ -221,6 +221,14 @@ function keptObjects(versions: readonly VersionRow[]) {
   return versions.map((version) => `homes/${version.storageId}/${version.revision}`).sort();
 }
 
+/** Every stored key except the lists a kept revision keeps of the revisions it reads from. */
+function storedKeys(storage: MemoryObjectStorage, versions: readonly VersionRow[]) {
+  const lists = new Set(
+    versions.map((version) => `homes/${version.storageId}/${version.revision}/references`),
+  );
+  return [...storage.objects.keys()].filter((key) => !lists.has(key)).sort();
+}
+
 /** A sandbox export staged for `commit`. */
 async function staged(files: Record<string, string>) {
   const dir = await mkdtemp(path.join(tmpdir(), "rakazo-object-staging-"));
@@ -360,7 +368,7 @@ describe("ObjectAgentHomeStore", () => {
     // A save of a missing cache must not replace the stored home with an empty one.
     await rm(path.join(root, "homes"), { recursive: true });
     await expect(store.revise("bot-1")).rejects.toThrow(/older than its stored revision/);
-    expect([...storage.objects.keys()].sort()).toEqual(keptObjects(versions));
+    expect(storedKeys(storage, versions)).toEqual(keptObjects(versions));
 
     // A reconnecting computer's live cache is kept only while it is there.
     await store.hydrate("bot-1", { keepLiveCache: true });
@@ -416,7 +424,7 @@ describe("ObjectAgentHomeStore", () => {
 
     await expect(racing.revise("bot-1")).rejects.toThrow(HomeSaveConflictError);
     expect(await (await otherHost()).readFile("bot-1", "a.txt", context)).toBe("newer");
-    expect([...storage.objects.keys()].sort()).toEqual(keptObjects(versions));
+    expect(storedKeys(storage, versions)).toEqual(keptObjects(versions));
   });
 
   it.each([false, true])(
@@ -437,7 +445,7 @@ describe("ObjectAgentHomeStore", () => {
         return advance(...args);
       };
       await expect(store.revise("bot-1")).rejects.toThrow(HomeSaveConflictError);
-      expect([...storage.objects.keys()].sort()).toEqual(keptObjects(versions));
+      expect(storedKeys(storage, versions)).toEqual(keptObjects(versions));
       const restarted = new ObjectAgentHomeStore(root, storage, records);
       await expect(restarted.revise("bot-1")).rejects.toThrow(/older than its stored revision/);
       await restarted.hydrate("bot-1");
@@ -713,11 +721,85 @@ describe("ObjectAgentHomeStore", () => {
     const first = await store.commit("bot-1", await staged({ "a.txt": "first" }), context);
     const second = await store.commit("bot-1", await staged({ "a.txt": "second" }), context);
     expect(rows[0]!.homeStorageRevision).toBe(second);
-    expect([...storage.objects.keys()].sort()).toEqual(keptObjects(versions));
+    expect(storedKeys(storage, versions)).toEqual(keptObjects(versions));
     expect(versions.map((version) => version.revision).sort()).toEqual([first, second].sort());
     expect((await store.earlierVersions("bot-1")).map((version) => version.revision)).toEqual([
       first,
     ]);
+  });
+
+  it("uploads only what changed and restores every file on another host", async () => {
+    const { store, storage, rows, otherHost } = await setup();
+    const large = "x".repeat(100_000);
+    const first = await store.commit(
+      "bot-1",
+      await staged({ "large.txt": large, "note.txt": "first" }),
+      context,
+    );
+    const second = await store.commit(
+      "bot-1",
+      await staged({ "large.txt": large, "note.txt": "second", "new.txt": "new" }),
+      context,
+    );
+
+    const prefix = `homes/${rows[0]!.homeStorageId}`;
+    // The second revision points at the first for the file it did not change.
+    expect(
+      Buffer.from(storage.objects.get(`${prefix}/${second}/references`)!.bytes).toString(),
+    ).toBe(`${first}\n`);
+    expect(storage.objects.get(`${prefix}/${second}`)!.bytes.length).toBeLessThan(large.length / 2);
+    expect(await exported(await otherHost(), "bot-1")).toEqual({
+      "large.txt": large,
+      "note.txt": "second",
+      "new.txt": "new",
+    });
+  });
+
+  it("keeps a revision a kept one reads from when pruning drops it, and when the sweep finds it old", async () => {
+    const { store, storage, rows, versions, records, otherHost } = await setup();
+    const large = "x".repeat(100_000);
+    const first = await store.commit(
+      "bot-1",
+      await staged({ "large.txt": large, "n.txt": "1" }),
+      context,
+    );
+    const second = await store.commit(
+      "bot-1",
+      await staged({ "large.txt": large, "n.txt": "2" }),
+      context,
+    );
+    // The pruning that follows the third save drops the first revision's version row.
+    vi.spyOn(records, "prune").mockImplementation(async () => {
+      versions.splice(
+        versions.findIndex((version) => version.revision === first),
+        1,
+      );
+      return [first];
+    });
+    const third = await store.commit(
+      "bot-1",
+      await staged({ "large.txt": large, "n.txt": "3" }),
+      context,
+    );
+    const prefix = `homes/${rows[0]!.homeStorageId}`;
+    expect(storage.objects.has(`${prefix}/${first}`)).toBe(true);
+
+    // Only the third is kept now, and every object is a day old: what it reads from stays.
+    versions.splice(
+      0,
+      versions.length,
+      ...versions.filter((version) => version.revision === third),
+    );
+    for (const object of storage.objects.values()) object.lastModified = new Date(0);
+    await store.sweep();
+    expect([...storage.objects.keys()].sort()).toEqual(
+      [`${prefix}/${first}`, `${prefix}/${third}`, `${prefix}/${third}/references`].sort(),
+    );
+    expect(storage.objects.has(`${prefix}/${second}`)).toBe(false);
+    expect(await exported(await otherHost(), "bot-1")).toEqual({
+      "large.txt": large,
+      "n.txt": "3",
+    });
   });
 
   it("still saves when forgetting old versions fails", async () => {
@@ -1414,6 +1496,5 @@ async function entries(dir: string) {
 }
 
 async function stagedFile(root: string, name: string) {
-  const [dir] = await readdir(path.join(root, "staging"));
-  return stat(path.join(root, "staging", dir!, name));
+  return stat(path.join(root, "staging", (await readdir(path.join(root, "staging")))[0]!, name));
 }

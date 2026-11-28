@@ -24,7 +24,7 @@ import {
 } from "../storage/workspace-save-policy.js";
 import { isSandboxDamagedError } from "./sandbox/sandbox-errors.js";
 import { sandboxKindCapabilities } from "./sandbox/sandbox-kind-capabilities.js";
-import { normalizeWorkspacePath, teamBotWorkspaceDirectory } from "./screens/computer-support.js";
+import { normalizeWorkspacePath } from "./screens/computer-support.js";
 
 export {
   shouldSkipPortableWorkspaceFile,
@@ -105,19 +105,13 @@ export async function restoreComputerWorkspace(
 }
 
 export async function ensureComputerWorkspaceLayout(
-  sandbox: SandboxProvider,
-  computer: ComputerRef,
-  scope: ComputerMode,
-  botId: string | undefined,
-  context: AdapterContext,
+  _sandbox: SandboxProvider,
+  _computer: ComputerRef,
+  _scope: ComputerMode,
+  _botId: string | undefined,
+  _context: AdapterContext,
 ): Promise<void> {
-  if (scope !== "team" || !botId) return;
-  await manageComputerWorkspaceDirectories(
-    sandbox,
-    computer,
-    { action: "ensure", paths: ["shared", teamBotWorkspaceDirectory(botId)] },
-    context,
-  );
+  // Team Computers share one workspace root directly without per-bot subdirectories.
 }
 
 const TEAM_BOT_FOLDER_NAME = /^[A-Za-z0-9_-]+$/;
@@ -442,16 +436,23 @@ async function freeDisk(directory: string) {
   return Number(disk.bavail) * Number(disk.bsize) - SAVE_DISK_RESERVE_BYTES;
 }
 
-/** Remote exports quiesce browsers, so a run must not checkpoint while peers are driving them. */
+/**
+ * Remote exports quiesce browsers, so a run must not checkpoint while peers are driving them.
+ * A computer that mounts the server's own home keeps its files whatever this save does, so an
+ * object-backed home is not packed and uploaded under the run's computer lease, which the same
+ * bot's later runs queue on. The idle sleep checkpoints it instead.
+ */
 export async function checkpointRunComputerWorkspace(
   deps: { home: AgentHomeStore; sandbox: SandboxProvider; prisma: PrismaClient },
   computerRecord: { id: string; homeKey: string; scope: string; spaceId: string },
   computer: ComputerRef,
   context: AdapterContext,
 ): Promise<string | undefined> {
+  const { serverHomeMount } = sandboxKindCapabilities(computer.kind);
+  if (serverHomeMount === "always" && deps.home.describe().id !== "local-fs") return undefined;
   if (
     computerRecord.scope !== "team" ||
-    sandboxKindCapabilities(computer.kind).serverHomeMount === "always" ||
+    serverHomeMount === "always" ||
     (await homeIsMounted(deps.home, deps.sandbox, computer, context))
   ) {
     return checkpointAndRecordComputerWorkspace(deps, computerRecord, computer, context);

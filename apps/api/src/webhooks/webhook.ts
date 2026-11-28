@@ -1,9 +1,11 @@
 import { SecretStoreUnavailableError } from "@rakazo/adapter-kit";
 import { hasValidBearerToken } from "@rakazo/core/node/secrets-guard";
+import { bestEffort } from "@rakazo/logging";
 import type { Hono } from "hono";
 import { readBoundedBody } from "../http/http-body.js";
 import { formatWebhookPrompt } from "../messaging/inbound-delivery.prompt.js";
 import { mountGithubWebhookRoute } from "./github-webhook.js";
+import { recordWakeReceipts, wakeSender } from "./wake-receipt.js";
 import type { WebhookDeps, WebhookSecretCache } from "./webhook-inbound.js";
 import {
   deliverWebhookEvent,
@@ -93,6 +95,7 @@ export function mountWebhookHttpRoutes(app: Hono, deps: WebhookDeps) {
       (typeof payload.id === "string" || typeof payload.event_id === "string" ? raw : "") ||
       undefined;
 
+    const sender = wakeSender(payload);
     return webhookDeliveryResponse(
       c,
       deliverWebhookEvent(deps, target, {
@@ -100,6 +103,14 @@ export function mountWebhookHttpRoutes(app: Hono, deps: WebhookDeps) {
         routines: webhookRoutines,
         source: "webhook",
         idempotencyKey,
+      }).then(async (delivery) => {
+        if (sender) {
+          await bestEffort(
+            "wake receipts",
+            recordWakeReceipts(deps, target, sender, delivery.messageId),
+          );
+        }
+        return delivery;
       }),
     );
   });

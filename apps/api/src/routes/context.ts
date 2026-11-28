@@ -57,6 +57,7 @@ import { createModelConnector, prepareAllowedThinkingLevels } from "../models/mo
 import type { RouterDeps } from "../router.js";
 import { createRoutineAnnouncer } from "../routines/routines.js";
 import { spaceChangesFor } from "../spaces/space-change-procedures.js";
+import { retryTransientRpc } from "./rpc-retry.js";
 import { meDto } from "./shared.js";
 
 /**
@@ -453,7 +454,12 @@ export function createRouterContext(deps: RouterDeps) {
   });
 
   const authed = os.use(signedIn).use(async ({ context, next, path }, input) => {
-    const result = await next();
+    // A retried read answers with its final result, so the side effects below publish once.
+    const result = await retryTransientRpc({
+      path,
+      signal: context.signal,
+      run: async () => next(),
+    });
     const event = procedureSecurityEvent(path, input, context.actor);
     if (event) await recordSecurityEvent(event);
     const rosterChange = rosterChangeFor(path, context.actor, input, result.output);

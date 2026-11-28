@@ -29,6 +29,7 @@ const routine = (botId: string, id: string) => ({
   thinkingLevel: null,
   watch: null,
   watchState: null,
+  prepare: null,
   lastRunAt: null,
   nextRunAt: null,
   createdAt: new Date("2026-01-01T00:00:00Z"),

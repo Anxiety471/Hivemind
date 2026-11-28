@@ -6,11 +6,21 @@ import {
   listScratchpadItems,
   mapScratchpadItem,
   memoryProviderDescriptors,
+  operatorInstruction,
   readAgentMemory,
+  renderBaseSystemPromptPreview,
 } from "@rakazo/adapters";
-import { isDeletableMemoryDocument } from "@rakazo/contracts";
+import type { MemoryRoamerSettings } from "@rakazo/contracts";
+import {
+  hasLab,
+  isDeletableMemoryDocument,
+  MEMORY_ROAMER_DEFAULT_INTERVAL,
+  MemoryRoamerFailuresSchema,
+  MemoryRoamerReportSchema,
+  resolveLabs,
+} from "@rakazo/contracts";
 import { ClientError } from "@rakazo/core";
-import { findSpaceMemoryConfig, IsolationError } from "@rakazo/db";
+import { findSpaceMemoryConfig, IsolationError, readJsonColumn } from "@rakazo/db";
 import {
   disconnectMemoryProvider,
   persistMemoryProviderConfig,
@@ -19,6 +29,70 @@ import {
   updateMemoryProviderDefaultScope,
 } from "../integrations/memory-provider-config.js";
 import type { RouterContext } from "./context.js";
+
+function memoryRoamerDto(
+  row: {
+    userId: string;
+    enabled: boolean;
+    intervalMinutes: number;
+    lastRunAt: Date | null;
+    lastError: string | null;
+    lastChanges: number;
+    lastModel: string | null;
+    lastFailures: unknown;
+    lastReport: unknown;
+    retryAt: Date | null;
+    retryAttempt: number;
+  } | null,
+): MemoryRoamerSettings {
+  return {
+    enabled: row?.enabled ?? false,
+    intervalMinutes: row?.intervalMinutes ?? MEMORY_ROAMER_DEFAULT_INTERVAL,
+    lastRunAt: row?.lastRunAt?.toISOString() ?? null,
+    lastError: row?.lastError ?? null,
+    lastChanges: row?.lastChanges ?? 0,
+    lastModel: row?.lastModel ?? null,
+    lastFailures: row?.lastFailures
+      ? readJsonColumn(
+          MemoryRoamerFailuresSchema,
+          row.lastFailures,
+          { table: "memory_roamer_settings", column: "lastFailures", id: row.userId },
+          { fallback: [] },
+        )
+      : [],
+    lastReport: row?.lastReport
+      ? readJsonColumn(
+          MemoryRoamerReportSchema,
+          row.lastReport,
+          { table: "memory_roamer_settings", column: "lastReport", id: row.userId },
+          { fallback: [] },
+        )
+      : [],
+    retryAt: row?.retryAt?.toISOString() ?? null,
+    retryAttempt: row?.retryAttempt ?? 0,
+  };
+}
+
+async function spaceSystemPromptView(deps: RouterContext["deps"], userId: string, append: string) {
+  const [user, hostAppend] = await Promise.all([
+    deps.prisma.user.findUnique({
+      where: { id: userId },
+      select: { labs: true },
+    }),
+    operatorInstruction(),
+  ]);
+  const resolved = resolveLabs(user?.labs, deps.env?.deploymentLabs ?? []);
+  const codeModeEnabled = hasLab(resolved, "code");
+  return {
+    basePromptPreview: renderBaseSystemPromptPreview({
+      ticketBoardEnabled: hasLab(resolved, "board"),
+      codeModeEnabled,
+      codeFirst: codeModeEnabled && hasLab(resolved, "codeFirst"),
+    }),
+    append,
+    hasHostAppend: Boolean(hostAppend),
+  };
+}
 
 export function memoryRoutes(ctx: RouterContext) {
   const { deps, repos, taughtSkills, agentSkills, authed } = ctx;
@@ -152,6 +226,44 @@ export function memoryRoutes(ctx: RouterContext) {
       disconnectProvider: authed.memory.disconnectProvider.handler(async ({ context }) =>
         disconnectMemoryProvider(deps, context.actor),
       ),
+      roamer: authed.memory.roamer.handler(async ({ context }) => {
+        const row = await deps.prisma.memoryRoamerSettings.findUnique({
+          where: { userId: context.actor.userId },
+        });
+        return memoryRoamerDto(row);
+      }),
+      setRoamer: authed.memory.setRoamer.handler(async ({ context, input }) => {
+        const intervalMinutes = input.intervalMinutes ?? MEMORY_ROAMER_DEFAULT_INTERVAL;
+        const row = await deps.prisma.memoryRoamerSettings.upsert({
+          where: { userId: context.actor.userId },
+          create: {
+            userId: context.actor.userId,
+            enabled: input.enabled,
+            intervalMinutes,
+          },
+          update: {
+            enabled: input.enabled,
+            intervalMinutes,
+          },
+        });
+        return memoryRoamerDto(row);
+      }),
+      systemPrompt: authed.memory.systemPrompt.handler(async ({ context }) => {
+        const space = await deps.prisma.space.findUnique({
+          where: { id: context.actor.spaceId },
+          select: { systemPromptAppend: true },
+        });
+        return spaceSystemPromptView(deps, context.actor.userId, space?.systemPromptAppend ?? "");
+      }),
+      setSystemPrompt: authed.memory.setSystemPrompt.handler(async ({ context, input }) => {
+        const trimmed = input.append.trim();
+        const updated = await deps.prisma.space.update({
+          where: { id: context.actor.spaceId },
+          data: { systemPromptAppend: trimmed || null },
+          select: { systemPromptAppend: true },
+        });
+        return spaceSystemPromptView(deps, context.actor.userId, updated.systemPromptAppend ?? "");
+      }),
     },
     scratchpad: {
       list: authed.scratchpad.list.handler(async ({ context, input }) => {

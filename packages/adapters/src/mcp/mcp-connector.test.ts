@@ -3985,3 +3985,87 @@ it("marks a Composio MCP server's multi-execute tool as a batch under its prefix
     await connector.close();
   }
 });
+
+describe("MCP connector caller identity", () => {
+  const discover = async (
+    server: Record<string, unknown>,
+    contexts: Array<{ botId: string; runId?: string }>,
+    configuredHeaders: Record<string, string> = {},
+  ) => {
+    const state = {
+      failNext: false,
+      initializations: 0,
+      headers: [] as Record<string, string>[],
+    };
+    vi.stubGlobal("fetch", mcpFetch(state));
+    const assignments = contexts.map(({ botId }) => ({
+      ...ASSIGNMENT,
+      botId,
+      server: { ...SERVER, ...server },
+    }));
+    const connector = new McpConnector(
+      {
+        mcpServer: { ...NO_SHARED_SERVERS, findFirst: async () => ({ secretId: "secret-1" }) },
+        botMcpServer: {
+          findMany: async (args: { where: { botId: string } }) =>
+            assignments.filter((a) => a.botId === args.where.botId),
+        },
+        run: {
+          findUnique: async ({ where }: { where: { id: string } }) => ({
+            threadId: `thread-of-${where.id}`,
+          }),
+        },
+        secret: { findFirst: async () => ({ id: "secret-1", ciphertext: "secret-ref" }) },
+      } as never,
+      { load: async () => JSON.stringify({ headers: configuredHeaders }) } as never,
+      { network: TEST_NETWORK },
+    );
+    try {
+      for (const context of contexts) {
+        await connector.discoverTools({
+          operationId: "test",
+          traceId: "test",
+          spaceId: "w1",
+          userId: "u1",
+          signal: new AbortController().signal,
+          ...context,
+        });
+      }
+    } finally {
+      await connector.close();
+    }
+    return state;
+  };
+
+  it("sends bot, run and thread ids to an opted-in server, one session per bot and run", async () => {
+    const state = await discover({ sendCallerIdentity: true }, [
+      { botId: "bot-1", runId: "run-1" },
+      { botId: "bot-2", runId: "run-2" },
+    ]);
+    expect(state.initializations).toBe(2);
+    const ids = state.headers.map((h) => [
+      h["x-rakazo-bot-id"],
+      h["x-rakazo-run-id"],
+      h["x-rakazo-thread-id"],
+    ]);
+    expect(ids).toContainEqual(["bot-1", "run-1", "thread-of-run-1"]);
+    expect(ids).toContainEqual(["bot-2", "run-2", "thread-of-run-2"]);
+  });
+
+  it("sends only the ids that exist and never overrides a configured header", async () => {
+    const state = await discover(
+      { sendCallerIdentity: true, secretId: "secret-1" },
+      [{ botId: "bot-1" }],
+      { "x-rakazo-bot-id": "configured" },
+    );
+    expect(state.headers.at(-1)?.["x-rakazo-bot-id"]).toBe("configured");
+    expect(state.headers.at(-1)).not.toHaveProperty("x-rakazo-run-id");
+    expect(state.headers.at(-1)).not.toHaveProperty("x-rakazo-thread-id");
+  });
+
+  it("sends nothing unless the server opted in, yet still separates bots", async () => {
+    const state = await discover({}, [{ botId: "bot-1" }, { botId: "bot-2" }]);
+    expect(state.initializations).toBe(2);
+    for (const headers of state.headers) expect(headers).not.toHaveProperty("x-rakazo-bot-id");
+  });
+});

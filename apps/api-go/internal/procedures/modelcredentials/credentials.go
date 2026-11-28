@@ -718,8 +718,9 @@ func thinkingLevelsFor(parsed *secret, row credentialRow, modelID string) []stri
 		}
 		return []string{"off", "minimal", "low", "medium", "high"}
 	}
-	// The synthetic map names off, xhigh and max; the extended filter includes the rest.
-	return []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+	// The synthetic map names off, xhigh and max; the extended filter includes the rest, which is
+	// the whole enum — read the guarded copy rather than spell it again.
+	return append([]string(nil), thinkingLevels...)
 }
 
 // compatibleEndpointPreset is one CompatibleEndpointPreset the TypeScript source offers by name.

@@ -1,11 +1,14 @@
+import type { SkillRecord } from "@rakazo/core";
 import { buildSkillMd, formatSkillsCatalogInstruction, parseSkillMd } from "@rakazo/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinAgentTools } from "./builtin.tool-definition.js";
 import { BUILTIN_AGENT_SKILLS } from "./builtin-skills.prompt.js";
 import {
+  filterRunAgentSkills,
   listAgentSkillRecords,
   skillCreateFromTool,
   skillDeleteFromTool,
+  skillModeFromTool,
   skillReadFromTool,
   skillUpdateFromTool,
 } from "./skill-tools.js";
@@ -100,6 +103,7 @@ describe("skill tools", () => {
     expect(skillTools.map((tool) => tool.name).sort()).toEqual([
       "skill_create",
       "skill_delete",
+      "skill_mode",
       "skill_read",
       "skill_update",
     ]);
@@ -386,5 +390,140 @@ describe("skill tools", () => {
         newName: longName,
       }),
     ).toEqual({ error: "Skill name must be at most 80 characters." });
+  });
+
+  it("supports skill_mode search with auto-load, exact name + file, batch names, list, and taught skills", async () => {
+    const basePrisma = makePrisma([
+      {
+        id: "user-deploy",
+        spaceId: owner.spaceId,
+        userId: owner.userId,
+        name: "Deploy Frontend",
+        description: "Build and ship web frontend changes to production",
+        content: buildSkillMd({
+          name: "Deploy Frontend",
+          description: "Build and ship web frontend changes to production",
+          body: "## Build & Restart\n1. Run pnpm build.\n2. Verify served hash.",
+          frontmatter: { tags: ["deploy", "frontend", "vite"] },
+        }),
+        source: "user",
+        files: { "references/checklist.md": "Verify CSP headers." },
+      },
+      {
+        id: "plugin-billing",
+        spaceId: owner.spaceId,
+        userId: owner.userId,
+        name: "Billing Ops",
+        description: "Look up invoice rates and tax schedules",
+        content: buildSkillMd({
+          name: "Billing Ops",
+          description: "Look up invoice rates and tax schedules",
+          body: "See references/rates.md for tier prices.",
+        }),
+        source: "plugin",
+        files: { "references/rates.md": "Tier 1: $10" },
+      },
+    ]);
+    const taughtRows = [
+      {
+        id: "taught-1",
+        spaceId: owner.spaceId,
+        botId: "bot-1",
+        userId: owner.userId,
+        name: "File expenses",
+        goal: "Submit monthly expense receipts in accounting portal",
+        status: "saved",
+        playbook: {
+          whenToUse: "When user uploads a receipt or asks to file expenses",
+          inputs: ["receipt pdf"],
+          steps: ["Open expense portal", "Upload receipt", "Submit form"],
+          howToCheck: "Confirm receipt number appears",
+          whatToReturn: "Confirmation ID",
+          approvalBoundaries: "Ask before submitting > $500",
+          failureHandling: "Retry upload once",
+        },
+      },
+    ];
+    const extendedPrisma = {
+      ...basePrisma,
+      taughtSkill: {
+        findMany: vi.fn(async () => taughtRows),
+      },
+    };
+    const scope = {
+      ...owner,
+      botId: "bot-1",
+      ownerStartedRun: true,
+      nonOwnerChatRun: false,
+      offeredToolNames: new Set(["skill_mode", "shell", "ticket_update", "search_history"]),
+    };
+
+    const searchResult = await skillModeFromTool(extendedPrisma as never, scope, {
+      query: "expense receipt accounting",
+    });
+    expect(searchResult).toMatchObject({
+      query: "expense receipt accounting",
+      loaded: ["File expenses"],
+      autoLoaded: { name: "File expenses", source: "taught" },
+    });
+    expect(String((searchResult.autoLoaded as { content: string }).content)).toContain(
+      "Upload receipt",
+    );
+
+    const fileResult = await skillModeFromTool(extendedPrisma as never, scope, {
+      name: "Billing Ops",
+      file: "./references/rates.md",
+    });
+    expect(fileResult).toEqual({
+      name: "Billing Ops",
+      source: "plugin",
+      file: "references/rates.md",
+      content: "Tier 1: $10",
+      loaded: ["Billing Ops"],
+    });
+
+    const batch = await skillModeFromTool(extendedPrisma as never, scope, {
+      names: ["Deploy Frontend", "File expenses", "MissingSkill"],
+    });
+    expect(batch).toMatchObject({
+      loaded: ["Deploy Frontend", "File expenses"],
+      notFound: ["MissingSkill"],
+    });
+
+    const missingWithSuggestions = await skillModeFromTool(extendedPrisma as never, scope, {
+      name: "frontend deploy",
+    });
+    expect(missingWithSuggestions).toMatchObject({
+      error: expect.stringContaining("not found"),
+      suggestions: expect.arrayContaining([expect.objectContaining({ name: "Deploy Frontend" })]),
+    });
+
+    const listedTaughtOnly = await skillModeFromTool(extendedPrisma as never, scope, {
+      list: true,
+      source: "taught",
+    });
+    expect(listedTaughtOnly).toEqual({
+      totalSkills: 1,
+      skills: [
+        {
+          name: "File expenses",
+          source: "taught",
+          description: "When user uploads a receipt or asks to file expenses",
+        },
+      ],
+    });
+  });
+});
+
+describe("built-in skill gating per run", () => {
+  const namesFor = (offered: string[]) =>
+    filterRunAgentSkills<SkillRecord>([], new Set(offered), true).map((skill) => skill.name);
+
+  it("offers Documents only where a shell or file tool is available", () => {
+    expect(namesFor(["drive_read", "attach_file"])).not.toContain("Documents");
+    expect(namesFor(["drive_read", "attach_file"])).not.toContain("Computer");
+    expect(namesFor(["shell", "attach_file"])).toContain("Documents");
+    expect(namesFor(["read_file"])).toContain("Documents");
+    expect(namesFor(["shell", "attach_file"])).toContain("Computer");
   });
 });

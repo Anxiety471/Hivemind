@@ -26,7 +26,7 @@ import (
 )
 
 // labFeatures is LAB_FEATURES (packages/contracts/src/labs.ts:4).
-var labFeatures = []string{"board"}
+var labFeatures = []string{"board", "code", "codeFirst"}
 
 // MeView is MeSchema (packages/contracts/src/account/me.ts:14) as meDto fills it. Fields the
 // schema makes optional are always sent, as meDto sends them.
@@ -38,6 +38,8 @@ type MeView struct {
 	TicketBoardEnabled       bool             `json:"ticketBoardEnabled"`
 	PhoneCallsEnabled        bool             `json:"phoneCallsEnabled"`
 	NavLinks                 []shared.NavLink `json:"navLinks"`
+	DriveURL                 string           `json:"driveUrl,omitempty"`
+	AppURL                   string           `json:"appUrl,omitempty"`
 	UserID                   string           `json:"userId"`
 	Email                    string           `json:"email"`
 	Name                     string           `json:"name"`
@@ -118,7 +120,7 @@ func Me(
 			return err
 		}
 		settings = loaded
-		admin = isAdmin(config.AdminEmails, row.email, row.emailVerified)
+		admin = shared.IsAdmin(config.AdminEmails, row.email, row.emailVerified)
 		primary, err := models.AppliedPrimary(ctx, tx, actor, "main")
 		if err != nil {
 			return err
@@ -171,6 +173,8 @@ func Me(
 		TicketBoardEnabled:       contains(labs, "board"),
 		PhoneCallsEnabled:        deployment.PhoneCallsEnabled,
 		NavLinks:                 config.NavLinks,
+		DriveURL:                 config.DriveURL,
+		AppURL:                   config.AppURL,
 		UserID:                   actor.UserID,
 		Email:                    row.email,
 		Name:                     row.name,
@@ -218,21 +222,6 @@ func readDeploymentSettings(ctx context.Context, tx pgx.Tx) (*deploymentRow, err
 		return nil, err
 	}
 	return &row, nil
-}
-
-// isAdmin is isAdmin (apps/api/src/auth/admins.ts:7): listed in RAKAZO_ADMIN_EMAILS with a
-// verified address.
-func isAdmin(admins []string, email string, verified bool) bool {
-	if len(admins) == 0 || !verified {
-		return false
-	}
-	lowered := strings.ToLower(email)
-	for _, admin := range admins {
-		if admin == lowered {
-			return true
-		}
-	}
-	return false
 }
 
 // defaultModel is meDto's defaultProvider/defaultModel: the member's connected main model,

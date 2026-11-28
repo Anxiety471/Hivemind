@@ -57,6 +57,8 @@ export async function createReplyState(
     discardedMidTurnNarration: false,
     lastDiscardedMidTurnNarration: "",
     explicitNoResponse: false,
+    emptyResponse: false,
+    emptyResponseReminders: 0,
     assistantTurnText: "",
     midTurnUserTexts: [],
     midTurnProgressCount: 0,
@@ -72,9 +74,12 @@ export async function createReplyState(
     narrationStatusShowing: false,
     pendingToolNames: [],
     pendingToolDetails: [],
+    pendingToolSkills: [],
     pendingToolTimings: [],
     toolCalls: [],
     toolTimings: new Map(),
+    toolDetails: new Map(),
+    toolSkills: new Map(),
     toolOutcomes: new Map(),
     toolStepCalls: new Map(),
     costUsd: 0,
@@ -217,10 +222,13 @@ export function flushPendingTools(reply: ReplyState) {
       reply.pendingToolNames[index]!,
       reply.pendingToolDetails?.[index] ?? undefined,
       reply.pendingToolTimings?.[index] ?? undefined,
+      reply.pendingToolSkills?.[index] ?? undefined,
+      index === 0 ? reply.invokedSkills : undefined,
     );
   }
   reply.pendingToolNames = [];
   reply.pendingToolDetails = [];
+  reply.pendingToolSkills = [];
   reply.pendingToolTimings = [];
 }
 
@@ -260,15 +268,20 @@ export function withReplyToolOutcomes(
     reply.messageSegments,
     reply.toolCalls.map(({ label, executionId, tool }) => {
       const timing = reply.toolTimings?.get(executionId);
+      const detail = reply.toolDetails?.get(executionId);
+      const skills = reply.toolSkills?.get(executionId);
       return {
         label,
         outcome: reply.toolOutcomes.get(executionId) ?? unfinished,
         tool,
         call: reply.toolStepCalls.get(executionId),
+        ...(detail ? { detail } : {}),
+        ...(skills?.length ? { skills } : {}),
         ...(timing?.durationMs !== undefined ? { durationMs: timing.durationMs } : {}),
         ...(timing?.startedAtMs !== undefined ? { startedAtMs: timing.startedAtMs } : {}),
       };
     }),
+    reply.invokedSkills,
   );
 }
 

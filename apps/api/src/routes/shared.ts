@@ -61,6 +61,8 @@ export async function meDto(deps: RouterDeps, actor: Actor): Promise<Me> {
     mobileApp: deps.env.mobileApp ?? {},
     maxUploadSizeBytes: attachmentMaxBytes(deps.env),
     maxFileUploadSizeBytes: fileUploadMaxBytes(deps.env),
+    driveUrl: deps.env.driveUrl,
+    appUrl: deps.env.driveUrl ? deps.env.webOrigin : undefined,
     maxAttachmentsPerMessage: attachmentMaxCount(deps.env),
     userId: actor.userId,
     email: user.email,
@@ -177,6 +179,12 @@ export const THREAD_MESSAGE_PAGE_SIZE = 30;
 /** Silence longer than this on a thread stream is indistinguishable from a dead socket. */
 export const HEARTBEAT_MS = 20_000;
 
+/**
+ * How soon the first frame arrives when a stream has nothing to say yet: a slow query behind a
+ * stream must not look like a connection that never opened.
+ */
+export const INITIAL_HEARTBEAT_MS = 2_000;
+
 /** A thread stream re-checks its session at least this often while it delivers. */
 export const SESSION_RECHECK_MS = 10_000;
 
@@ -185,21 +193,27 @@ export const HEARTBEAT = Symbol("heartbeat");
 const ENDED = Symbol("ended");
 
 /**
- * Yields each event from `follow`, or HEARTBEAT after HEARTBEAT_MS of silence: a half-open stream
- * looks identical to an idle one, and clients treat any frame as liveness. Auth ran once when the
- * stream opened, so before yielding anything this re-checks the session if SESSION_RECHECK_MS has
+ * Yields each event from `follow`, or HEARTBEAT after a quiet period: a half-open stream looks
+ * identical to an idle one, and clients treat any frame as liveness. The first frame is due after
+ * `initialHeartbeatMs` (2 s), so a slow first read still proves the server is answering; after
+ * anything has been sent the interval is `heartbeatMs` (20 s). Auth ran once when the stream
+ * opened, so before yielding anything this re-checks the session if SESSION_RECHECK_MS has
  * passed; a signed-out or revoked session ends the stream with UNAUTHORIZED.
  */
 export async function* withHeartbeats<T>(
   context: { signal?: AbortSignal; stillAuthorized?: () => Promise<boolean> },
   follow: (signal: AbortSignal) => AsyncGenerator<T>,
+  options: { initialHeartbeatMs?: number; heartbeatMs?: number } = {},
 ): AsyncGenerator<T | typeof HEARTBEAT> {
+  const initialHeartbeatMs = options.initialHeartbeatMs ?? INITIAL_HEARTBEAT_MS;
+  const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
   const controller = new AbortController();
   const source = follow(
     context.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal,
   );
   let pending: Promise<IteratorResult<T>> | undefined;
   let authorizedAt = Date.now();
+  let sent = false;
   try {
     while (!context.signal?.aborted) {
       // A heartbeat keeps `pending`, so the in-flight read stays the next event in order.
@@ -212,7 +226,7 @@ export async function* withHeartbeats<T>(
         // shutdown has closed the database pool. The waiter is per read so a settled race, and the
         // event it carried, isn't retained until disconnect.
         new Promise<typeof HEARTBEAT | typeof ENDED>((resolve) => {
-          timer = setTimeout(() => resolve(HEARTBEAT), HEARTBEAT_MS);
+          timer = setTimeout(() => resolve(HEARTBEAT), sent ? heartbeatMs : initialHeartbeatMs);
           if (context.signal?.aborted) return resolve(ENDED);
           onAbort = () => resolve(ENDED);
           context.signal?.addEventListener("abort", onAbort, { once: true });
@@ -226,6 +240,7 @@ export async function* withHeartbeats<T>(
         if (!(await context.stillAuthorized())) throw new ORPCError("UNAUTHORIZED");
         authorizedAt = Date.now();
       }
+      sent = true;
       if (next === HEARTBEAT) {
         yield HEARTBEAT;
         continue;
@@ -240,6 +255,42 @@ export async function* withHeartbeats<T>(
     // stream (including an UNAUTHORIZED end) must not wait for that.
     void source.return(undefined).catch(() => {});
   }
+}
+
+export type ChunkedStreamFrame<TChunk, TResult> =
+  | { type: "started" }
+  | { type: "chunk"; data: TChunk }
+  | { type: "heartbeat" }
+  | { type: "result"; data: TResult };
+
+/**
+ * Streams a slow operation's work as it happens: `started` at once, then each chunk the producer
+ * yields in order, a heartbeat while it is quiet, and finally its return value as `result`. A
+ * client sees progress instead of waiting on one long answer.
+ */
+export async function* streamChunkedResponse<TChunk, TResult>(
+  context: { signal?: AbortSignal; stillAuthorized?: () => Promise<boolean> },
+  produce: (signal: AbortSignal) => AsyncGenerator<TChunk, TResult>,
+  options: { initialHeartbeatMs?: number; heartbeatMs?: number } = {},
+): AsyncGenerator<ChunkedStreamFrame<TChunk, TResult>> {
+  let result: TResult | undefined;
+  const frames = withHeartbeats(
+    context,
+    // The producer's return value is what the stream ends with, so it is kept as it completes.
+    (signal) =>
+      (async function* () {
+        result = yield* produce(signal);
+      })(),
+    options,
+  );
+  yield { type: "started" };
+  for await (const frame of frames) {
+    if (frame === HEARTBEAT) yield { type: "heartbeat" };
+    else yield { type: "chunk", data: frame };
+  }
+  // A disconnected client has nothing to receive the result; ending is the whole answer.
+  if (context.signal?.aborted) return;
+  yield { type: "result", data: result as TResult };
 }
 
 /** Interleaves streams in arrival order; one that fails ends the rest, and stopping ends them all. */

@@ -829,9 +829,11 @@ describe("threadSnapshot", () => {
                 "thread.thinking",
                 "thread.subagent",
                 "run.waiting_input",
+                "run.checkpointed",
                 "computer.takeover.requested",
                 "agent.tool.called",
                 "agent.tool.completed",
+                "usage.recorded",
               ],
             },
           }),
@@ -1201,6 +1203,57 @@ describe("threadSnapshot", () => {
       timeout: 15_000,
       maxWait: 5_000,
     });
+  });
+
+  it("marks a failed run resumable when a saved turn checkpoint exists", async () => {
+    const failed = {
+      id: "run-failed",
+      userId: "user-1",
+      botId: "bot-1",
+      threadId: "thread-1",
+      taskId: "task-1",
+      status: "failed",
+      trigger: "user",
+      modelProvider: "openai",
+      modelId: "gpt-4o",
+      error: "503 Service Unavailable",
+      startedAt: null,
+      completedAt: new Date("2026-08-23T00:00:01.000Z"),
+      createdAt: new Date("2026-08-23T00:00:00.000Z"),
+    };
+    const findFirstRun = botRunFindFirst([failed, failed]);
+    const tx = {
+      user: { findMany: vi.fn().mockResolvedValue([]) },
+      spaceMember: { count: vi.fn().mockResolvedValue(1) },
+      $executeRaw: vi.fn(async () => 0),
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
+      message: { findMany: vi.fn().mockResolvedValue([]) },
+      event: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn(),
+      },
+      externalEffect: {
+        findFirst: vi.fn(async () => ({ id: "chk-1" })),
+      },
+      run: { findFirst: findFirstRun, findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const snapshot = await threadSnapshot({ prisma }, {
+      kind: "bot",
+      botId: "bot-1",
+      threadId: "thread-1",
+      bot: { computer: null },
+    } as ThreadTarget);
+    expect(snapshot.run).toEqual(
+      expect.objectContaining({
+        id: "run-failed",
+        status: "failed",
+        error: "503 Service Unavailable",
+        resumable: true,
+      }),
+    );
   });
 
   it("omits peer bot_message runs from group activeRuns and displayed terminal run", async () => {

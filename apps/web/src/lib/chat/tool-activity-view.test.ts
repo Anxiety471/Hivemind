@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   activityBlocks,
   activityDurationMs,
+  activitySkills,
   activityStepCount,
   activitySummaryParts,
   isToolOnlyNarration,
@@ -10,6 +11,7 @@ import {
   messageHasVisibleBlocks,
   renderableMessageBlocks,
   STEP_DETAIL_EXPAND_THRESHOLD,
+  stepCalledSkills,
   stepDisplayInfo,
   toolStepCount,
 } from "./tool-activity-view";
@@ -59,7 +61,8 @@ describe("activity summary parts", () => {
       steps: [
         { label: "Web search", count: 2 },
         { label: "Web fetch", count: 1 },
-        { label: "Shell", count: 3 },
+        { label: "Shell", count: 2 },
+        { label: "Code mode", count: 1 },
       ],
     };
     expect(activitySummaryParts([blocks])).toEqual([
@@ -229,5 +232,34 @@ describe("stepDisplayInfo", () => {
     expect(
       stepDisplayInfo({ label: "Shell", detail: "x".repeat(STEP_DETAIL_EXPAND_THRESHOLD + 1) }),
     ).toMatchObject({ expandable: true });
+  });
+});
+
+describe("skill activity extraction", () => {
+  it("categorizes skill_read and skill_mode under skills summary and collects deduplicated skills", () => {
+    const blocks: MessageBlock[] = [
+      {
+        kind: "steps",
+        skills: ["Weekly report"],
+        steps: [
+          { label: "Skill read", count: 1, detail: "pr-watch" },
+          { label: "Skill mode", count: 1, detail: "deploy", skills: ["Deploy"] },
+          {
+            label: "Code mode",
+            count: 1,
+            detail: "skill_mode, shell",
+            skills: ["PR-Watch", "deploy-check"],
+          },
+          { label: "Shell", count: 1, detail: "gh pr view" },
+        ],
+      },
+    ];
+    expect(activitySummaryParts(blocks)).toEqual([
+      { kind: "skills", count: 2 },
+      { kind: "commands", count: 2 },
+    ]);
+    expect(activitySkills(blocks)).toEqual(["Weekly report", "pr-watch", "Deploy", "deploy-check"]);
+    expect(stepCalledSkills({ label: "Skill read", detail: "Tasks" })).toEqual(["Tasks"]);
+    expect(stepCalledSkills({ label: "Shell", detail: "ls" })).toEqual([]);
   });
 });

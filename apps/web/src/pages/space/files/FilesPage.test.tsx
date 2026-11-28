@@ -18,6 +18,7 @@ const files = vi.hoisted(() => ({
   restoreFolder: vi.fn(),
   deleteFolder: vi.fn(),
   rename: vi.fn(),
+  update: vi.fn(),
   move: vi.fn(),
   trash: vi.fn(),
   restore: vi.fn(),
@@ -58,9 +59,13 @@ vi.mock("@rakazo/ui-web", () => {
     Button: ({
       size: _size,
       variant: _variant,
+      loading: _loading,
       ...props
-    }: ComponentProps<"button"> & { size?: string; variant?: string }) => <button {...props} />,
+    }: ComponentProps<"button"> & { size?: string; variant?: string; loading?: boolean }) => (
+      <button {...props} />
+    ),
     buttonVariants: () => "",
+    cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(" "),
     Dialog: ({ open, children }: { open?: boolean; children?: ReactNode }) =>
       open ? <div role="dialog">{children}</div> : null,
     DialogContent: Container,
@@ -68,8 +73,12 @@ vi.mock("@rakazo/ui-web", () => {
     DialogHeader: Container,
     DialogTitle: Container,
     DropdownMenu: Container,
-    DropdownMenuContent: () => null,
-    DropdownMenuItem: () => null,
+    DropdownMenuContent: Container,
+    DropdownMenuItem: ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
+      <button type="button" onClick={onClick}>
+        {children}
+      </button>
+    ),
     DropdownMenuSeparator: () => null,
     DropdownMenuTrigger: ({ render, children }: { render: ReactNode; children?: ReactNode }) =>
       cloneElement(render as ReactElement, {}, children),
@@ -128,6 +137,7 @@ const now = new Date().toISOString();
 const folder = {
   id: "folder-1",
   parentId: null,
+  botId: null,
   name: "Reports",
   trashedAt: null,
   createdAt: now,
@@ -141,6 +151,7 @@ const file = {
   folderId: null,
   source: "upload",
   name: "notes.txt",
+  slug: null,
   description: null,
   mimeType: "text/plain",
   size: 128,
@@ -156,6 +167,7 @@ const page = { breadcrumbs: [], folders: [], files: [], nextCursor: null };
 
 let queryClient: QueryClient;
 beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const method of Object.values(files)) method.mockReset();
   files.list.mockResolvedValue({ ...page, folders: [folder], files: [file] });
@@ -164,7 +176,7 @@ beforeEach(() => {
   files.createFolder.mockResolvedValue(folder);
 });
 
-async function renderFiles(entry = "/app/files") {
+async function renderFiles(entry = "/app/files", props: ComponentProps<typeof FilesPage> = {}) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -173,16 +185,22 @@ async function renderFiles(entry = "/app/files") {
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[entry]}>
           <Routes>
-            <Route path="/app/files" element={<FilesPage />} />
-            <Route path="/app/files/folder/:folderId" element={<FilesPage />} />
-            <Route path="/app/files/:artifactId" element={<FilesPage />} />
+            <Route path="/app/files" element={<FilesPage {...props} />} />
+            <Route path="/app/files/trash" element={<FilesPage {...props} />} />
+            <Route path="/app/files/folder/:folderId" element={<FilesPage {...props} />} />
+            <Route path="/app/files/:artifactId" element={<FilesPage {...props} />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     ),
   );
+  // Every screen here asserts painted rows, so wait for the list calls the page made to answer
+  // and for their result to commit. Waiting on the cache alone races the mount effect: it can
+  // read a settled cache before the request even starts, then assert against a loading skeleton.
   await act(async () => {
     await vi.waitFor(() => expect(files.list).toHaveBeenCalled());
+    await Promise.all(files.list.mock.results.map((result) => result.value));
+    await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
   });
   return {
     container,
@@ -197,7 +215,8 @@ async function renderFiles(entry = "/app/files") {
 it("lists folders and files, linking each into the Drive", async () => {
   const view = await renderFiles();
   try {
-    expect(view.container.textContent).toContain("Reports");
+    // The listing query resolving and React committing the rows are separate steps.
+    await vi.waitFor(() => expect(view.container.textContent).toContain("Reports"));
     expect(view.container.textContent).toContain("notes.txt");
     expect(view.container.querySelector("a[href='/app/files/folder/folder-1']")).not.toBeNull();
     expect(view.container.querySelector("a[href='/app/files/file-1']")).not.toBeNull();
@@ -311,6 +330,93 @@ it("creates a folder in the current view", async () => {
     )!;
     await act(async () => create.click());
     expect(files.createFolder).toHaveBeenCalledWith({ parentId: null, name: "Ideas" });
+  } finally {
+    await view.cleanup();
+  }
+});
+
+it("shows file description and slug and updates them via Edit details", async () => {
+  const richFile = {
+    ...file,
+    name: "Q4 Notes.txt",
+    slug: "q4-notes",
+    description: "Quarterly launch notes",
+  };
+  files.list.mockResolvedValue({ ...page, folders: [], files: [richFile] });
+  files.update.mockResolvedValue({
+    ...richFile,
+    name: "Q4 Final Notes.txt",
+    slug: "q4-final-notes",
+    description: "Final launch notes",
+  });
+  const view = await renderFiles();
+  try {
+    await vi.waitFor(() => expect(view.container.textContent).toContain("Quarterly launch notes"));
+    expect(view.container.textContent).toContain("q4-notes");
+
+    const editButton = [...view.container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Edit details"),
+    )!;
+    await act(async () => editButton.click());
+
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    const nameInput = view.container.querySelector<HTMLInputElement>("input#drive-edit-name")!;
+    const slugInput = view.container.querySelector<HTMLInputElement>("input#drive-edit-slug")!;
+    const descInput = view.container.querySelector<HTMLInputElement>(
+      "input#drive-edit-description",
+    )!;
+    await act(async () => {
+      setter?.call(nameInput, "Q4 Final Notes.txt");
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      setter?.call(slugInput, "q4-final-notes");
+      slugInput.dispatchEvent(new Event("input", { bubbles: true }));
+      setter?.call(descInput, "Final launch notes");
+      descInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const saveButton = [...view.container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save",
+    )!;
+    await act(async () => saveButton.click());
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(files.update).toHaveBeenCalledWith({
+          fileId: "file-1",
+          name: "Q4 Final Notes.txt",
+          slug: "q4-final-notes",
+          description: "Final launch notes",
+        }),
+      );
+    });
+  } finally {
+    await view.cleanup();
+  }
+});
+
+it("in the Drive app swaps the Back link and Trash toggle for a layout switch that is remembered", async () => {
+  const view = await renderFiles("/app/files", { drive: true });
+  try {
+    expect(view.container.querySelector("a[aria-label='Back']")).toBeNull();
+    expect(view.container.querySelector("button[aria-label='Trash']")).toBeNull();
+    expect(view.container.querySelectorAll("li")).toHaveLength(0);
+    await act(async () =>
+      view.container.querySelector<HTMLButtonElement>("button[aria-label='Grid view']")?.click(),
+    );
+    expect(view.container.querySelectorAll("li")).toHaveLength(2);
+    expect(localStorage.getItem("rakazo.driveView")).toBe("grid");
+  } finally {
+    localStorage.removeItem("rakazo.driveView");
+    await view.cleanup();
+  }
+});
+
+it("in the Drive app the Trash route lists trashed items", async () => {
+  files.list.mockResolvedValue(page);
+  const view = await renderFiles("/app/files/trash", { drive: true, trashView: true });
+  try {
+    expect(files.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ trashed: true, allFolders: true }),
+      expect.anything(),
+    );
   } finally {
     await view.cleanup();
   }

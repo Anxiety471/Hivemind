@@ -168,7 +168,7 @@ func TestHTTPMessaging(t *testing.T) {
 		t.Fatalf("invalid = %d %s", response.StatusCode, body)
 	}
 	response, body = do(t, http.MethodPost, server.URL+"/rpc/messaging/identities/unlink", cookie, `{"json":{"identityId":"nope"}}`, nil)
-	if response.StatusCode != 404 || string(body) != `{"json":{"code":"NOT_FOUND","defined":false,"message":"Not Found","status":404}}` {
+	if response.StatusCode != 404 || string(body) != `{"json":{"defined":false,"code":"NOT_FOUND","status":404,"message":"Not Found"}}` {
 		t.Fatalf("missing = %d %s", response.StatusCode, body)
 	}
 	// These procedures publish no signals and record no events.

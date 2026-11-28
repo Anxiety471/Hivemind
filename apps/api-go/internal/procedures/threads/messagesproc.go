@@ -3,12 +3,12 @@ package threads
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
@@ -150,11 +150,8 @@ func Messages(ctx context.Context, database *db.DB, deployment shared.Deployment
 		return nil
 	})
 	if err != nil {
-		var failure *orpc.Error
-		if !errors.As(err, &failure) {
-			slog.Default().Error("threads.messages failed", "error", err)
-		}
-		return nil, asFailure(err)
+		// The router logs a 5xx with its cause ("<procedure> failed"); no second line here.
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -219,7 +216,7 @@ func NewestMessagePreview(ctx context.Context, tx pgx.Tx, ring *contentcrypto.Ke
 	if err != nil {
 		return "", err
 	}
-	value, err := decodeJSON(blocks)
+	value, err := messageblocks.DecodeJSON(blocks)
 	if err != nil {
 		return "", err
 	}

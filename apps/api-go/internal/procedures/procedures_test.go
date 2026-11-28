@@ -39,13 +39,16 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"spaces.invites.preview", "spaces.invites.accept", "spaces.invites.cancel",
 		"organizations.list", "organizations.rename", "organizations.members.list",
 		"organizations.invitations.preview",
-		"models.rename", "pages.rename", "pages.pin", "pages.remove", "artifacts.list", "artifacts.listSpace", "artifacts.listVersions",
+		"models.rename", "pages.rename", "pages.pin", "pages.remove", "pages.setVisibility",
+		"marketplace.submissions", "integrationSetup.get", "artifacts.list", "artifacts.listSpace", "artifacts.listVersions",
 		"artifacts.create", "artifacts.get", "artifacts.getById", "artifacts.remove",
 		"files.list", "files.get", "files.folderTree", "files.changes",
 		"files.createFolder", "files.renameFolder", "files.moveFolder", "files.trashFolder", "files.restoreFolder", "files.deleteFolder",
-		"files.rename", "files.move", "files.trash", "files.restore", "files.deletePermanent", "files.emptyTrash",
+		"files.rename", "files.update", "files.move", "files.trash", "files.restore", "files.deletePermanent", "files.emptyTrash",
 		"bots.rotateWebhookSecret", "bots.revealWebhookSecret",
 		"memory.list", "memory.budget", "memory.update", "memory.remove", "memory.exportMarkdown",
+		"routines.list", "routines.listForMentions", "routines.history", "routines.setPrepare",
+		"routines.commands", "routines.testRun",
 		"onboarding.promptFocus", "onboarding.dismissFocus", "onboarding.start", "computer.commands",
 		"tickets.list", "tickets.create", "tickets.update", "tickets.move", "tickets.comment",
 		"bots.templates", "skills.list", "agentSecrets.list", "audit.events", "vault.activity",
@@ -53,7 +56,10 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"computer.dismissUpdate", "computer.dismissDiskWarning",
 		"boards.list", "boards.get", "boards.rename",
 		"tickets.get", "tickets.comments", "boards.subscribe",
+		"threads.subscribe", "threads.helperSubscribe",
+		"notifications.subscribe", "notifications.subscribeCalls",
 		"bots.list", "bots.listArchived", "bots.get", "groups.list", "groups.get", "groups.listArchived",
+		"notifications.registerPush", "notifications.registerCallPush", "notifications.unregisterPush",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
@@ -71,9 +77,9 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 			t.Errorf("%s must not be served locally", name)
 		}
 	}
-	// The rest of threads read or write encrypted messages and events, or start runs; threads.get and
-	// threads.messages are served and may decline to TypeScript.
-	for _, name := range []string{"threads.send", "threads.followUp", "threads.stop", "threads.clear", "threads.subscribe"} {
+	// The rest of threads read or write encrypted messages and events, or start runs; threads.get,
+	// threads.messages, threads.subscribe and threads.helperSubscribe are served.
+	for _, name := range []string{"threads.send", "threads.followUp", "threads.stop", "threads.clear"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}
@@ -87,10 +93,10 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		}
 	}
 	// pages.get with link:true reads the page's sealed share token from the secret store
-	// (apps/api/src/pages.ts:141-153, secrets.load at :151, called from getPage at :180);
-	// setVisibility writes it. They stay on TypeScript. pages.remove is served: its share-secret
-	// cleanup is the persistence hook plus the explicit store delete, proved by Lane J.
-	for _, name := range []string{"pages.get", "pages.setVisibility"} {
+	// (apps/api/src/pages.ts:141-153, secrets.load at :151, called from getPage at :180) and
+	// stays on TypeScript. pages.remove and pages.setVisibility are served: their share-secret
+	// cleanup is the persistence hook plus the explicit store delete.
+	for _, name := range []string{"pages.get"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}

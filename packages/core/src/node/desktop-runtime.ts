@@ -42,6 +42,43 @@ export const COMPUTER_CACHE_ENV = {
   PLAYWRIGHT_BROWSERS_PATH: "/tmp/rakazo-cache/ms-playwright",
   UV_CACHE_DIR: "/tmp/rakazo-cache/uv",
 };
+/** The validated base of COMPUTER_PACKAGE_MIRROR_URL without a trailing slash, or undefined when unset. */
+export function packageMirrorBase(mirrorUrl: string | undefined): string | undefined {
+  const base = mirrorUrl?.trim().replace(/\/+$/, "");
+  if (!base) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    throw new Error("COMPUTER_PACKAGE_MIRROR_URL must be an absolute URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    throw new Error("COMPUTER_PACKAGE_MIRROR_URL must be an http or https URL");
+  if (parsed.username || parsed.password || parsed.search || parsed.hash)
+    throw new Error(
+      "COMPUTER_PACKAGE_MIRROR_URL must not carry credentials, a query or a fragment",
+    );
+  return base;
+}
+
+/**
+ * Registry settings that point a computer's package managers at the optional read-only package
+ * mirror. Unset leaves every tool on its own default registry, exactly as before.
+ */
+export function computerPackageMirrorEnv(mirrorUrl: string | undefined): Record<string, string> {
+  const base = packageMirrorBase(mirrorUrl);
+  if (!base) return {};
+  return {
+    // npm, pnpm, bun and yarn read the lowercase or uppercase name depending on version.
+    npm_config_registry: `${base}/npm/`,
+    NPM_CONFIG_REGISTRY: `${base}/npm/`,
+    // `,direct` keeps a mirror outage from breaking modules it does not carry.
+    GOPROXY: `${base}/go,direct`,
+    UV_INDEX_URL: `${base}/pypi/simple`,
+    UV_DEFAULT_INDEX: `${base}/pypi/simple`,
+    PIP_INDEX_URL: `${base}/pypi/simple`,
+  };
+}
 
 function gatewayHost(host = "127.0.0.1") {
   if (host !== "localhost" && host !== "::" && !isIPv4(host))

@@ -136,6 +136,57 @@ describe("executor approval replay", () => {
     );
   });
 
+  describe("when a tool is reachable only from a code_mode script", () => {
+    const listed = new Set(["shell", "code_mode"]);
+    const scripted = new Set(["create_space", "installed_execute_tool"]);
+
+    it("repeats an approved built-in from a script", () => {
+      const continuation = buildApprovalContinuation(
+        [{ kind: "create_space", request: { name: "Finance" } }],
+        JSON.stringify,
+        { exposedToolNames: listed, scriptToolNames: scripted },
+      );
+      expect(continuation).toContain(
+        `code_mode: ${JSON.stringify({ code: 'await codemode["create_space"]({"name":"Finance"});' })}`,
+      );
+    });
+
+    it("repeats an approved catalog call through its wrapper, from a script", () => {
+      const request = catalogApprovalRequest(
+        "installed_execute_tool",
+        { id: "install-A:notes.write", arguments: { text: "approved exactly" } },
+        "__rakazoCatalogTool",
+      );
+      const continuation = buildApprovalContinuation(
+        [{ kind: "notes.write", request }],
+        JSON.stringify,
+        {
+          exposedToolNames: listed,
+          scriptToolNames: scripted,
+        },
+      );
+      expect(continuation).toContain("code_mode:");
+      expect(continuation).toContain('codemode[\\"installed_execute_tool\\"]');
+      expect(continuation).toContain("approved exactly");
+    });
+
+    it("names a listed tool directly, and ignores script tools when code_mode is not listed", () => {
+      const direct = buildApprovalContinuation(
+        [{ kind: "shell", request: { command: "ls" } }],
+        JSON.stringify,
+        { exposedToolNames: listed, scriptToolNames: new Set(["shell", "create_space"]) },
+      );
+      expect(direct).toContain('shell: {"command":"ls"}');
+      expect(direct).not.toContain("codemode[");
+      const withoutCodeMode = buildApprovalContinuation(
+        [{ kind: "create_space", request: { name: "Finance" } }],
+        JSON.stringify,
+        { exposedToolNames: new Set(["shell"]), scriptToolNames: scripted },
+      );
+      expect(withoutCodeMode).toContain('create_space: {"name":"Finance"}');
+    });
+  });
+
   it("keeps a direct-tool argument named like the catalog marker in continuation JSON", () => {
     const continuation = buildApprovalContinuation(
       [

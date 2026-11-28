@@ -24,6 +24,9 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/drivefiles"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/integrationsetup"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/livestream"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/marketplace"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpservers"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
@@ -33,6 +36,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/onboarding"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/push"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/routines"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/runs"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
@@ -47,6 +51,8 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultactivity"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultitems"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultstore"
+	runslib "github.com/Anxiety471/Hivemind/apps/api-go/internal/runs"
 )
 
 // All returns every locally served procedure.
@@ -314,6 +320,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "marketplace.submissions",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return marketplace.Submissions(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "usage.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
@@ -365,10 +378,54 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:       "mcp.assignments.approve",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				var publisher runslib.Publisher
+				if deployment.Signals != nil {
+					publisher = deployment.Signals
+				}
+				return mcpassignments.Approve(ctx, database, deployment, publisher, actor, input)
+			},
+		},
+		{
 			Name:     "mcp.assignments.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return mcpassignments.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:       "mcp.assignments.dismiss",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.Dismiss(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "mcp.assignments.replace",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.Replace(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "mcp.servers.agents",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Agents(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "mcp.servers.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Remove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "mcp.oauth.disconnect",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Disconnect(ctx, database, deployment, actor, input)
 			},
 		},
 		{
@@ -580,6 +637,25 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "routines.setPrepare",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.SetPrepare(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "routines.commands",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.Commands(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "routines.testRun",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.TestRun(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "memory.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
@@ -685,11 +761,10 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 		{
 			Name: "boards.subscribe",
 			Stream: &local.Stream{
-				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (<-chan string, func(), *orpc.Error) {
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
 					return tickets.FollowBoard(ctx, database, deployment, actor, input)
 				},
-				Frame:          tickets.BoardFrame,
-				HeartbeatFrame: tickets.BoardHeartbeat,
+				Frame: tickets.BoardFrame,
 			},
 		},
 		{
@@ -702,6 +777,16 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "skills.save",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return skills.Save(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "skills.testRun",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				var publisher runslib.Publisher
+				if deployment.Signals != nil {
+					publisher = deployment.Signals
+				}
+				return skills.TestRun(ctx, database, deployment, publisher, actor, input)
 			},
 		},
 		{
@@ -723,6 +808,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return onboarding.Start(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "integrationSetup.get",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return integrationsetup.Get(ctx, deployment, actor, input)
 			},
 		},
 		{
@@ -760,6 +852,59 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 				return vaultitems.ListBotSecrets(ctx, database, deployment, actor, input)
 			},
 		},
+		// Lane M: the vault writes. Their audit metadata can carry a user-typed name, which
+		// TypeScript's redactor may rewrite, so every one of them may decline to it.
+		{
+			Name:       "agentSecrets.put",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.AgentPut(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "agentSecrets.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.AgentRemove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "botSecrets.put",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.BotPut(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "botSecrets.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.BotRemove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "vault.put",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.VaultPut(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "vault.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.VaultRemove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:        "vault.reveal",
+			ReadOnly:    true,
+			SelfAudited: true,
+			MayDecline:  true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.VaultReveal(ctx, database, deployment, actor, input)
+			},
+		},
 		{
 			Name: "bots.rotateWebhookSecret",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
@@ -778,6 +923,12 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "pages.remove",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return pages.Remove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "pages.setVisibility",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return pages.SetVisibility(ctx, database, deployment, actor, input)
 			},
 		},
 		{
@@ -810,6 +961,60 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 				return boards.Rename(ctx, database, deployment, actor, input)
 			},
 		},
+		{
+			Name: "threads.subscribe",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return threads.Subscribe(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
+			},
+		},
+		{
+			Name: "threads.helperSubscribe",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return threads.HelperSubscribe(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
+			},
+		},
+		{
+			Name: "notifications.subscribe",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return livestream.Subscribe(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
+			},
+		},
+		{
+			Name: "notifications.subscribeCalls",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return livestream.SubscribeCalls(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
+			},
+		},
+		{
+			Name: "notifications.registerPush",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return push.Register(ctx, database, deployment.Vault, actor, input)
+			},
+		},
+		{
+			Name: "notifications.registerCallPush",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return push.RegisterCall(ctx, database, deployment.Vault, actor, input)
+			},
+		},
+		{
+			Name: "notifications.unregisterPush",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return push.Unregister(ctx, database, actor, input)
+			},
+		},
 	}
 	audit := deployment.Audit
 	if audit == nil {
@@ -828,9 +1033,22 @@ func VaultProcedures() []string {
 		"bots.rotateWebhookSecret",
 		"bots.revealWebhookSecret",
 		"pages.remove",
+		"pages.setVisibility",
 		"vault.list",
+		"vault.put",
+		"vault.remove",
+		"vault.reveal",
 		"botSecrets.list",
+		"botSecrets.put",
+		"botSecrets.remove",
+		"agentSecrets.put",
+		"agentSecrets.remove",
 		"mcp.servers.list",
+		"mcp.servers.agents",
+		"mcp.servers.remove",
+		"mcp.oauth.disconnect",
 		"models.credentials",
+		"notifications.registerPush",
+		"notifications.registerCallPush",
 	}
 }

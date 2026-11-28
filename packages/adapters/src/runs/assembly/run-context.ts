@@ -111,6 +111,9 @@ export interface ReplyState {
   discardedMidTurnNarration: boolean;
   lastDiscardedMidTurnNarration: string;
   explicitNoResponse: boolean;
+  /** True when the runtime's final turn ended empty without a usable reply. */
+  emptyResponse?: boolean;
+  emptyResponseReminders?: number;
   assistantTurnText: string;
   midTurnUserTexts: string[];
   midTurnProgressCount: number;
@@ -141,12 +144,20 @@ export interface ReplyState {
   pendingToolNames: string[];
   /** Parallel to `pendingToolNames`: each waiting tool call's short redacted target, or null. */
   pendingToolDetails: (string | null)[];
+  /** Parallel to `pendingToolNames`: each waiting tool call's skill names, or null. */
+  pendingToolSkills?: (string[] | null)[];
   /** Parallel to `pendingToolNames`: optional live start time and retry-branch coordinates. */
   pendingToolTimings?: (LiveStepTiming | null)[];
   /** Every step label a call made, in call order, so its outcome can be saved on its step. */
   toolCalls: { label: string; executionId: string; tool?: string }[];
   /** Elapsed timing per execution id for live monitor and persisted step blocks. */
   toolTimings?: Map<string, { startedAtMs?: number; durationMs?: number }>;
+  /** Runtime target detail per execution id resolved on completion (e.g. `code_mode` calls). */
+  toolDetails?: Map<string, string>;
+  /** Skill names read or invoked per execution id. */
+  toolSkills?: Map<string, string[]>;
+  /** Canonical skill names invoked by the turn's prompt (`/Name`, `@Name`, taught skills). */
+  invokedSkills?: string[];
   /** How each finished call ended, by execution id. */
   toolOutcomes: Map<string, ToolStepOutcome>;
   /** What each call that shows as its own step was called with and returned, by execution id. */
@@ -275,7 +286,11 @@ export interface RunState {
   pageUrl?: string;
   vaultUses: Set<string>;
   handedOff: boolean;
+  /** A routine's prepare command is running: nobody is there, so a call that would ask is refused. */
+  preparing?: boolean;
   terminalCheckpointComplete: boolean;
+  /** Runtime turn checkpoint captured just before a model/runtime failure abort. */
+  failureCheckpoint?: string;
 }
 
 export interface RunComputerContext {
@@ -319,7 +334,10 @@ export interface RunSource {
 }
 
 export interface RunTools {
+  /** Every tool of this run, which a script may call. */
   offered: ConnectorTool[];
+  /** What the model is listed: all of `offered`, or fewer when the run is code first. */
+  listed: ConnectorTool[];
   builtins: ConnectorTool[];
   connector: Map<string, ConnectorTool>;
   disabled: Set<string>;
@@ -581,7 +599,7 @@ export function restoreTurnCheckpointEffects(
   try {
     const saved = restoreTurnCheckpoint(turnCheckpoint, model);
     const unresolved = new Set(unresolvedTurnCheckpointCalls(saved.messages));
-    const namedTools = namedAgentTools(partitionTools(ctx.tools.offered).listed);
+    const namedTools = namedAgentTools(partitionTools(ctx.tools.listed).listed);
     const available = new Set(namedTools.map((tool) => tool.name));
     if (computerMode) {
       // Only the authenticated saved role authorizes a runtime transition. Do not

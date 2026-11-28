@@ -1,6 +1,6 @@
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import { RunHistoryWriteError } from "@rakazo/db";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentConnectionDeps } from "./agent-connections.js";
 import {
   connectAgent,
@@ -367,6 +367,8 @@ describe("respondAgentConnection", () => {
 });
 
 describe("messageConnectedAgent", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("delivers across workspaces over an approved connection", async () => {
     const deps = createDeps({
       connection: { id: "ac-1", requesterBotId: "bot-1", targetBotId: "bot-2", status: "approved" },
@@ -460,6 +462,7 @@ describe("messageConnectedAgent", () => {
   });
 
   it("refuses when the hop budget is exhausted", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
     const deps = createDeps({
       connection: { id: "ac-1", requesterBotId: "bot-1", targetBotId: "bot-2", status: "approved" },
       sourceHop: 6,

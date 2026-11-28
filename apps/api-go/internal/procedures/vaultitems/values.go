@@ -7,9 +7,10 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"unicode/utf16"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/agentsecrets"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/whatwgurl"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // The value formats below are packages/contracts/src/bots/bot-secrets.ts. A list shows a login's
@@ -17,7 +18,7 @@ import (
 // previewed (itemPreview catches every error), so each decoder reports ok instead of failing.
 
 const (
-	loginFieldLimit        = 40
+	loginFieldLimit        = 8 // LOGIN_FIELD_LIMIT
 	loginFieldLabelMax     = 64
 	loginFieldValueMax     = 4096
 	botSecretValueMax      = 16_384
@@ -113,6 +114,10 @@ func decodeLoginPreview(plaintext string) (username string, hasUsername, otp boo
 	}
 	return username, hasUsername, otp, true
 }
+
+// ValidAuthenticatorKey is authenticatorKey(text) !== undefined (bot-secrets.ts:291-344), the
+// check a saved login's opt-in authenticator key must pass. Exported for the write path.
+func ValidAuthenticatorKey(text string) bool { return validAuthenticatorKey(text) }
 
 func validAuthenticatorKey(text string) bool {
 	trimmed := trimJS(text)
@@ -355,24 +360,24 @@ func destinationValid(name, origin string, auth map[string]any) bool {
 	if origin == "" || utf16Len(origin) > 2048 {
 		return false
 	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host == "" {
+	// botSecretOriginSchema's check reads `new URL(...)`: the shared WHATWG fork, not net/url,
+	// decides what a stored origin is.
+	parsed, err := whatwgurl.Parse(origin)
+	if err != nil {
 		return false
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if parsed.Username() != "" || parsed.Password() != "" || parsed.Search() != "" ||
+		parsed.Hash() != "" || parsed.Pathname() != "/" {
 		return false
 	}
-	if parsed.Path != "" && parsed.Path != "/" {
-		return false
-	}
-	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	host := parsed.Hostname()
 	if isMetadataHost(host) {
 		return false
 	}
-	if parsed.Scheme == "https" {
+	if parsed.Protocol() == "https:" {
 		return true
 	}
-	if parsed.Scheme != "http" || !allowPrivateHTTP() {
+	if parsed.Protocol() != "http:" || !allowPrivateHTTP() {
 		return false
 	}
 	return kind != "login" && isPrivateHost(host)
@@ -507,4 +512,4 @@ func trimJS(value string) string {
 	})
 }
 
-func utf16Len(value string) int { return len(utf16.Encode([]rune(value))) }
+func utf16Len(value string) int { return len(wtf8.Units(value)) }

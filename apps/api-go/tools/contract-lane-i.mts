@@ -10,6 +10,8 @@ import type { Case, Seeded } from "./contract.mts";
 type System = any;
 
 const OLD = new Date(Date.UTC(2021, 0, 1));
+// A wake time the run-wakeup scanner will never reach, for runs seeded only to be read.
+const NEVER = new Date(Date.UTC(2099, 0, 1));
 const at = (seconds: number) => new Date(OLD.getTime() + seconds * 1000);
 
 type MessageSeed = {
@@ -25,7 +27,18 @@ type MessageSeed = {
   clientNonce?: string;
 };
 
-type RunSeed = { key: string; status: string; trigger: string; created?: number };
+type RunSeed = {
+  key: string;
+  status: string;
+  trigger: string;
+  created?: number;
+  /**
+   * A queued run with no wake time is due at once for the TypeScript run-wakeup scanner, which
+   * then publishes a `runs` space change from its own timer mid-case. These cases only read the
+   * status a queued run shows, so they park the wake time out of reach.
+   */
+  wakeAt?: Date;
+};
 
 type BotSeed = {
   key: string;
@@ -60,6 +73,16 @@ type GroupSeed = {
 
 export function laneICases(system: System): Case[] {
   const messageID = (threadId: string, seq: number) => `${threadId}-m${seq}`;
+  // Bots order by pinned, position, createdAt and groups by pinned, updatedAt, with no id
+  // tie-breaker; spec defaults would tie rows with equal pinned/position. One millisecond per
+  // seeded row, keyed by the seed object, keeps the order total and identical on both sides
+  // (the harness seeds each side with a fresh object).
+  const seedTimes = new WeakMap<Seeded, number>();
+  const seedTime = (seeded: Seeded) => {
+    const n = seedTimes.get(seeded) ?? 0;
+    seedTimes.set(seeded, n + 1);
+    return new Date(OLD.getTime() + n);
+  };
 
   const seedBot = async (seeded: Seeded, spec: BotSeed) => {
     const user = seeded.userId;
@@ -79,7 +102,8 @@ export function laneICases(system: System): Case[] {
     await system.bot.create({
       data: {
         id, spaceId, userId: user, name: `Bot ${spec.key}`, color: "#3B82F6",
-        createdAt: at(spec.created ?? 0), updatedAt: at(spec.updated ?? 0),
+        createdAt: spec.created === undefined ? seedTime(seeded) : at(spec.created),
+        updatedAt: at(spec.updated ?? 0),
         ...(spec.archived ? { archivedAt: at(1) } : {}),
         ...(spec.pinned === undefined ? {} : { pinned: spec.pinned }),
         ...(spec.positioned === undefined ? {} : { position: spec.positioned }),
@@ -112,7 +136,9 @@ export function laneICases(system: System): Case[] {
       await system.run.create({
         data: {
           id: runId, spaceId, botId: id, threadId, taskId, userId: user,
-          status: run.status, trigger: run.trigger, createdAt: at(run.created ?? 0),
+          status: run.status, trigger: run.trigger,
+          createdAt: run.created === undefined ? seedTime(seeded) : at(run.created),
+          ...(run.wakeAt ? { wakeAt: run.wakeAt } : {}),
         },
       });
       runIDs.set(run.key, runId);
@@ -140,7 +166,8 @@ export function laneICases(system: System): Case[] {
     await system.chatGroup.create({
       data: {
         id, spaceId, userId: user, name: `Group ${spec.key}`,
-        createdAt: at(spec.created ?? 0), updatedAt: at(spec.updated ?? 0),
+        createdAt: spec.created === undefined ? seedTime(seeded) : at(spec.created),
+        updatedAt: spec.updated === undefined ? seedTime(seeded) : at(spec.updated),
         ...(spec.archived ? { archivedAt: at(1) } : {}),
         ...(spec.pinned === undefined ? {} : { pinned: spec.pinned }),
         ...(spec.fields ?? {}),
@@ -375,7 +402,13 @@ export function laneICases(system: System): Case[] {
       {
         seed: seedAll(
           [
-            { key: "gb1", runs: [{ key: "a", status: "queued", trigger: "user", created: 1 }, { key: "b", status: "waiting_input", trigger: "user", created: 2 }] },
+            {
+              key: "gb1",
+              runs: [
+                { key: "a", status: "queued", trigger: "user", created: 1, wakeAt: NEVER },
+                { key: "b", status: "waiting_input", trigger: "user", created: 2 },
+              ],
+            },
             { key: "gb2", runs: [{ key: "a", status: "running", trigger: "user", created: 1 }, { key: "b", status: "leased", trigger: "user", created: 2 }] },
           ],
           [{ key: "g1", members: [{ bot: "gb1" }, { bot: "gb2" }] }],
@@ -620,7 +653,7 @@ export function laneICases(system: System): Case[] {
         seed: seedAll([{
           key: "b1",
           runs: [
-            { key: "a", status: "queued", trigger: "user", created: 1 },
+            { key: "a", status: "queued", trigger: "user", created: 1, wakeAt: NEVER },
             { key: "b", status: "running", trigger: "user", created: 2 },
             { key: "c", status: "running", trigger: "helper", created: 3 },
             { key: "d", status: "running", trigger: "tickets", created: 4 },

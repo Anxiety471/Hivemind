@@ -6,6 +6,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatReferencesContext } from "../../lib/board/chat-references";
 import { OpenPageContext } from "../../lib/messages/message-mentions";
 import { MessageCaption } from "./message-caption";
 
@@ -17,6 +18,19 @@ const linking = vi.hoisted(() => ({
 // Only drawn for a sent mention, which these tests do not use.
 vi.mock("../bots/bot-avatar", () => ({ BotAvatar: () => null }));
 vi.mock("../native/native-symbol", () => ({ NativeSymbol: () => null }));
+vi.mock("../../lib/api/api", () => ({
+  captureApiRequestContext: vi.fn(),
+  currentApiBase: () => "https://app.example.test",
+  rpc: vi.fn(),
+  selectedSpaceId: () => null,
+  subscribeSpaceSelection: () => () => undefined,
+}));
+vi.mock("../../lib/api/session", () => ({
+  currentSessionGeneration: () => 1,
+  loadSessionToken: vi.fn(),
+  subscribeSessionGeneration: () => () => undefined,
+}));
+vi.mock("../../lib/board/ticket-detail-sheet", () => ({ TicketDetailSheet: () => null }));
 
 vi.mock("react-native", () => {
   function View({ children }: { children?: ReactNode }) {
@@ -141,5 +155,87 @@ describe("attachment captions", () => {
     await act(async () => chip?.click());
 
     expect(openPage).toHaveBeenCalledWith("pg_1");
+  });
+
+  describe("board references", () => {
+    const repositories = [
+      { url: "https://code.example.test/acme/app", aliases: [], isDefault: true },
+    ];
+    const tickets = [
+      {
+        ref: "TASK-397",
+        repository: "https://code.example.test/acme/app",
+        pullRequests: [{ url: "https://code.example.test/acme/app/pull/19" }],
+      },
+    ];
+
+    function renderWithReferences(role: "bot" | "user", text: string, openTicket = vi.fn()) {
+      act(() => {
+        root.render(
+          <ChatReferencesContext.Provider
+            value={{
+              referenceContext: { ticketPrefix: "TASK", repositories, tickets },
+              openTicket,
+            }}
+          >
+            <MessageCaption
+              role={role}
+              text={text}
+              tokens={lightTokens}
+              colorScheme="light"
+              streaming={false}
+            />
+          </ChatReferencesContext.Provider>,
+        );
+      });
+      return openTicket;
+    }
+
+    it("opens a ticket chip from the user's bubble", async () => {
+      const openTicket = renderWithReferences("user", "Please check TASK-397");
+
+      const chip = [...container.querySelectorAll<HTMLElement>('[role="link"]')].find(
+        (element) => element.textContent === "TASK-397",
+      );
+      expect(chip).toBeDefined();
+
+      await act(async () => chip?.click());
+
+      expect(openTicket).toHaveBeenCalledWith("TASK-397");
+    });
+
+    it("links tickets, pull requests and commit SHAs in bot Markdown", async () => {
+      const openTicket = renderWithReferences("bot", "Fixed TASK-397 in PR #19 at `ffc2c036`");
+
+      const linkTexts = [...container.querySelectorAll<HTMLElement>('[role="link"]')].map(
+        (element) => element.textContent?.replace(/[\u2060\u2068\u2069]/g, ""),
+      );
+      expect(linkTexts).toEqual(expect.arrayContaining(["TASK-397", "PR #19", "ffc2c036"]));
+
+      const chip = [...container.querySelectorAll<HTMLElement>('[role="link"]')].find(
+        (element) => element.textContent === "TASK-397",
+      );
+      await act(async () => chip?.click());
+
+      expect(openTicket).toHaveBeenCalledWith("TASK-397");
+    });
+
+    it("leaves references plain without board context", () => {
+      const botMessage = { role: "bot" as const };
+      act(() => {
+        root.render(
+          <MessageCaption
+            {...botMessage}
+            text="Fixed TASK-397 in PR #19"
+            tokens={lightTokens}
+            colorScheme="light"
+            streaming={false}
+          />,
+        );
+      });
+
+      expect(container.querySelector('[role="link"]')).toBeNull();
+      expect(container.textContent).toContain("TASK-397");
+    });
   });
 });

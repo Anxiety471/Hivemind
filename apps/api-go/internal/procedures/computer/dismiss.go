@@ -28,11 +28,12 @@ func DismissUpdate(ctx context.Context, database *db.DB, deployment shared.Deplo
 	var dismissed bool
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		at := time.Now().UTC().Truncate(time.Millisecond)
+		arguments := append(append([]any{id}, db.Data(at)...), actor.SpaceID)
 		tag, err := tx.Exec(ctx, `UPDATE computer_updates u SET status = 'dismissed', "updatedAt" = $2
 			FROM computers c
 			WHERE u.id = $1 AND u.status = 'failed' AND c.id = u."computerId" AND c."spaceId" = $3
 				AND EXISTS (SELECT 1 FROM bots b WHERE b."computerId" = c.id AND b."archivedAt" IS NULL)`,
-			id, at, actor.SpaceID)
+			arguments...)
 		if err != nil {
 			return err
 		}
@@ -78,7 +79,7 @@ func DismissDiskWarning(ctx context.Context, database *db.DB, actor db.Actor, ra
 		}
 		at := time.Now().UTC().Truncate(time.Millisecond)
 		_, err = tx.Exec(ctx, `UPDATE computers SET "diskDismissedPercent" = $2, "updatedAt" = $3 WHERE id = $1`,
-			*computerID, percent, at)
+			append([]any{*computerID}, db.Data(percent, at)...)...)
 		return err
 	})
 	if err != nil {

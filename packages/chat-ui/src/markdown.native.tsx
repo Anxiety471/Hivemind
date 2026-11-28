@@ -8,6 +8,7 @@ import Markdown, {
 } from "@ronradtke/react-native-markdown-display";
 import { memo, useMemo } from "react";
 import { Text, View } from "react-native";
+import { codeBlockMarkdown } from "./code-blocks/code-blocks";
 import type { ChatMarkdownProps } from "./markdown";
 import { LinkFaviconsPausedContext, linkifyExplicitUrls } from "./markdown";
 import { InlineChipsContext } from "./native/chips";
@@ -78,10 +79,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   streaming = false,
   renderMention,
   onOpenPage,
+  onOpenTicket,
   palette = darkTokens,
   colorScheme = "dark",
 }: ChatMarkdownProps & { palette?: ColorTokens; colorScheme?: ResolvedAppearance }) {
   const openLink = useNativeLinkConfirm();
+  // Code a bot wrote without a fence is fenced before Markdown reads it, as on the web.
+  const source = useMemo(() => codeBlockMarkdown(children), [children]);
   const styles = useMemo(() => markdownStyles(palette), [palette]);
   const diagramSurface = useMemo(
     () => ({ streaming, palette, colorScheme }),
@@ -99,8 +103,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   };
 
   const inlineChips = useMemo(
-    () => ({ renderMention, onOpenPage, palette }),
-    [renderMention, onOpenPage, palette],
+    () => ({ renderMention, onOpenPage, onOpenTicket, palette }),
+    [renderMention, onOpenPage, onOpenTicket, palette],
   );
   return (
     <OpenLinkContext.Provider value={openLink}>
@@ -110,10 +114,10 @@ export const ChatMarkdown = memo(function ChatMarkdown({
             <DiagramSurfaceContext.Provider value={diagramSurface}>
               {streaming ? (
                 <MarkdownStream {...sharedProps} cursorColor={palette.mutedForeground} streaming>
-                  {children}
+                  {source}
                 </MarkdownStream>
               ) : (
-                <Markdown {...sharedProps}>{children}</Markdown>
+                <Markdown {...sharedProps}>{source}</Markdown>
               )}
             </DiagramSurfaceContext.Provider>
           </LinkFaviconsPausedContext.Provider>
@@ -143,3 +147,22 @@ export { RemoteMarkdownImage } from "./native/images";
 export { LinkifiedText } from "./native/linkified-text";
 export { useNativeLinkConfirm } from "./native/links";
 export { MarkdownLongPressContext } from "./native/sideways-scroll";
+export type {
+  ChatJobReference,
+  ChatReferenceContext,
+  ChatReferencePreview,
+  ChatRepository,
+  ChatTicketDecision,
+  ChatTicketDecisionOption,
+  ChatTicketReference,
+} from "./references";
+export {
+  deriveRepositoryBaseUrl,
+  describeChatReference,
+  markdownTicketRef,
+  repositoryCommitUrl,
+  repositoryPullRequestUrl,
+  resolveJobCommitUrl,
+  withBlockChatReferences,
+  withChatReferences,
+} from "./references";

@@ -1,7 +1,12 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ORPCError } from "@orpc/client";
 import type { AgentSkill, AgentSkillCatalogEntry, MemoryDocument } from "@rakazo/contracts";
-import { isDeletableMemoryDocument, isEmptyBotMemory } from "@rakazo/contracts";
+import {
+  isArchiveMemoryPath,
+  isDeletableMemoryDocument,
+  isEmptyBotMemory,
+  USER_MEMORY_PATH,
+} from "@rakazo/contracts";
 import { fetchFresh, writeSaved } from "@rakazo/core/query";
 import { Badge, Button, SectionHeading, Skeleton, Textarea } from "@rakazo/ui-web";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@rakazo/ui-web/components/ui/tooltip";
@@ -50,7 +55,7 @@ export function SpaceMemorySection() {
       data-testid="space-memory-documents"
     >
       <SectionHeading variant="heading">
-        <Trans>Shared memory</Trans>
+        <Trans>Shared Memory</Trans>
       </SectionHeading>
       <p className="mt-1 text-body-sm text-muted-foreground">
         <Trans>Every bot in this space reads these notes and keeps them up to date.</Trans>
@@ -83,7 +88,6 @@ function MemoryDocumentList({
   const list = queries.memory.list.queryOptions({ input });
   // Bots write memory as they run, so every open refreshes behind the cached list.
   const listQuery = useQuery({ ...list, refetchOnMount: "always" });
-  const docs = listQuery.data ?? NO_DOCS;
   const loading = listQuery.isPending;
   const budgetInput = input.scope === "bot" && input.botId ? { botId: input.botId } : null;
   const budgetOptions = budgetInput
@@ -93,6 +97,18 @@ function MemoryDocumentList({
     budgetOptions ?? { queryKey: ["memory-budget", "none"], queryFn: skipToken },
   );
   const budget = budgetInput && budgetQuery.data ? budgetQuery.data : null;
+  const hasSharedUser = Boolean(
+    input.scope === "bot" &&
+      budget &&
+      [...budget.documents, ...budget.omitted].some(
+        (entry) => entry.scope === "user" && entry.path === USER_MEMORY_PATH,
+      ),
+  );
+  const docs = (listQuery.data ?? NO_DOCS).filter(
+    (doc) =>
+      !isArchiveMemoryPath(doc.path) &&
+      !(hasSharedUser && input.scope === "bot" && doc.path === USER_MEMORY_PATH),
+  );
   const bytesLeftOut = budget
     ? budget.omitted.reduce((sum, entry) => sum + entry.totalBytes, 0) +
       budget.documents.reduce((sum, entry) => sum + entry.totalBytes - entry.includedBytes, 0)

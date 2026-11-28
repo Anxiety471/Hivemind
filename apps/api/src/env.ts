@@ -66,6 +66,10 @@ export interface AppEnv extends MessagingEnvironmentValues {
   webOrigin: string;
   /** Extra browser origins trusted for sign-in and CORS, from `RAKAZO_EXTRA_AUTH_ORIGINS`. */
   extraAuthOrigins: string[];
+  /** The Drive app's origin, from `DRIVE_URL`; the menu's Files item opens it in a new tab. */
+  driveUrl?: string;
+  /** Parent domain the session cookie is shared on, from `COOKIE_DOMAIN`, so the Drive app is signed in too. */
+  cookieDomain?: string;
   /** `<TEAM_ID>.<bundle id>` of iOS apps that may use this domain's passkeys. */
   passkeyAppleAppIds: string[];
   /** SHA-256 signing certificate fingerprints of Android apps that may use this domain's passkeys. */
@@ -275,6 +279,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     authUrl: resolveWebOrigin(source.BETTER_AUTH_URL, webOrigin, "BETTER_AUTH_URL"),
     webOrigin,
     extraAuthOrigins: parseExtraAuthOrigins(source.RAKAZO_EXTRA_AUTH_ORIGINS),
+    driveUrl: parseExtraAuthOrigins(source.DRIVE_URL)[0],
+    cookieDomain: cookieDomainFrom(source.COOKIE_DOMAIN, webOrigin),
     passkeyAppleAppIds: list(source.PASSKEY_APPLE_APP_IDS),
     passkeyAndroidCertFingerprints: androidCertFingerprints(source.PASSKEY_ANDROID_CERT_SHA256),
     privacyPolicyUrl: optional(source.PRIVACY_POLICY_URL),
@@ -473,6 +479,21 @@ function applePrivateKey(source: NodeJS.ProcessEnv): string | undefined {
 function optional(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+/** A domain that covers the web origin, so the cookie still reaches the app that sets it. */
+function cookieDomainFrom(value: string | undefined, webOrigin: string): string | undefined {
+  const domain = optional(value)?.replace(/^\./, "").toLowerCase();
+  if (!domain) return undefined;
+  const host = new URL(webOrigin).hostname;
+  if (
+    !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain) ||
+    !(host === domain || host.endsWith(`.${domain}`))
+  )
+    throw new Error(
+      "COOKIE_DOMAIN must be a domain that contains WEB_ORIGIN's host, such as example.com",
+    );
+  return domain;
 }
 
 function list(value: string | undefined): string[] {

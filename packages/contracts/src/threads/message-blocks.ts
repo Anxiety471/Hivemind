@@ -9,6 +9,7 @@ import { Id, ThinkingLevelSchema } from "../ids.js";
 import { AgentImportSetupItemSchema } from "../integrations/agent-import-setup.js";
 import { McpTransportSchema } from "../integrations/mcp.js";
 import { McpAppCspSchema } from "../integrations/mcp-app.js";
+import { ToolCardSchema } from "../integrations/tool-card.js";
 
 export const MessageRole = z.enum(["user", "bot", "system"]);
 export const BotMessageIntent = z.enum(["request", "result", "question", "status", "fyi"]);
@@ -78,6 +79,30 @@ export const AskReceipt = z.object({
 });
 export type AskReceipt = z.infer<typeof AskReceipt>;
 
+/** One choice on an ask; a short line under the label explains what choosing it means. */
+export const AskActionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  /** A short line under the label, such as what choosing this option means. */
+  description: z.string().optional(),
+  outcome: z.enum(["created", "cancelled"]).optional(),
+  recommended: z.boolean().optional(),
+});
+export type AskAction = z.infer<typeof AskActionSchema>;
+
+/** One independent item of a batch ask. Actionable items carry `actions`; FYI rows omit them. */
+export const AskItemSchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  detail: z.string().optional(),
+  ticketRef: z.string().optional(),
+  /** Present on actionable items; omitted on read-only FYI rows. */
+  actions: z.array(AskActionSchema).optional(),
+  /** Selected choice id or custom Other text once answered. */
+  answer: z.string().optional(),
+});
+export type AskItem = z.infer<typeof AskItemSchema>;
+
 export const MessageBlock = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text: z.string() }),
   z.object({
@@ -130,16 +155,9 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     dismissed: z.literal(true).optional(),
     /** A login the user used for this run only instead of saving it. */
     remembered: z.literal(false).optional(),
-    actions: z
-      .array(
-        z.object({
-          id: z.string(),
-          label: z.string(),
-          outcome: z.enum(["created", "cancelled"]).optional(),
-          recommended: z.boolean().optional(),
-        }),
-      )
-      .optional(),
+    actions: z.array(AskActionSchema).optional(),
+    /** Batch triage: independent decisions in one ask; answered together with one `threads.answer`. */
+    items: z.array(AskItemSchema).optional(),
   }),
   z.object({
     kind: z.literal("choice"),
@@ -218,6 +236,7 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     activity: z.literal(true).optional(),
     pendingToolNames: z.array(z.string()).optional(),
     pendingToolDetails: z.array(z.string().nullable()).optional(),
+    pendingToolSkills: z.array(z.array(z.string()).nullable()).optional(),
     pendingToolTimings: z
       .array(
         z
@@ -245,6 +264,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
         count: z.number().int().positive(),
         /** Short redacted summary of what the call targeted (URL, path, query, command). */
         detail: z.string().optional(),
+        /** Skill names read or invoked by this step. */
+        skills: z.array(z.string()).optional(),
         /** What the bot wrote just before this step, kept out of its reply. */
         note: z.string().optional(),
         /** Elapsed duration of this step in milliseconds. */
@@ -278,6 +299,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     attempts: z.number().int().positive().optional(),
     /** Terminal run outcome recorded on the steps block. */
     status: z.enum(["completed", "stopped", "failed"]).optional(),
+    /** Deduplicated skill names read or invoked during this run. */
+    skills: z.array(z.string()).optional(),
   }),
   z.object({
     kind: z.literal("subagent"),
@@ -294,6 +317,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     name: z.string(),
     status: z.enum(["created", "archived", "deleted"]),
   }),
+  /** A job a tool started elsewhere, from the card the tool's own result carried. */
+  ToolCardSchema,
   z.object({
     /** Compact card for a remote cloud coding agent (not the bot computer). */
     kind: z.literal("cloud_agent"),
@@ -404,6 +429,15 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     toBotName: z.string(),
     text: z.string(),
     intent: BotMessageIntent.optional(),
+  }),
+  z.object({
+    /**
+     * A message from an agent outside the Space (a coding agent, a script) that reached this bot
+     * over its webhook: shown as a chip naming that agent, never as one of the Space's bots.
+     */
+    kind: z.literal("agent_message_received"),
+    agentName: z.string().max(80),
+    text: z.string(),
   }),
   z.object({
     /** Delivered into the receiving bot's own chat as the prompt that woke it. */

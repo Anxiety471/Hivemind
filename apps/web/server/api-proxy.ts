@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { DRIVE_OPEN_PATH } from "@rakazo/contracts/drive-open";
 import { USER_DEVICE_CONNECT_PATH } from "@rakazo/contracts/user-devices";
 import type { ProxyOptions } from "vite";
 import { appendForwardedFor } from "./forwarded-for.js";
@@ -13,6 +14,7 @@ export const DEVICE_SOCKET = `^${USER_DEVICE_CONNECT_PATH}(?:\\?|$)`;
  */
 export const API_ROUTES: Readonly<Record<string, boolean>> = {
   "/api/v1/files": false,
+  [DRIVE_OPEN_PATH]: false,
   "/api": false,
   [DEVICE_SOCKET]: true,
   "/rpc": false,
@@ -72,7 +74,9 @@ export function apiProxy(
       route,
       options(
         upgrades,
-        (route === "/rpc" || route === "/api/v1/files") && rpcTarget ? rpcTarget : target,
+        (route === "/rpc" || route === "/api/v1/files" || route === DRIVE_OPEN_PATH) && rpcTarget
+          ? rpcTarget
+          : target,
       ),
     ]),
   );

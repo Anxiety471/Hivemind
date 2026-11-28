@@ -1,20 +1,25 @@
 import type {
   Board,
+  BoardRepository,
   Ticket,
   TicketComment,
   TicketDecision,
+  TicketIssue,
   TicketPriority,
+  TicketPullRequest,
   TicketStatus,
 } from "@rakazo/contracts";
 import {
+  BoardRepositorySchema,
   parseTicketRef,
   TICKET_ARCHIVE_AFTER_DAYS,
   TicketDecisionSchema,
+  TicketIssueSchema,
   TicketPrioritySchema,
+  TicketPullRequestSchema,
   TicketStatusSchema,
   ticketRef,
 } from "@rakazo/contracts";
-import { readJsonColumn } from "../database/json-column.js";
 import type {
   Board as BoardRow,
   Prisma,
@@ -22,6 +27,7 @@ import type {
   TicketComment as TicketCommentRow,
   Ticket as TicketRow,
 } from "../database/client.js";
+import { readJsonColumn } from "../database/json-column.js";
 
 /** skipDuplicates tolerates concurrent first opens without aborting their transactions. */
 export async function ensureBoard(prisma: PrismaClient, spaceId: string): Promise<BoardRow> {
@@ -77,12 +83,27 @@ export async function findTicket(
   });
 }
 
+const StoredBoardRepositoriesSchema = BoardRepositorySchema.array();
+
+/** A shape this release does not know shows no repositories rather than failing the board. */
+export function readBoardRepositories(
+  row: Pick<BoardRow, "id" | "repositories">,
+): BoardRepository[] {
+  return readJsonColumn(
+    StoredBoardRepositoriesSchema,
+    row.repositories,
+    { table: "boards", column: "repositories", id: row.id },
+    { fallback: [] },
+  );
+}
+
 export function toBoardDto(row: BoardRow): Board {
   return {
     id: row.id,
     spaceId: row.spaceId,
     name: row.name,
     ticketPrefix: row.ticketPrefix,
+    repositories: readBoardRepositories(row),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -107,6 +128,54 @@ export function readTicketDecision(row: Pick<TicketRow, "id" | "decision">): Tic
     row.decision,
     { table: "tickets", column: "decision", id: row.id },
     { fallback: null },
+  );
+}
+
+const StoredPullRequestsSchema = TicketPullRequestSchema.array();
+
+/** A shape this release does not know shows no links rather than failing the ticket. */
+export function readTicketPullRequests(
+  row: Pick<TicketRow, "id" | "pullRequests">,
+): TicketPullRequest[] {
+  return readJsonColumn(
+    StoredPullRequestsSchema,
+    row.pullRequests,
+    { table: "tickets", column: "pullRequests", id: row.id },
+    { fallback: [] },
+  );
+}
+
+/** The stored links a write builds on: a shape this release does not know stops the write. */
+export function readStoredTicketPullRequests(
+  row: Pick<TicketRow, "id" | "pullRequests">,
+): TicketPullRequest[] {
+  return readJsonColumn(
+    StoredPullRequestsSchema,
+    row.pullRequests,
+    { table: "tickets", column: "pullRequests", id: row.id },
+    "reject",
+  );
+}
+
+const StoredIssuesSchema = TicketIssueSchema.array();
+
+/** A shape this release does not know shows no issues rather than failing the ticket. */
+export function readTicketIssues(row: Pick<TicketRow, "id" | "issues">): TicketIssue[] {
+  return readJsonColumn(
+    StoredIssuesSchema,
+    row.issues,
+    { table: "tickets", column: "issues", id: row.id },
+    { fallback: [] },
+  );
+}
+
+/** The stored issues a write builds on: a shape this release does not know stops the write. */
+export function readStoredTicketIssues(row: Pick<TicketRow, "id" | "issues">): TicketIssue[] {
+  return readJsonColumn(
+    StoredIssuesSchema,
+    row.issues,
+    { table: "tickets", column: "issues", id: row.id },
+    "reject",
   );
 }
 
@@ -135,6 +204,9 @@ export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     ...(decision ? { decision } : {}),
+    pullRequests: readTicketPullRequests(row),
+    issues: readTicketIssues(row),
+    repository: row.repository ?? null,
   };
 }
 

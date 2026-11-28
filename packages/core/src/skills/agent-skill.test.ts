@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSkillMd,
   expandSkillReferencesInPrompt,
+  extractExpandedSkillNames,
   extractForcedSkillName,
   extractRoutineSkillMentions,
   findSkillByName,
@@ -10,7 +11,12 @@ import {
   parseSkillMd,
   renameRoutineSkillMentions,
 } from "./agent-skill.js";
-import { formatForcedSkillPrompt, formatSkillsCatalogInstruction } from "./agent-skill.prompt.js";
+import {
+  formatForcedSkillPrompt,
+  formatRelevantSkillsHint,
+  formatSkillModeCatalogInstruction,
+  formatSkillsCatalogInstruction,
+} from "./agent-skill.prompt.js";
 
 describe("built-in skill merging", () => {
   it("uses the same normalized names for catalog precedence and prompt expansion", () => {
@@ -690,6 +696,59 @@ describe("skill prompt helpers", () => {
     );
     expect(formatForcedSkillPrompt("Standup", "body")).toBe("Use skill: Standup\n\nbody");
   });
+
+  it("formats a description-bearing, budget-capped Skill Mode index and per-turn relevant hints", () => {
+    const compact = formatSkillModeCatalogInstruction(
+      [
+        {
+          name: "Tasks",
+          source: "builtin",
+          description: "Track multi-step work and follow-ups on the Kanban board",
+        },
+        {
+          name: "Interrogate",
+          source: "builtin",
+          description: "Adversarial review of a plan\n  or   change",
+        },
+      ],
+      [{ name: "File expenses", whenToUse: "When the user uploads a receipt" }],
+    );
+    expect(compact).toContain(
+      "Available skills (2):\n- Interrogate: Adversarial review of a plan or change\n- Tasks: Track multi-step work and follow-ups on the Kanban board",
+    );
+    expect(compact).toContain(
+      "Taught skills (1):\n- File expenses: When the user uploads a receipt",
+    );
+    expect(compact).toContain("skill_mode({ query })");
+    expect(compact).not.toMatch(/claude|anthropic|\bpi\b|runtime|SKILL\.md|persist|inject/i);
+    expect(formatSkillModeCatalogInstruction([], [])).toBeUndefined();
+
+    const many = Array.from({ length: 200 }, (_, index) => ({
+      name: `Workflow-Skill-${String(index).padStart(3, "0")}-Extended-Name`,
+      description: `Handles step ${index} for workspace automation and data sync in routine operations`,
+      source: "user" as const,
+    }));
+    const capped = formatSkillModeCatalogInstruction(many) ?? "";
+    expect(capped).toContain("Available skills (200):");
+    expect(capped).toContain("- Workflow-Skill-000-Extended-Name: Handles step 0");
+    expect(capped).toContain("more — search with skill_mode");
+    const catalogSection = capped.slice(0, capped.indexOf("Skills are step-by-step"));
+    expect(catalogSection.length).toBeLessThanOrEqual(2_500);
+
+    const hint = formatRelevantSkillsHint([
+      {
+        name: "Tasks",
+        source: "builtin",
+        description: "Track multi-step work and follow-ups on the Kanban board",
+        matchedHeading: "Stages",
+      },
+    ]);
+    expect(hint).toContain("<relevant_skills>");
+    expect(hint).toContain(
+      '- Tasks [builtin]: Track multi-step work and follow-ups on the Kanban board (matched: "Stages")',
+    );
+    expect(formatRelevantSkillsHint([])).toBeUndefined();
+  });
 });
 
 describe("SKILL.md quoted frontmatter values", () => {
@@ -746,5 +805,34 @@ describe("renameRoutineSkillMentions", () => {
     expect(
       renameRoutineSkillMentions("Use @garden tools, then @Garden. Email@garden stays.", renames),
     ).toBe("Use @garden tools, then @garden-2. Email@garden stays.");
+  });
+});
+
+describe("extractExpandedSkillNames", () => {
+  const skills = [
+    {
+      name: "Daily standup",
+      description: "standup",
+      source: "user" as const,
+      readOnly: false,
+      content: "Standup body",
+    },
+    {
+      name: "PR Watch",
+      description: "watch prs",
+      source: "user" as const,
+      readOnly: false,
+      content: "PR watch body",
+    },
+  ];
+
+  it("resolves forced /Name and routine @Name mentions to canonical skill names", () => {
+    expect(extractExpandedSkillNames("/daily standup\nfocus on blockers", skills)).toEqual([
+      "Daily standup",
+    ]);
+    expect(
+      extractExpandedSkillNames("Run @pr watch and @Daily standup then @pr watch", skills),
+    ).toEqual(["Daily standup", "PR Watch"]);
+    expect(extractExpandedSkillNames("Plain prompt without skill refs", skills)).toEqual([]);
   });
 });

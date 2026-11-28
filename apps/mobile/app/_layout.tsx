@@ -62,6 +62,7 @@ import { loadAppearancePreference, mobileTokens } from "../lib/appearance/appear
 import { capTextScaling } from "../lib/appearance/text-scale";
 import { replaceWithSignIn } from "../lib/auth/auth-routing";
 import { useReferral } from "../lib/billing/referral";
+import { ChatReferencesProvider } from "../lib/board/chat-references";
 import { AvatarScreenFocus } from "../lib/bots/avatar-life";
 import { CallKeyboardContext } from "../lib/calls/call-keyboard-context";
 import { useCallActive } from "../lib/calls/call-session";
@@ -285,7 +286,7 @@ function ChatContentProviders({
                 <CommitChecksContext.Provider value={commitChecksSource}>
                   <MarkdownCopyProvider copy={checksCopy}>
                     <CommitChecksLive enabled={session !== null} />
-                    {children}
+                    <ChatReferencesProvider>{children}</ChatReferencesProvider>
                   </MarkdownCopyProvider>
                 </CommitChecksContext.Provider>
               </OpenPageContext.Provider>

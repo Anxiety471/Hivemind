@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { SecretStoreUnavailableError } from "@rakazo/adapter-kit";
-import type { CommitCheckState } from "@rakazo/contracts";
+import { recordTicketIssueState, recordTicketPullRequestState } from "@rakazo/adapters";
+import type { CommitCheckState, TicketIssueState, TicketPullRequestState } from "@rakazo/contracts";
 import type { CommitCheckReport, PullRequestHeadReport } from "@rakazo/db";
 import { recordCommitCheck, recordPullRequestHead } from "@rakazo/db";
 import { bestEffort } from "@rakazo/logging";
@@ -258,6 +259,35 @@ export function formatGithubEventPrompt(event: string, payload: Record<string, u
   return githubEventMetadataPrompt(event, githubDeliveryMetadata(event, payload));
 }
 
+/** The state a pull request event leaves its pull request in, for tickets that link it. */
+export function githubPullRequestState(
+  event: string,
+  payload: Record<string, unknown>,
+): { url: string; state: TicketPullRequestState } | null {
+  if (event !== "pull_request") return null;
+  const pullRequest = record(payload.pull_request);
+  const url = pullRequest?.html_url;
+  if (typeof url !== "string") return null;
+  if (payload.action === "closed") {
+    return { url, state: pullRequest?.merged === true ? "merged" : "closed" };
+  }
+  if (payload.action === "reopened") return { url, state: "open" };
+  return null;
+}
+
+/** The state an issues event leaves its issue in, for tickets that link it. */
+export function githubIssueState(
+  event: string,
+  payload: Record<string, unknown>,
+): { url: string; state: TicketIssueState } | null {
+  if (event !== "issues") return null;
+  const url = record(payload.issue)?.html_url;
+  if (typeof url !== "string") return null;
+  if (payload.action === "closed") return { url, state: "closed" };
+  if (payload.action === "reopened") return { url, state: "open" };
+  return null;
+}
+
 export function mountGithubWebhookRoute(
   app: Hono,
   deps: WebhookDeps,
@@ -301,6 +331,15 @@ export function mountGithubWebhookRoute(
         : text;
     const payload = parseWebhookPayload(body, contentType);
     const githubEvent = githubEventName(c.req.header("x-github-event"));
+
+    // Tickets in the bot's Space follow the pull requests and issues they link, with or without a
+    // routine.
+    const pullRequest = githubPullRequestState(githubEvent, payload);
+    if (pullRequest) {
+      await recordTicketPullRequestState(deps, { spaceId: target.bot.spaceId, ...pullRequest });
+    }
+    const issue = githubIssueState(githubEvent, payload);
+    if (issue) await recordTicketIssueState(deps, { spaceId: target.bot.spaceId, ...issue });
     // Checks are recorded for every bot on the repository, before a bot without routines ignores it.
     await recordGithubCommitChecks(deps, target.bot.spaceId, githubEvent, payload);
 

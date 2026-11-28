@@ -79,10 +79,16 @@ export function FilePreviewPane({ artifactId, backTo }: { artifactId: string; ba
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-body font-medium">{file?.name ?? null}</h2>
           {file ? (
-            <p className="flex gap-2 truncate text-label text-muted-foreground">
-              <span>{file.mimeType}</span>
-              <span>{formatFileSize(file.size)}</span>
-            </p>
+            <div className="flex flex-col gap-0.5">
+              <p className="flex flex-wrap gap-2 truncate text-label text-muted-foreground">
+                <span>{file.mimeType}</span>
+                <span>{formatFileSize(file.size)}</span>
+                {file.slug ? <span className="font-mono">{file.slug}</span> : null}
+              </p>
+              {file.description ? (
+                <p className="truncate text-body-sm text-muted-foreground">{file.description}</p>
+              ) : null}
+            </div>
           ) : null}
         </div>
         {file ? (

@@ -18,6 +18,7 @@ import {
   MAX_TOOL_ID_LENGTH,
   TOOL_SEARCH_LIMIT,
 } from "./lazy-tool-catalog.tool-definition.js";
+import { rankSearchItems } from "./tool-search.js";
 
 export {
   CATALOG_EXECUTE,
@@ -153,7 +154,7 @@ export function searchCatalog(
   const limit = Number.isFinite(requested)
     ? Math.max(1, Math.min(TOOL_SEARCH_LIMIT, Math.trunc(requested)))
     : TOOL_SEARCH_LIMIT;
-  const ranked = rankCatalogEntries(scoped, query, limit);
+  const ranked = rankCatalogEntries(scoped, typedQuery, limit);
   const hits = ranked.hits.map((entry) => ({
     id: entry.id,
     name: entry.tool.name,
@@ -174,30 +175,26 @@ export function rankCatalogEntries(
   query: string,
   limit: number,
 ): { hits: CatalogEntry[]; complete: boolean } {
-  const words = searchWords(query);
-  const score = (inside: boolean) =>
-    entries.map((entry) => ({ entry, ...catalogScore(entry, query, words, inside) }));
-  let scored = score(false);
-  // Rank on the words that matched before the cap, so a tool that matches every word is
-  // not pushed out by tools that match one word and sort earlier by name.
-  let bestMatched = Math.max(0, ...scored.map(({ matched }) => matched));
-  // Matches inside a word ("mail" in gmail) count only when nothing matches every word at a
-  // word start; otherwise "tool_0" would also find tool_10.
-  if (bestMatched < words.length) {
-    scored = score(true);
-    bestMatched = Math.max(0, ...scored.map(({ matched }) => matched));
-  }
-  const hits = scored
-    .filter(({ matched }) => matched > 0 && matched === bestMatched)
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        left.entry.tool.name.localeCompare(right.entry.tool.name) ||
-        left.entry.id.localeCompare(right.entry.id),
-    )
-    .slice(0, limit)
-    .map(({ entry }) => entry);
-  return { hits, complete: bestMatched === words.length };
+  const { hits, complete } = rankSearchItems(
+    entries.map((entry) => {
+      const shortName = catalogShortName(entry);
+      const props = (entry.tool.inputSchema?.properties ?? {}) as Record<string, unknown>;
+      return {
+        item: entry,
+        name: entry.tool.name,
+        aliases: shortName !== entry.tool.name ? [shortName] : undefined,
+        group: entry.group,
+        params: Object.keys(props),
+        description: entry.tool.description,
+      };
+    }),
+    query,
+    {
+      limit,
+      tieBreak: (leftName, rightName) => leftName.localeCompare(rightName),
+    },
+  );
+  return { hits, complete };
 }
 
 /** Exact label first; a model often capitalizes a source name ("Linear" for "linear"). */
@@ -299,10 +296,7 @@ export function resolveCatalogCall(
   };
 }
 
-export function parseConnectorToolArgs(
-  inputSchema: Record<string, unknown>,
-  args: Record<string, unknown>,
-): Record<string, unknown> {
+export function compileConnectorToolArgsSchema(inputSchema: Record<string, unknown>) {
   // Zod's fromJSONSchema currently builds loose records for patternProperties and
   // skips additionalProperties: false, so reject that combination instead of
   // letting non-matching keys reach connector execution.
@@ -311,7 +305,14 @@ export function parseConnectorToolArgs(
       "Tool schema is unsupported: patternProperties with additionalProperties false",
     );
   }
-  const schema = z.fromJSONSchema(hoistPointerRefs(inputSchema) as never);
+  return z.fromJSONSchema(hoistPointerRefs(inputSchema) as never);
+}
+
+export function parseConnectorToolArgs(
+  inputSchema: Record<string, unknown>,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const schema = compileConnectorToolArgsSchema(inputSchema);
   const parsed = schema.safeParse(args);
   if (!parsed.success) {
     throw new Error(`Tool arguments are invalid: ${z.prettifyError(parsed.error)}`);
@@ -485,51 +486,6 @@ function listNames(entries: CatalogEntry[]): string[] {
   );
 }
 
-function searchWords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean);
-}
-
 function isExactName(entry: CatalogEntry, query: string): boolean {
   return entry.tool.name.toLowerCase() === query || catalogShortName(entry).toLowerCase() === query;
-}
-
-/**
- * Score each query word on its best field: a name word outranks the source, which outranks
- * the description. A word matches the start of a word in that field, so "project" finds
- * list_projects, or with inside set anywhere in one. An exact tool name ranks above everything.
- */
-function catalogScore(
-  entry: CatalogEntry,
-  query: string,
-  words: string[],
-  inside: boolean,
-): { matched: number; score: number } {
-  if (isExactName(entry, query)) return { matched: words.length, score: Number.MAX_SAFE_INTEGER };
-  const fields = [
-    { words: searchWords(`${entry.tool.name} ${catalogShortName(entry)}`), weight: 3 },
-    { words: searchWords(entry.group), weight: 2 },
-    { words: searchWords(entry.tool.description), weight: 1 },
-  ];
-  let matched = 0;
-  let score = 0;
-  for (const word of words) {
-    const weight = Math.max(
-      0,
-      ...fields
-        .filter((field) =>
-          field.words.some((candidate) =>
-            inside ? candidate.includes(word) : candidate.startsWith(word),
-          ),
-        )
-        .map((field) => field.weight),
-    );
-    if (weight > 0) {
-      matched += 1;
-      score += weight;
-    }
-  }
-  return { matched, score };
 }

@@ -208,6 +208,7 @@ const file: DriveFile = {
   folderId: null,
   source: "upload",
   name: "report.md",
+  slug: null,
   description: null,
   mimeType: "text/markdown",
   size: 6,
@@ -223,6 +224,7 @@ const file: DriveFile = {
 const folder: FileFolder = {
   id: "folder-1",
   parentId: null,
+  botId: null,
   name: "Reports",
   trashedAt: null,
   createdAt: "2026-11-22T10:00:00.000Z",

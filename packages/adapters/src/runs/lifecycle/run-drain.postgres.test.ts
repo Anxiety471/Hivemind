@@ -409,8 +409,19 @@ describePostgres("a stopping process and the runs it is executing (PostgreSQL)",
         replayed: history?.steps.flatMap((step) => step?.calls.map((call) => call.arguments)),
       };
     };
+    /** A reply's step blocks: one per step, with the label, outcome and timing the UI reads. */
+    const stepBlocks = (steps: number[]) =>
+      steps.map((step) => ({
+        label: "List files",
+        detail: `step-${step}`,
+        count: 1,
+        outcomes: { succeeded: 1 },
+        durationMs: expect.any(Number),
+        startedAtMs: expect.any(Number),
+        status: "done",
+      }));
     const everyStep = {
-      steps: [{ label: "List files", count: 3, outcomes: { succeeded: 3 } }],
+      steps: stepBlocks([0, 1, 2]),
       replayed: ["step-0", "step-1", "step-2"].map((path) => JSON.stringify({ path })),
     };
 
@@ -514,7 +525,7 @@ describePostgres("a stopping process and the runs it is executing (PostgreSQL)",
       expect(await repliesOf(run.id)).toBe(1);
       // Without a saved reply the resumed attempt keeps only its own steps, as before.
       expect(await replyOf(run.id)).toEqual({
-        steps: [{ label: "List files", count: 2, outcomes: { succeeded: 2 } }],
+        steps: stepBlocks([1, 2]),
         replayed: everyStep.replayed.slice(1),
       });
     });

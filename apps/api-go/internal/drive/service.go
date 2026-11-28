@@ -70,6 +70,7 @@ var (
 type FileFolder struct {
 	ID        string  `json:"id"`
 	ParentID  *string `json:"parentId"`
+	BotID     *string `json:"botId"`
 	Name      string  `json:"name"`
 	TrashedAt *string `json:"trashedAt"`
 	CreatedAt string  `json:"createdAt"`
@@ -91,6 +92,7 @@ type DriveFile struct {
 	FolderID     *string `json:"folderId"`
 	Source       string  `json:"source"`
 	Name         string  `json:"name"`
+	Slug         *string `json:"slug"`
 	Description  *string `json:"description"`
 	MimeType     string  `json:"mimeType"`
 	Size         int64   `json:"size"`
@@ -107,6 +109,7 @@ type DriveFile struct {
 type DriveFolderTreeEntry struct {
 	ID       string  `json:"id"`
 	ParentID *string `json:"parentId"`
+	BotID    *string `json:"botId"`
 	Name     string  `json:"name"`
 }
 
@@ -142,9 +145,20 @@ type UploadParams struct {
 	RunID       *string
 	Source      string
 	Name        string
+	Slug        *string
 	Description *string
 	MimeType    string
 	ClientNonce *string
+}
+
+// UpdateFileInput carries optional mutations for files.update.
+type UpdateFileInput struct {
+	FileID         string
+	Name           *string
+	HasDescription bool
+	Description    *string
+	HasSlug        bool
+	Slug           *string
 }
 
 // ListInput filters files.list queries.
@@ -184,6 +198,7 @@ type LegacyArtifactCreateInput struct {
 	FolderID      *string `json:"folderId"`
 	Source        string  `json:"source"`
 	Name          string  `json:"name"`
+	Slug          *string `json:"slug"`
 	Description   *string `json:"description"`
 	MimeType      string  `json:"mimeType"`
 	ContentBase64 string  `json:"contentBase64"`
@@ -215,9 +230,22 @@ type Service struct {
 	db             *db.DB
 	store          filestore.Store
 	signals        *effects.Notifier
+	organizer      *Organizer
 	maxFileBytes   int64
 	maxLegacyBytes int64
 	logger         *slog.Logger
+}
+
+// SetOrganizer attaches a background upload organizer to the Drive service.
+func (s *Service) SetOrganizer(organizer *Organizer) {
+	s.organizer = organizer
+}
+
+// Wait blocks until any in-flight background upload organization jobs finish.
+func (s *Service) Wait() {
+	if s != nil && s.organizer != nil {
+		s.organizer.Wait()
+	}
 }
 
 // NewService constructs a Drive Service.
@@ -300,6 +328,127 @@ func (s *Service) publishFilesChange(spaceID string) {
 	}
 }
 
+func isHiddenDriveMime(mimeType string) bool {
+	return mimeType == "text/html;profile=mcp-app" || strings.HasSuffix(mimeType, ";profile=step-screenshot")
+}
+
+func ensureBotFolderTx(ctx context.Context, tx pgx.Tx, spaceID, userID, botID string) (string, error) {
+	if spaceID == "" || botID == "" {
+		return "", nil
+	}
+	var existingID string
+	err := tx.QueryRow(ctx, `
+		SELECT id FROM "file_folders"
+		WHERE "spaceId" = $1 AND "botId" = $2 AND "trashedAt" IS NULL
+		LIMIT 1
+	`, spaceID, botID).Scan(&existingID)
+	if err == nil {
+		return existingID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+
+	var botName string
+	err = tx.QueryRow(ctx, `
+		SELECT name FROM "bots" WHERE id = $1 AND "spaceId" = $2 LIMIT 1
+	`, botID, spaceID).Scan(&botName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+
+	baseName := filepolicy.SanitizeFolderName(botName, "Bot")
+	var adoptID string
+	adoptLookupErr := tx.QueryRow(ctx, `
+		SELECT id FROM "file_folders"
+		WHERE "spaceId" = $1
+		  AND "parentId" IS NULL
+		  AND "botId" IS NULL
+		  AND "trashedAt" IS NULL
+		  AND LOWER(name) = LOWER($2)
+		LIMIT 1
+	`, spaceID, baseName).Scan(&adoptID)
+	if adoptLookupErr == nil {
+		if _, spErr := tx.Exec(ctx, `SAVEPOINT sp_bot_adopt`); spErr != nil {
+			return "", spErr
+		}
+		tag, updErr := tx.Exec(ctx, `
+			UPDATE "file_folders"
+			SET "botId" = $2, "updatedAt" = NOW()
+			WHERE id = $1 AND "botId" IS NULL AND "trashedAt" IS NULL
+		`, append([]any{adoptID}, db.Data(botID)...)...)
+		if updErr == nil {
+			if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT sp_bot_adopt`); relErr != nil {
+				return "", relErr
+			}
+			if tag.RowsAffected() > 0 {
+				return adoptID, nil
+			}
+		} else {
+			_, _ = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT sp_bot_adopt`)
+			var pgErr *pgconn.PgError
+			if !errors.As(updErr, &pgErr) || pgErr.Code != "23505" {
+				return "", updErr
+			}
+		}
+		if rErr := tx.QueryRow(ctx, `
+			SELECT id FROM "file_folders"
+			WHERE "spaceId" = $1 AND "botId" = $2 AND "trashedAt" IS NULL
+			LIMIT 1
+		`, spaceID, botID).Scan(&existingID); rErr == nil {
+			return existingID, nil
+		}
+	} else if !errors.Is(adoptLookupErr, pgx.ErrNoRows) {
+		return "", adoptLookupErr
+	}
+
+	prefixRunes := []rune(baseName)
+	if len(prefixRunes) > 240 {
+		prefixRunes = prefixRunes[:240]
+	}
+	prefix := strings.TrimSpace(string(prefixRunes))
+	if prefix == "" {
+		prefix = "Bot"
+	}
+
+	for attempt := 1; attempt <= 10; attempt++ {
+		candidate := baseName
+		if attempt > 1 {
+			candidate = fmt.Sprintf("%s (%d)", prefix, attempt)
+		}
+		newID := effects.NewID()
+		if _, spErr := tx.Exec(ctx, `SAVEPOINT sp_bot_folder`); spErr != nil {
+			return "", spErr
+		}
+		_, insErr := tx.Exec(ctx, `
+			INSERT INTO "file_folders" (id, "spaceId", "parentId", "botId", "createdByUserId", name, "createdAt", "updatedAt")
+			VALUES ($1, $2, NULL, $3, $4, $5, NOW(), NOW())
+		`, db.Data(newID, spaceID, botID, userID, candidate)...)
+		if insErr == nil {
+			if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT sp_bot_folder`); relErr != nil {
+				return "", relErr
+			}
+			return newID, nil
+		}
+		_, _ = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT sp_bot_folder`)
+		var pgErr *pgconn.PgError
+		if !errors.As(insErr, &pgErr) || pgErr.Code != "23505" {
+			return "", insErr
+		}
+		if rErr := tx.QueryRow(ctx, `
+			SELECT id FROM "file_folders"
+			WHERE "spaceId" = $1 AND "botId" = $2 AND "trashedAt" IS NULL
+			LIMIT 1
+		`, spaceID, botID).Scan(&existingID); rErr == nil {
+			return existingID, nil
+		}
+	}
+	return "", nil
+}
+
 // UploadStream validates metadata and sniffed bytes, streams the upload to the
 // encrypted blob store in constant memory, and inserts an Artifact record.
 func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params UploadParams, src io.Reader) (DriveFile, *orpc.Error) {
@@ -333,10 +482,21 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 		}
 	}
 	folderID := trimOpt(params.FolderID)
+	hadExplicitFolder := folderID != nil
 	botID := trimOpt(params.BotID)
 	groupID := trimOpt(params.GroupID)
 	runID := trimOpt(params.RunID)
 	clientNonce := trimOpt(params.ClientNonce)
+	var slug string
+	if rawSlug := trimOpt(params.Slug); rawSlug != nil {
+		normalizedSlug, slugErr := filepolicy.NormalizeSlug(*rawSlug)
+		if slugErr != nil {
+			return DriveFile{}, orpc.BadRequest(slugErr.Error())
+		}
+		slug = normalizedSlug
+	} else {
+		slug = filepolicy.SlugifyFilename(name)
+	}
 
 	// Peek header bytes to validate image/PDF magic signatures and prevent script polyglots
 	// before streaming the whole upload.
@@ -433,6 +593,7 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 
 	var created DriveFile
 	var txFailure *orpc.Error
+	var replayed bool
 	err = s.db.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		if clientNonce != nil {
 			found, ok, findErr := s.findByClientNonceTx(ctx, tx, actor, *clientNonce)
@@ -441,9 +602,21 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 			}
 			if ok {
 				created = found
+				replayed = true
 				// Racing retry already persisted its own blob/row; remove the duplicate blob.
 				_ = s.store.Remove(context.Background(), actor.SpaceID, blob.ID)
 				return nil
+			}
+		}
+
+		effectiveFolderID := folderID
+		if effectiveFolderID == nil && source == "bot" && botID != nil && !isHiddenDriveMime(mimeType) {
+			botFolderID, folderErr := ensureBotFolderTx(ctx, tx, actor.SpaceID, actor.UserID, *botID)
+			if folderErr != nil {
+				return folderErr
+			}
+			if botFolderID != "" {
+				effectiveFolderID = &botFolderID
 			}
 		}
 
@@ -464,7 +637,7 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 			ORDER BY version DESC, "createdAt" DESC
 			LIMIT 1
 			FOR UPDATE
-		`, actor.SpaceID, folderID, botID, name, groupID).Scan(&matchID, &matchRoot)
+		`, actor.SpaceID, effectiveFolderID, botID, name, groupID).Scan(&matchID, &matchRoot)
 
 		var rootID *string
 		nextVersion := 1
@@ -492,18 +665,18 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 		err := tx.QueryRow(ctx, `
 			INSERT INTO "artifacts" (
 				id, "spaceId", "botId", "groupId", "folderId", "userId", "runId",
-				source, name, description, "mimeType", size, hash, "storageKey",
+				source, name, slug, description, "mimeType", size, hash, "storageKey",
 				"rootArtifactId", version, standalone, "clientNonce", "createdAt", "updatedAt"
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7,
-				$8, $9, $10, $11, $12, $13, $14,
-				$15, $16, false, $17, NOW(), NOW()
+				$8, $9, $10, $11, $12, $13, $14, $15,
+				$16, $17, false, $18, NOW(), NOW()
 			)
 			RETURNING "createdAt", "updatedAt", "trashedAt"
 		`,
-			newID, actor.SpaceID, botID, groupID, folderID, actor.UserID, runID,
-			source, name, desc, mimeType, int(blob.SizeBytes), blob.Hash, blob.ID,
-			rootID, nextVersion, clientNonce,
+			db.Data(newID, actor.SpaceID, botID, groupID, effectiveFolderID, actor.UserID, runID,
+				source, name, slug, desc, mimeType, int(blob.SizeBytes), blob.Hash, blob.ID,
+				rootID, nextVersion, clientNonce)...,
 		).Scan(&createdAt, &updatedAt, &trashedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "Upload conflict"); pgErr != nil {
@@ -518,9 +691,10 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 			BotID:        botID,
 			GroupID:      groupID,
 			RunID:        runID,
-			FolderID:     folderID,
+			FolderID:     effectiveFolderID,
 			Source:       source,
 			Name:         name,
+			Slug:         &slug,
 			Description:  desc,
 			MimeType:     mimeType,
 			Size:         blob.SizeBytes,
@@ -544,12 +718,15 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 		return DriveFile{}, txFailure
 	}
 	s.publishFilesChange(actor.SpaceID)
+	if !replayed && s.organizer != nil && (source == "upload" || (source == "chat" && runID == nil)) {
+		s.organizer.Enqueue(actor, created.ID, hadExplicitFolder)
+	}
 	return created, nil
 }
 
 func (s *Service) findByClientNonceTx(ctx context.Context, tx pgx.Tx, actor db.Actor, nonce string) (DriveFile, bool, error) {
 	row := tx.QueryRow(ctx, `
-		SELECT a.id, a."botId", a."groupId", a."runId", a."folderId", a.source, a.name, a.description,
+		SELECT a.id, a."botId", a."groupId", a."runId", a."folderId", a.source, a.name, a.slug, a.description,
 			   a."mimeType", a.size, a.hash, a.version, a."trashedAt", a."createdAt", a."updatedAt",
 			   COALESCE(a."rootArtifactId", a.id) AS family_id
 		FROM "artifacts" a
@@ -685,7 +862,7 @@ func scanDriveFile(s rowScanner) (DriveFile, string, error) {
 	var familyID string
 	err := s.Scan(
 		&f.ID, &f.BotID, &f.GroupID, &f.RunID, &f.FolderID,
-		&f.Source, &f.Name, &f.Description, &f.MimeType, &sizeInt,
+		&f.Source, &f.Name, &f.Slug, &f.Description, &f.MimeType, &sizeInt,
 		&f.Hash, &f.Version, &trashedAt, &createdAt, &updatedAt,
 		&familyID,
 	)
@@ -741,6 +918,7 @@ func (s *Service) List(ctx context.Context, actor db.Actor, input ListInput) (Li
 		}
 	}
 	folderID := trimOpt(input.FolderID)
+	// writeaudit:dynamic input.Query is a request field, not a pgx method value
 	queryStr := strings.TrimSpace(input.Query)
 	category := strings.TrimSpace(input.Category)
 	if category == "" {
@@ -854,12 +1032,13 @@ func (s *Service) listFoldersTx(ctx context.Context, tx pgx.Tx, spaceID string, 
 	}
 
 	sqlQuery := fmt.Sprintf(`
-		SELECT id, "parentId", name, "trashedAt", "createdAt", "updatedAt"
+		SELECT id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
 		FROM "file_folders"
 		WHERE %s
 		ORDER BY LOWER(name) ASC, id ASC
 	`, strings.Join(conds, " AND "))
 
+	// writeaudit:dynamic read: the WHERE clause is built from fixed fragments; args are filters
 	rows, err := tx.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
@@ -871,7 +1050,7 @@ func (s *Service) listFoldersTx(ctx context.Context, tx pgx.Tx, spaceID string, 
 		var f FileFolder
 		var trashedAt *time.Time
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&f.ID, &f.ParentID, &f.Name, &trashedAt, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.ParentID, &f.BotID, &f.Name, &trashedAt, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		f.TrashedAt = formatOptTime(trashedAt)
@@ -906,6 +1085,7 @@ func (s *Service) listFilesTx(
 	} else {
 		cteConds = append(cteConds, `a."trashedAt" IS NULL`)
 	}
+	cteConds = append(cteConds, `a."mimeType" <> 'text/html;profile=mcp-app' AND a."mimeType" NOT LIKE '%%;profile=step-screenshot'`)
 
 	var outerConds []string
 	if !input.Trashed && !input.AllFolders {
@@ -925,7 +1105,7 @@ func (s *Service) listFilesTx(
 	if queryStr != "" {
 		args = append(args, "%"+escapeLike(queryStr)+"%")
 		p := len(args)
-		outerConds = append(outerConds, fmt.Sprintf(`(l.name ILIKE $%d ESCAPE '\' OR COALESCE(l.description, '') ILIKE $%d ESCAPE '\')`, p, p))
+		outerConds = append(outerConds, fmt.Sprintf(`(l.name ILIKE $%d ESCAPE '\' OR COALESCE(l.description, '') ILIKE $%d ESCAPE '\' OR COALESCE(l.slug, '') ILIKE $%d ESCAPE '\')`, p, p, p))
 	}
 
 	switch category {
@@ -996,7 +1176,7 @@ func (s *Service) listFilesTx(
 		WITH families AS (
 			SELECT DISTINCT ON (COALESCE(a."rootArtifactId", a.id))
 				a.id, a."botId", a."groupId", a."runId", a."folderId", a.source,
-				a.name, a.description, a."mimeType", a.size, a.hash, a.version,
+				a.name, a.slug, a.description, a."mimeType", a.size, a.hash, a.version,
 				a."trashedAt", a."createdAt", a."updatedAt",
 				COALESCE(a."rootArtifactId", a.id) AS family_id
 			FROM "artifacts" a
@@ -1010,7 +1190,7 @@ func (s *Service) listFilesTx(
 			GROUP BY 1
 		)
 		SELECT l.id, l."botId", l."groupId", l."runId", l."folderId", l.source,
-			   l.name, l.description, l."mimeType", l.size, l.hash, l.version,
+			   l.name, l.slug, l.description, l."mimeType", l.size, l.hash, l.version,
 			   l."trashedAt", l."createdAt", l."updatedAt",
 			   c.version_count, l.updated_ts
 		FROM (
@@ -1023,6 +1203,7 @@ func (s *Service) listFilesTx(
 		LIMIT $%d
 	`, strings.Join(cteConds, " AND "), outerWhere, orderBy, limitParam)
 
+	// writeaudit:dynamic read: the CTE/WHERE/order fragments are fixed; args are filters
 	rows, err := tx.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, nil, orpc.Internal()
@@ -1042,7 +1223,7 @@ func (s *Service) listFilesTx(
 		var versionCount int
 		if err := rows.Scan(
 			&f.ID, &f.BotID, &f.GroupID, &f.RunID, &f.FolderID, &f.Source,
-			&f.Name, &f.Description, &f.MimeType, &sizeInt, &f.Hash, &f.Version,
+			&f.Name, &f.Slug, &f.Description, &f.MimeType, &sizeInt, &f.Hash, &f.Version,
 			&trashedAt, &createdAt, &updatedAt,
 			&versionCount, &updatedTS,
 		); err != nil {
@@ -1093,7 +1274,7 @@ func (s *Service) GetFile(ctx context.Context, actor db.Actor, fileID string) (D
 	err := s.db.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
 			SELECT a.id, a."botId", a."groupId", a."runId", a."folderId", a.source,
-				   a.name, a.description, a."mimeType", a.size, a.hash, a.version,
+				   a.name, a.slug, a.description, a."mimeType", a.size, a.hash, a.version,
 				   a."trashedAt", a."createdAt", a."updatedAt",
 				   COALESCE(a."rootArtifactId", a.id) AS family_id
 			FROM "artifacts" a
@@ -1130,7 +1311,7 @@ func (s *Service) FolderTree(ctx context.Context, actor db.Actor) ([]DriveFolder
 	out := []DriveFolderTreeEntry{}
 	err := s.db.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, "parentId", name
+			SELECT id, "parentId", "botId", name
 			FROM "file_folders"
 			WHERE "spaceId" = $1 AND "trashedAt" IS NULL
 			ORDER BY LOWER(name) ASC, id ASC
@@ -1141,7 +1322,7 @@ func (s *Service) FolderTree(ctx context.Context, actor db.Actor) ([]DriveFolder
 		defer rows.Close()
 		for rows.Next() {
 			var entry DriveFolderTreeEntry
-			if err := rows.Scan(&entry.ID, &entry.ParentID, &entry.Name); err != nil {
+			if err := rows.Scan(&entry.ID, &entry.ParentID, &entry.BotID, &entry.Name); err != nil {
 				return err
 			}
 			out = append(out, entry)
@@ -1193,6 +1374,7 @@ func (s *Service) Changes(ctx context.Context, actor db.Actor, cursorRaw string,
 		args = append(args, limit+1)
 		limitParam := len(args)
 
+		// writeaudit:dynamic read: cursor/limit fragments are fixed literals; args are filters
 		rows, err := tx.Query(ctx, fmt.Sprintf(`
 			WITH combined AS (
 				SELECT 'folder'::text AS kind, id, "parentId", name, "trashedAt", "updatedAt",
@@ -1205,6 +1387,8 @@ func (s *Service) Changes(ctx context.Context, actor db.Actor, cursorRaw string,
 					   a.hash, a.size, a."mimeType", a.version
 				FROM "artifacts" a
 				WHERE a."spaceId" = $1
+				  AND a."mimeType" <> 'text/html;profile=mcp-app'
+				  AND a."mimeType" NOT LIKE '%%;profile=step-screenshot'
 				ORDER BY COALESCE(a."rootArtifactId", a.id), a.version DESC, a."createdAt" DESC
 			)
 			SELECT kind, id, "parentId", name, "trashedAt", "updatedAt", hash, size, "mimeType", version
@@ -1299,7 +1483,7 @@ func (s *Service) CreateFolder(ctx context.Context, actor db.Actor, parentID *st
 			INSERT INTO "file_folders" (id, "spaceId", "parentId", "createdByUserId", name, "createdAt", "updatedAt")
 			VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
 			RETURNING "trashedAt", "createdAt", "updatedAt"
-		`, newID, actor.SpaceID, pID, actor.UserID, name).Scan(&trashedAt, &createdAt, &updatedAt)
+		`, db.Data(newID, actor.SpaceID, pID, actor.UserID, name)...).Scan(&trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists here"); pgErr != nil {
 				logicErr = pgErr
@@ -1346,8 +1530,8 @@ func (s *Service) RenameFolder(ctx context.Context, actor db.Actor, folderID, ra
 			UPDATE "file_folders"
 			SET name = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2 AND "trashedAt" IS NULL
-			RETURNING id, "parentId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, name).Scan(&out.ID, &out.ParentID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
+		`, append([]any{folderID, actor.SpaceID}, db.Data(name)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			logicErr = orpc.NotFound("Folder not found")
 			return nil
@@ -1447,8 +1631,8 @@ func (s *Service) MoveFolder(ctx context.Context, actor db.Actor, folderID strin
 			UPDATE "file_folders"
 			SET "parentId" = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2
-			RETURNING id, "parentId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, pID).Scan(&out.ID, &out.ParentID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
+		`, append([]any{folderID, actor.SpaceID}, db.Data(pID)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists here"); pgErr != nil {
 				logicErr = pgErr
@@ -1551,8 +1735,8 @@ func (s *Service) RestoreFolder(ctx context.Context, actor db.Actor, folderID st
 			UPDATE "file_folders"
 			SET "trashedAt" = NULL, "parentId" = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2
-			RETURNING id, "parentId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, nextParent).Scan(&out.ID, &out.ParentID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
+		`, append([]any{folderID, actor.SpaceID}, db.Data(nextParent)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists in the destination"); pgErr != nil {
 				logicErr = pgErr
@@ -1682,12 +1866,12 @@ func (s *Service) RenameFile(ctx context.Context, actor db.Actor, fileID, rawNam
 		if _, err := tx.Exec(ctx, `
 			UPDATE "artifacts" SET name = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, name); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(name)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `
 			SELECT a.id, a."botId", a."groupId", a."runId", a."folderId", a.source,
-				   a.name, a.description, a."mimeType", a.size, a.hash, a.version,
+				   a.name, a.slug, a.description, a."mimeType", a.size, a.hash, a.version,
 				   a."trashedAt", a."createdAt", a."updatedAt",
 				   COALESCE(a."rootArtifactId", a.id) AS family_id
 			FROM "artifacts" a WHERE a.id = $1 AND a."spaceId" = $2
@@ -1708,6 +1892,115 @@ func (s *Service) RenameFile(ctx context.Context, actor db.Actor, fileID, rawNam
 	})
 	if err != nil {
 		s.logger.Error("files.rename failed", "error", err)
+		return DriveFile{}, orpc.Internal()
+	}
+	if notFound {
+		return DriveFile{}, orpc.NotFound("File not found")
+	}
+	s.publishFilesChange(actor.SpaceID)
+	return out, nil
+}
+
+// UpdateFile updates a file family's name, description, and/or searchable slug.
+func (s *Service) UpdateFile(ctx context.Context, actor db.Actor, input UpdateFileInput) (DriveFile, *orpc.Error) {
+	if s.db == nil {
+		return DriveFile{}, orpc.Unavailable()
+	}
+	var nextName *string
+	if input.Name != nil {
+		name, err := filepolicy.ValidateDriveName(*input.Name)
+		if err != nil {
+			return DriveFile{}, orpc.BadRequest(err.Error())
+		}
+		nextName = &name
+	}
+	var nextDesc *string
+	if input.HasDescription && input.Description != nil {
+		trimmed := strings.TrimSpace(*input.Description)
+		if trimmed != "" {
+			if len([]rune(trimmed)) > 280 {
+				return DriveFile{}, orpc.BadRequest("Description exceeds 280 characters")
+			}
+			nextDesc = &trimmed
+		}
+	}
+	var nextSlug *string
+	if input.HasSlug && input.Slug != nil {
+		trimmed := strings.TrimSpace(*input.Slug)
+		if trimmed != "" {
+			normalized, err := filepolicy.NormalizeSlug(trimmed)
+			if err != nil {
+				return DriveFile{}, orpc.BadRequest(err.Error())
+			}
+			nextSlug = &normalized
+		}
+	}
+
+	var out DriveFile
+	var notFound bool
+	err := s.db.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		var rootID *string
+		if err := tx.QueryRow(ctx, `
+			SELECT "rootArtifactId" FROM "artifacts"
+			WHERE id = $1 AND "spaceId" = $2 AND "trashedAt" IS NULL
+		`, input.FileID, actor.SpaceID).Scan(&rootID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				notFound = true
+				return nil
+			}
+			return err
+		}
+		familyID := input.FileID
+		if rootID != nil && *rootID != "" {
+			familyID = *rootID
+		}
+		setClauses := make([]string, 0, 4)
+		args := []any{actor.SpaceID, familyID}
+		if nextName != nil {
+			args = append(args, db.Data(*nextName)...)
+			setClauses = append(setClauses, fmt.Sprintf("name = $%d", len(args)))
+		}
+		if input.HasDescription {
+			args = append(args, db.Data(nextDesc)...)
+			setClauses = append(setClauses, fmt.Sprintf("description = $%d", len(args)))
+		}
+		if input.HasSlug {
+			args = append(args, db.Data(nextSlug)...)
+			setClauses = append(setClauses, fmt.Sprintf("slug = $%d", len(args)))
+		}
+		if len(setClauses) > 0 {
+			setClauses = append(setClauses, `"updatedAt" = NOW()`)
+			// writeaudit:dynamic build: fixed SET clauses carry db.Data payloads
+			if _, err := tx.Exec(ctx, fmt.Sprintf(`
+				UPDATE "artifacts" SET %s
+				WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
+			`, strings.Join(setClauses, ", ")), args...); err != nil {
+				return err
+			}
+		}
+
+		row := tx.QueryRow(ctx, `
+			SELECT a.id, a."botId", a."groupId", a."runId", a."folderId", a.source,
+				   a.name, a.slug, a.description, a."mimeType", a.size, a.hash, a.version,
+				   a."trashedAt", a."createdAt", a."updatedAt",
+				   COALESCE(a."rootArtifactId", a.id) AS family_id
+			FROM "artifacts" a WHERE a.id = $1 AND a."spaceId" = $2
+		`, input.FileID, actor.SpaceID)
+		f, fam, err := scanDriveFile(row)
+		if err != nil {
+			return err
+		}
+		var count int
+		_ = tx.QueryRow(ctx, `SELECT COUNT(*) FROM "artifacts" WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)`,
+			actor.SpaceID, fam).Scan(&count)
+		if count > f.VersionCount {
+			f.VersionCount = count
+		}
+		out = f
+		return nil
+	})
+	if err != nil {
+		s.logger.Error("files.update failed", "error", err)
 		return DriveFile{}, orpc.Internal()
 	}
 	if notFound {
@@ -1757,12 +2050,12 @@ func (s *Service) MoveFile(ctx context.Context, actor db.Actor, fileID string, f
 		if _, err := tx.Exec(ctx, `
 			UPDATE "artifacts" SET "folderId" = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, fID); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(fID)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `
 			SELECT a.id, a."botId", a."groupId", a."runId", a."folderId", a.source,
-				   a.name, a.description, a."mimeType", a.size, a.hash, a.version,
+				   a.name, a.slug, a.description, a."mimeType", a.size, a.hash, a.version,
 				   a."trashedAt", a."createdAt", a."updatedAt",
 				   COALESCE(a."rootArtifactId", a.id) AS family_id
 			FROM "artifacts" a WHERE a.id = $1 AND a."spaceId" = $2
@@ -1862,12 +2155,12 @@ func (s *Service) RestoreFile(ctx context.Context, actor db.Actor, fileID string
 			UPDATE "artifacts"
 			SET "trashedAt" = NULL, "folderId" = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, folderID); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(folderID)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `
 			SELECT a.id, a."botId", a."groupId", a."runId", a."folderId", a.source,
-				   a.name, a.description, a."mimeType", a.size, a.hash, a.version,
+				   a.name, a.slug, a.description, a."mimeType", a.size, a.hash, a.version,
 				   a."trashedAt", a."createdAt", a."updatedAt",
 				   COALESCE(a."rootArtifactId", a.id) AS family_id
 			FROM "artifacts" a WHERE a.id = $1 AND a."spaceId" = $2
@@ -2023,6 +2316,7 @@ func (s *Service) CreateBase64Artifact(ctx context.Context, actor db.Actor, inpu
 		FolderID:    input.FolderID,
 		Source:      source,
 		Name:        input.Name,
+		Slug:        input.Slug,
 		Description: input.Description,
 		MimeType:    input.MimeType,
 		ClientNonce: input.ClientNonce,
@@ -2045,31 +2339,22 @@ func (s *Service) CreateBase64Artifact(ctx context.Context, actor db.Actor, inpu
 }
 
 // GetBase64Artifact returns base64-encoded content for legacy artifacts.get / artifacts.getById callers.
-func (s *Service) GetBase64Artifact(ctx context.Context, actor db.Actor, artifactID string, botID, groupID *string) (LegacyArtifactContent, *orpc.Error) {
+func (s *Service) GetBase64Artifact(ctx context.Context, actor db.Actor, artifactID string, _, _ *string) (LegacyArtifactContent, *orpc.Error) {
 	if s.db == nil || s.store == nil {
 		return LegacyArtifactContent{}, orpc.Unavailable()
 	}
-	bID := trimOpt(botID)
-	gID := trimOpt(groupID)
 	var item LegacyArtifact
 	var storageKey string
 	var createdAt time.Time
 	err := s.db.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		args := []any{artifactID, actor.SpaceID}
-		targetCond := ""
-		if gID != nil {
-			args = append(args, *gID)
-			targetCond = ` AND "groupId" = $3`
-		} else if bID != nil {
-			args = append(args, *bID)
-			targetCond = ` AND "botId" = $3 AND "groupId" IS NULL`
-		}
 		return tx.QueryRow(ctx, `
 			SELECT id, "botId", "groupId", "runId", name, description, "mimeType", size, version, "createdAt", "storageKey"
 			FROM "artifacts"
-			WHERE id = $1 AND "spaceId" = $2 AND "trashedAt" IS NULL`+targetCond,
-			args...,
-		).Scan(&item.ID, &item.BotID, &item.GroupID, &item.RunID, &item.Name, &item.Description, &item.MimeType, &item.Size, &item.Version, &createdAt, &storageKey)
+			WHERE id = $1
+			  AND "spaceId" = $2
+			  AND "trashedAt" IS NULL
+			  AND "mimeType" NOT LIKE '%;profile=step-screenshot'
+		`, artifactID, actor.SpaceID).Scan(&item.ID, &item.BotID, &item.GroupID, &item.RunID, &item.Name, &item.Description, &item.MimeType, &item.Size, &item.Version, &createdAt, &storageKey)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return LegacyArtifactContent{}, orpc.NotFound("Artifact not found")

@@ -22,7 +22,6 @@ import { useLayoutEffect, useMemo, useRef } from "react";
 import { ArtifactFileCard } from "../../components/messages/ArtifactFileCard";
 import { PageBlockCard } from "../../components/pages/PageBlockCard";
 import { WindowChrome } from "../../components/WindowChrome";
-import { TRANSCRIPT_CONTENT_PADDING } from "../../lib/chat/transcript-layout";
 import { transcriptIsNearEnd } from "../../lib/chat/transcript-scroll";
 import { desktopBridge } from "../../lib/platform/desktop";
 import { useSpaceQueries } from "../../lib/query/query";
@@ -179,7 +178,8 @@ export function PeerMessagesOverlay({
             onScroll={(event) => {
               followingEnd.current = transcriptIsNearEnd(event.currentTarget);
             }}
-            className={`rk-scroll flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto py-5 md:py-6 ${TRANSCRIPT_CONTENT_PADDING}`}
+            // The full-screen dialog has no chat column to cap it, so center a readable 60rem one.
+            className="rk-scroll flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-5 md:px-[max(1.75rem,calc((100%_-_60rem)/2))] md:py-6"
           >
             {conversation.messages.map((peerMessage, index) => {
               const sent = peerMessage.direction === "sent";

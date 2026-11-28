@@ -163,4 +163,51 @@ describe("memory prompt budget", () => {
       omitted: [],
     });
   });
+
+  it("excludes cold archive documents from the prompt and budget", () => {
+    const { text, plan } = buildAgentMemoryPrompt([
+      doc("MEMORY.md", "# Bot\n\n- active", 2, "2026-08-15T12:00:00.000Z"),
+      doc("archive/2026-11.md", "- archived note", 3, "2026-08-16T12:00:00.000Z"),
+      {
+        scope: "user",
+        path: "archive/2026-10.md",
+        revision: 4,
+        updatedAt: "2026-08-17T12:00:00.000Z",
+        content: "- shared archive",
+      },
+    ]);
+
+    expect(text).toContain("# Bot");
+    expect(text).not.toContain("archived note");
+    expect(text).not.toContain("shared archive");
+    expect(plan.documents.map((entry) => entry.path)).toEqual(["MEMORY.md"]);
+    expect(plan.omitted).toEqual([]);
+  });
+
+  it("prefers Space-level USER.md and skips legacy per-bot USER.md when both exist", () => {
+    const withShared = buildAgentMemoryPrompt([
+      doc("USER.md", "- legacy per-bot fact", 5, "2026-08-16T12:00:00.000Z"),
+      {
+        scope: "user",
+        path: "USER.md",
+        revision: 2,
+        updatedAt: "2026-08-15T12:00:00.000Z",
+        content: "- canonical space user fact",
+      },
+    ]);
+
+    expect(withShared.text).toContain("canonical space user fact");
+    expect(withShared.text).not.toContain("legacy per-bot fact");
+    expect(withShared.plan.documents.map((entry) => `${entry.scope}:${entry.path}`)).toEqual([
+      "user:USER.md",
+    ]);
+
+    const legacyOnly = buildAgentMemoryPrompt([
+      doc("USER.md", "- legacy per-bot fact", 5, "2026-08-16T12:00:00.000Z"),
+    ]);
+    expect(legacyOnly.text).toContain("legacy per-bot fact");
+    expect(legacyOnly.plan.documents.map((entry) => `${entry.scope}:${entry.path}`)).toEqual([
+      "bot:USER.md",
+    ]);
+  });
 });

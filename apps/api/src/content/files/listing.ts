@@ -10,7 +10,7 @@ import type {
 } from "@rakazo/contracts";
 import { ATTACHMENT_ARCHIVE_MIME_TYPES, ATTACHMENT_DOCUMENT_MIME_TYPES } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
-import { Prisma } from "@rakazo/db";
+import { HIDDEN_ARTIFACT_MIME_TYPES, Prisma } from "@rakazo/db";
 import type {
   DriveArtifactRow,
   DriveDeps,
@@ -83,6 +83,7 @@ function driveFilesSql(input: {
   const cteConditions = [
     Prisma.sql`a."spaceId" = ${input.spaceId}`,
     input.trashed ? Prisma.sql`a."trashedAt" IS NOT NULL` : Prisma.sql`a."trashedAt" IS NULL`,
+    Prisma.sql`a."mimeType" NOT IN (${Prisma.join(HIDDEN_ARTIFACT_MIME_TYPES)})`,
   ];
   const outerConditions: Prisma.Sql[] = [];
   if (!input.trashed && !input.allFolders) {
@@ -97,7 +98,7 @@ function driveFilesSql(input: {
   if (input.query) {
     const pattern = `%${escapeLike(input.query)}%`;
     outerConditions.push(
-      Prisma.sql`(l.name ILIKE ${pattern} ESCAPE '\\' OR COALESCE(l.description, '') ILIKE ${pattern} ESCAPE '\\')`,
+      Prisma.sql`(l.name ILIKE ${pattern} ESCAPE '\\' OR COALESCE(l.description, '') ILIKE ${pattern} ESCAPE '\\' OR COALESCE(l.slug, '') ILIKE ${pattern} ESCAPE '\\')`,
     );
   }
   if (input.category !== "all") outerConditions.push(fileCategorySql(input.category));
@@ -132,7 +133,7 @@ function driveFilesSql(input: {
     WITH families AS (
       SELECT DISTINCT ON (COALESCE(a."rootArtifactId", a.id))
         a.id, a."botId", a."groupId", a."runId", a."folderId", a.source,
-        a.name, a.description, a."mimeType", a.size, a.hash, a.version,
+        a.name, a.slug, a.description, a."mimeType", a.size, a.hash, a.version,
         a."trashedAt", a."createdAt", a."updatedAt",
         COALESCE(a."rootArtifactId", a.id) AS family_id
       FROM "artifacts" a
@@ -146,7 +147,7 @@ function driveFilesSql(input: {
       GROUP BY 1
     )
     SELECT l.id, l."botId", l."groupId", l."runId", l."folderId", l.source,
-           l.name, l.description, l."mimeType", l.size, l.hash, l.version,
+           l.name, l.slug, l.description, l."mimeType", l.size, l.hash, l.version,
            l."trashedAt", l."createdAt", l."updatedAt",
            c.version_count AS "versionCount"
     FROM families l
@@ -250,9 +251,12 @@ export async function getDriveFolderTree(
 ): Promise<DriveFolderTreeEntry[]> {
   const rows = await deps.prisma.fileFolder.findMany({
     where: { spaceId: actor.spaceId, trashedAt: null },
-    select: { id: true, parentId: true, name: true },
+    select: { id: true, parentId: true, botId: true, name: true },
   });
-  return [...rows]
-    .sort(compareLowerName)
-    .map((row) => ({ id: row.id, parentId: row.parentId, name: row.name }));
+  return [...rows].sort(compareLowerName).map((row) => ({
+    id: row.id,
+    parentId: row.parentId,
+    botId: row.botId ?? null,
+    name: row.name,
+  }));
 }

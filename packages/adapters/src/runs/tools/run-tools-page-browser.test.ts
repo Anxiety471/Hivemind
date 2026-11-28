@@ -132,7 +132,7 @@ describe("page tools hide the run's secrets, also where a snapshot quotes them",
   });
 });
 
-describe("page tools save a page's file downloads in the calling bot's own folder", () => {
+describe("page tools save a page's file downloads in the workspace's Downloads folder", () => {
   // A saved name never has a backslash: the helper turns one into an underscore.
   const nameSecret = 'zq"xv-mk';
 
@@ -203,9 +203,10 @@ describe("page tools save a page's file downloads in the calling bot's own folde
 
   // A snapshot saves the PDF its tab shows, such as a report a page opened in a new tab.
   it.each(["browser_act", "browser_navigate", "browser_snapshot"])("%s", async (name) => {
+    // Team computers share one workspace, so every bot's downloads land in the same folder.
     for (const [mode, botId, folder] of [
-      ["team", "b1", "bots/b1/Downloads"],
-      ["team", "b2", "bots/b2/Downloads"],
+      ["team", "b1", "Downloads"],
+      ["team", "b2", "Downloads"],
       ["dedicated", "b1", "Downloads"],
     ] as const) {
       const { requests, text, details, markDirty } = await download(name, mode, botId);

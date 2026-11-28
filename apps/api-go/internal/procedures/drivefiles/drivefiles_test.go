@@ -11,8 +11,8 @@ import (
 
 func TestProceduresFailUnavailableWhenDriveIsNil(t *testing.T) {
 	procs := Procedures(nil)
-	if len(procs) != 20 {
-		t.Fatalf("expected 20 procedures, got %d", len(procs))
+	if len(procs) != 21 {
+		t.Fatalf("expected 21 procedures, got %d", len(procs))
 	}
 	for _, p := range procs {
 		if p.Serve == nil {

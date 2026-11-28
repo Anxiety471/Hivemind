@@ -96,6 +96,7 @@ model User {
   voicePreferences            UserVoicePreference[]
   approvalRules               UserActionApprovalRule[]
   autoReviewPreference        UserActionAutoReviewPreference?
+  memoryRoamerSettings        MemoryRoamerSettings?
   createdSpaces               Space[]                      @relation("SpaceCreator")
   spaceInvites                SpaceInvite[]                @relation("SpaceInviteCreator")
   botSecrets BotSecret[]
@@ -674,6 +675,7 @@ model Space {
   organization                Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name                        String
   isDefault                   Boolean                      @default(false)
+  systemPromptAppend          String?
   createdByUserId             String?
   createdByUser               User?                        @relation("SpaceCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   createdAt                   DateTime                     @default(now())
@@ -735,6 +737,7 @@ model Space {
   agentSkillSpaces            AgentSkillSpace[]
   mcpServerSpaces             McpServerSpace[]
   capabilityInstallSpaces     CapabilityInstallSpace[]
+  codeCommands                CodeCommand[]
 
   @@unique([id, organizationId])
   @@index([organizationId, createdAt])
@@ -1057,6 +1060,7 @@ model Bot {
   agentHome         AgentHome?
   browserProfile    BrowserProfile?
   artifacts         Artifact[]
+  fileFolders       FileFolder[]
   pages             Page[]
   tasks             Task[]
   runs              Run[]
@@ -1580,6 +1584,8 @@ model Routine {
   watch          Json?
   /// Last check's result (RoutineWatchStateSchema), written by the checker.
   watchState     Json?
+  /// Saved command run before the model (RoutinePrepareSchema); null when the routine has none.
+  prepare        Json?
   lastRunAt      DateTime?
   nextRunAt      DateTime?
   /// Runs in a row the model provider refused for the account; each one spaces out the schedule.
@@ -1740,6 +1746,7 @@ model AgentSkill {
   /// Available in every space of its owner, including later ones; otherwise in spaceId and availableIn.
   allSpaces   Boolean  @default(false)
   availableIn AgentSkillSpace[]
+  revisions   AgentSkillRevision[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1747,6 +1754,47 @@ model AgentSkill {
   @@index([installId])
   // Case-insensitive unique index agent_skills_spaceId_userId_name_lower_key is created in SQL.
   @@map("agent_skills")
+}
+
+/// What a skill said before the memory roamer upgraded it, newest first, bounded per skill.
+model AgentSkillRevision {
+  id          String     @id @default(cuid())
+  skillId     String
+  skill       AgentSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String
+  description String
+  content     String
+  reason      String
+  createdAt   DateTime   @default(now())
+
+  @@index([skillId, createdAt])
+  @@map("agent_skill_revisions")
+}
+
+/// A script bots in a Space can find with codemode.search and call as codemode.cmd.<name>.
+/// Scoped by spaceId (nullable for legacy deployment-wide rows created before space scoping).
+model CodeCommand {
+  id              String   @id @default(cuid())
+  spaceId         String?
+  space           Space?   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  /// Lowercase letters, digits and underscores; the name after `cmd.`.
+  name            String
+  description     String
+  /// The Lucide icon the command wears in the UI, by its kebab-case name (e.g. "file-text"); null
+  /// for the default. Not checked against the icon set here: the UI falls back for an unknown name.
+  icon            String?
+  /// JSON Schema for `args`, shown in search results; null when the command takes none.
+  parameters      Json?
+  /// The body of an async function with `args` in scope; what it returns is the call's result.
+  code            String
+  updatedByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([spaceId, name])
+  @@index([spaceId])
+  @@map("code_commands")
 }
 
 model Connection {
@@ -2029,6 +2077,8 @@ model FileFolder {
   parentId        String?
   parent          FileFolder?  @relation("FolderChildren", fields: [parentId], references: [id], onDelete: Cascade)
   children        FileFolder[] @relation("FolderChildren")
+  botId           String?
+  bot             Bot?         @relation(fields: [botId], references: [id], onDelete: SetNull)
   createdByUserId String
   name            String
   trashedAt       DateTime?
@@ -2037,6 +2087,7 @@ model FileFolder {
   artifacts       Artifact[]
 
   @@index([spaceId, parentId])
+  @@index([spaceId, botId])
   @@index([spaceId, trashedAt])
   @@map("file_folders")
 }
@@ -2055,6 +2106,7 @@ model Artifact {
   runId      String?
   source     String      @default("chat")
   name       String
+  slug       String?
   description String?
   mimeType   String
   size       Int
@@ -2077,6 +2129,7 @@ model Artifact {
   @@unique([spaceId, userId, clientNonce])
   @@index([spaceId, botId])
   @@index([spaceId, folderId])
+  @@index([spaceId, slug])
   @@index([spaceId, trashedAt])
   @@index([groupId])
   @@index([rootArtifactId])
@@ -2242,6 +2295,8 @@ model McpServer {
   enabled       Boolean           @default(true)
   /// Tool results from this server stay whole. A result that cannot fit fails the turn.
   verbatimResults Boolean         @default(false)
+  /// Remote requests carry the calling bot, run and thread ids so the server can call that bot back.
+  sendCallerIdentity Boolean      @default(false)
   revision      Int               @default(1)
   /// Last launch/discovery outcome: unknown | installing | ok | error.
   healthStatus    String          @default("unknown")
@@ -2619,6 +2674,7 @@ model Board {
   name         String   @default("Board")
   ticketPrefix String   @default("TASK")
   nextNumber   Int      @default(1)
+  repositories Json     @default("[]")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   tickets      Ticket[]
@@ -2654,6 +2710,12 @@ model Ticket {
   // Set by the periodic sweep once a done or closed ticket is a week old; cleared if it reopens.
   archivedAt      DateTime?
   decision        Json?
+  // Linked pull or merge requests: [{ url, state }], url in normalizePullRequestUrl form.
+  pullRequests    Json      @default("[]")
+  // Linked issues: [{ url, state }], url in normalizeIssueUrl form.
+  issues          Json      @default("[]")
+  // Repository the work lives in, in normalizeRepositoryUrl form.
+  repository      String?
   comments        TicketComment[]
 
   @@unique([boardId, number])
@@ -2883,6 +2945,25 @@ model UserActionAutoReviewPreference {
   updatedAt     DateTime @updatedAt
 
   @@map("user_action_auto_review_preferences")
+}
+
+model MemoryRoamerSettings {
+  userId          String    @id
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled         Boolean   @default(false)
+  intervalMinutes Int       @default(360)
+  lastRunAt       DateTime?
+  lastError       String?
+  lastChanges     Int       @default(0)
+  lastModel       String?
+  lastFailures    Json?
+  lastReport      Json?
+  retryAt         DateTime?
+  retryAttempt    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("memory_roamer_settings")
 }
 
 model MessagingInstallation {

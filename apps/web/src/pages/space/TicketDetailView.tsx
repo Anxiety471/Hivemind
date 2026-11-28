@@ -1,14 +1,27 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
-import type { Bot, Ticket, TicketPriority, TicketStatus } from "@rakazo/contracts";
+import type {
+  Bot,
+  Ticket,
+  TicketIssueState,
+  TicketPriority,
+  TicketPullRequestState,
+  TicketStatus,
+} from "@rakazo/contracts";
 import {
   hasPendingTicketDecision,
+  normalizeIssueUrl,
+  normalizePullRequestUrl,
+  normalizeRepositoryUrl,
   TICKET_COMMENT_MAX_LENGTH,
   TICKET_DECISION_ANSWER_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
+  TICKET_MAX_ISSUES,
+  TICKET_MAX_PULL_REQUESTS,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TICKET_TITLE_MAX_LENGTH,
+  ticketLinkLabel,
 } from "@rakazo/contracts";
 import { writeSaved } from "@rakazo/core/query";
 import {
@@ -24,7 +37,22 @@ import {
   Textarea,
 } from "@rakazo/ui-web";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, MessageCircle, Pencil, Reply, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  CircleCheck,
+  CircleDot,
+  FolderGit2,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestClosed,
+  MessageCircle,
+  Pencil,
+  Plus,
+  Reply,
+  X,
+} from "lucide-react";
+import type { ReactNode } from "react";
 import { useId, useState } from "react";
 import { Link, useInRouterContext } from "react-router-dom";
 import { IconTooltip } from "../../components/IconTooltip";
@@ -52,6 +80,71 @@ function oneLineExcerpt(text: string, maxChars = 120): string {
     .trim();
   if (cleaned.length <= maxChars) return cleaned;
   return `${cleaned.slice(0, maxChars - 1)}…`;
+}
+
+/** A pull request or issue icon that shows its state; merged reads as done. */
+function LinkStateIcon({
+  kind,
+  state,
+}: {
+  kind: "pullRequest" | "issue";
+  state: TicketPullRequestState | TicketIssueState;
+}) {
+  if (kind === "issue") {
+    return state === "closed" ? (
+      <CircleCheck className="size-4 text-muted-foreground" aria-hidden />
+    ) : (
+      <CircleDot className="size-4 text-foreground" aria-hidden />
+    );
+  }
+  if (state === "merged") return <GitMerge className="size-4 text-success" aria-hidden />;
+  if (state === "closed") {
+    return <GitPullRequestClosed className="size-4 text-muted-foreground" aria-hidden />;
+  }
+  return <GitPullRequest className="size-4 text-foreground" aria-hidden />;
+}
+
+function TicketLinkRow({
+  url,
+  icon,
+  state,
+  unlinkLabel,
+  disabled,
+  onUnlink,
+}: {
+  url: string;
+  icon: ReactNode;
+  state?: string;
+  unlinkLabel: string;
+  disabled: boolean;
+  onUnlink: () => void;
+}) {
+  return (
+    <li className="group flex min-w-0 items-center gap-1 rounded-md hover:bg-muted/50">
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        title={url}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-body-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="flex shrink-0">{icon}</span>
+        <span className="min-w-0 flex-1 truncate">{ticketLinkLabel(url)}</span>
+        {state ? <span className="shrink-0 text-label text-muted-foreground">{state}</span> : null}
+      </a>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label={unlinkLabel}
+        disabled={disabled}
+        className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        onClick={onUnlink}
+      >
+        <X className="size-3" aria-hidden />
+      </Button>
+    </li>
+  );
 }
 
 /**
@@ -84,6 +177,14 @@ export function TicketDetailView({
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
   const [replyToCommentId, setReplyToCommentId] = useState<string | null>(null);
+  const [linkDraft, setLinkDraft] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const [addingLink, setAddingLink] = useState(false);
+  function closeLinkForm() {
+    setLinkDraft("");
+    setLinkError("");
+    setAddingLink(false);
+  }
 
   const commentsOptions = queries.tickets.comments.queryOptions({
     input: { ticketId: ticket.id },
@@ -142,6 +243,56 @@ export function TicketDetailView({
     stale: [commentsOptions.queryKey, queries.tickets.list.key()],
   });
 
+  const linking = useSave({
+    save: async (
+      input: { pullRequests?: string[]; issues?: string[]; repository?: string | null },
+      rpc,
+    ) => {
+      await rpc.tickets.update({
+        id: ticket.id,
+        ...(input.pullRequests ? { pullRequests: input.pullRequests.map((url) => ({ url })) } : {}),
+        ...(input.issues ? { issues: input.issues.map((url) => ({ url })) } : {}),
+        ...(input.repository !== undefined ? { repository: input.repository } : {}),
+      });
+    },
+    stale: [queries.tickets.list.key()],
+    onSaved: closeLinkForm,
+  });
+
+  function addLink() {
+    const pullRequestUrl = normalizePullRequestUrl(linkDraft);
+    const issueUrl = pullRequestUrl ? null : normalizeIssueUrl(linkDraft);
+    const repositoryUrl = pullRequestUrl || issueUrl ? null : normalizeRepositoryUrl(linkDraft);
+    if (!pullRequestUrl && !issueUrl && !repositoryUrl) {
+      setLinkError(t`Use a pull request, issue, or repository link.`);
+      return;
+    }
+    setLinkError("");
+    if (pullRequestUrl) {
+      const urls = ticket.pullRequests.map((item) => item.url);
+      if (urls.includes(pullRequestUrl) || urls.length >= TICKET_MAX_PULL_REQUESTS) {
+        closeLinkForm();
+        return;
+      }
+      linking.run({ pullRequests: [...urls, pullRequestUrl] });
+      return;
+    }
+    if (issueUrl) {
+      const urls = ticket.issues.map((item) => item.url);
+      if (urls.includes(issueUrl) || urls.length >= TICKET_MAX_ISSUES) {
+        closeLinkForm();
+        return;
+      }
+      linking.run({ issues: [...urls, issueUrl] });
+      return;
+    }
+    if (repositoryUrl === ticket.repository) {
+      closeLinkForm();
+      return;
+    }
+    linking.run({ repository: repositoryUrl });
+  }
+
   if (editing) {
     return (
       <TicketEditForm
@@ -172,6 +323,18 @@ export function TicketDetailView({
   const answeredDecision = ticket.decision?.answer ? ticket.decision : undefined;
   const newestComments = [...comments].reverse();
   const busy = moving.pending || deciding.pending || commenting.pending;
+  const linkStates: Record<TicketPullRequestState | TicketIssueState, string> = {
+    open: t`Open`,
+    merged: t`Merged`,
+    closed: t`Closed`,
+  };
+  const repository = ticket.repository;
+  const hasLinks =
+    repository !== null || ticket.pullRequests.length > 0 || ticket.issues.length > 0;
+  const canAddLink =
+    ticket.pullRequests.length < TICKET_MAX_PULL_REQUESTS ||
+    ticket.issues.length < TICKET_MAX_ISSUES ||
+    !repository;
 
   const shownError = moving.error
     ? errorText(moving.error)
@@ -179,9 +342,11 @@ export function TicketDetailView({
       ? errorText(deciding.error)
       : commenting.error
         ? errorText(commenting.error)
-        : commentsQuery.error
-          ? errorText(commentsQuery.error)
-          : "";
+        : linking.error
+          ? errorText(linking.error)
+          : commentsQuery.error
+            ? errorText(commentsQuery.error)
+            : "";
 
   return (
     <div data-testid="kanban-ticket-detail" className="flex min-w-0 flex-col gap-4 overflow-hidden">
@@ -202,7 +367,7 @@ export function TicketDetailView({
             ) : null}
             <span className="text-label font-medium text-muted-foreground">{ticket.ref}</span>
           </div>
-          <DialogTitle className="text-start text-lg leading-snug font-semibold" dir="auto">
+          <DialogTitle className="text-start text-heading3 leading-snug font-semibold" dir="auto">
             {ticket.title}
           </DialogTitle>
         </div>
@@ -363,6 +528,137 @@ export function TicketDetailView({
               </div>
             </div>
           ) : null}
+
+          {hasLinks || addingLink ? (
+            <section className="flex min-w-0 flex-col rounded-lg border border-border/60 bg-muted/15 p-2">
+              <div className="mb-0.5 flex min-h-6 items-center justify-between gap-2 ps-1.5">
+                <span className="text-label font-medium text-muted-foreground">
+                  <Trans>Links</Trans>
+                </span>
+                {canAddLink && !addingLink ? (
+                  <IconTooltip label={t`Add link`}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t`Add link`}
+                      onClick={() => setAddingLink(true)}
+                    >
+                      <Plus className="size-3.5" aria-hidden />
+                    </Button>
+                  </IconTooltip>
+                ) : null}
+              </div>
+              {repository ? (
+                <ul data-testid="ticket-repository" className="flex min-w-0 flex-col">
+                  <TicketLinkRow
+                    url={repository}
+                    icon={<FolderGit2 className="size-4 text-muted-foreground" aria-hidden />}
+                    unlinkLabel={t`Unlink repository`}
+                    disabled={linking.pending}
+                    onUnlink={() => linking.run({ repository: null })}
+                  />
+                </ul>
+              ) : null}
+              {ticket.pullRequests.length > 0 ? (
+                <ul data-testid="ticket-pull-requests" className="flex min-w-0 flex-col">
+                  {ticket.pullRequests.map((pullRequest) => (
+                    <TicketLinkRow
+                      key={pullRequest.url}
+                      url={pullRequest.url}
+                      icon={<LinkStateIcon kind="pullRequest" state={pullRequest.state} />}
+                      state={
+                        pullRequest.state === "open" ? undefined : linkStates[pullRequest.state]
+                      }
+                      unlinkLabel={t`Unlink pull request`}
+                      disabled={linking.pending}
+                      onUnlink={() =>
+                        linking.run({
+                          pullRequests: ticket.pullRequests
+                            .filter((item) => item.url !== pullRequest.url)
+                            .map((item) => item.url),
+                        })
+                      }
+                    />
+                  ))}
+                </ul>
+              ) : null}
+              {ticket.issues.length > 0 ? (
+                <ul data-testid="ticket-issues" className="flex min-w-0 flex-col">
+                  {ticket.issues.map((issue) => (
+                    <TicketLinkRow
+                      key={issue.url}
+                      url={issue.url}
+                      icon={<LinkStateIcon kind="issue" state={issue.state} />}
+                      state={issue.state === "open" ? undefined : linkStates[issue.state]}
+                      unlinkLabel={t`Unlink issue`}
+                      disabled={linking.pending}
+                      onUnlink={() =>
+                        linking.run({
+                          issues: ticket.issues
+                            .filter((item) => item.url !== issue.url)
+                            .map((item) => item.url),
+                        })
+                      }
+                    />
+                  ))}
+                </ul>
+              ) : null}
+              {addingLink ? (
+                <form
+                  className="flex flex-col gap-1.5 p-1"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    addLink();
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <Input
+                      size="sm"
+                      inputMode="url"
+                      aria-label={t`Ticket link`}
+                      placeholder={t`Paste a link`}
+                      value={linkDraft}
+                      onChange={(event) => {
+                        setLinkDraft(event.target.value);
+                        setLinkError("");
+                      }}
+                      disabled={linking.pending}
+                      autoFocus
+                    />
+                    <Button type="submit" size="sm" disabled={linking.pending || !linkDraft.trim()}>
+                      <Trans>Add</Trans>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={linking.pending}
+                      onClick={closeLinkForm}
+                    >
+                      <Trans>Cancel</Trans>
+                    </Button>
+                  </div>
+                  {linkError ? (
+                    <p role="alert" className="text-label text-destructive">
+                      {linkError}
+                    </p>
+                  ) : null}
+                </form>
+              ) : null}
+            </section>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="-ms-2 self-start text-muted-foreground"
+              onClick={() => setAddingLink(true)}
+            >
+              <Plus className="size-3.5" aria-hidden />
+              <Trans>Add link</Trans>
+            </Button>
+          )}
         </div>
 
         <aside

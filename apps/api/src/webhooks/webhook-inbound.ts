@@ -1,6 +1,6 @@
 import type { JobPublisher, SecretStore } from "@rakazo/adapter-kit";
 import { SecretStoreUnavailableError } from "@rakazo/adapter-kit";
-import type { InboundSource } from "@rakazo/adapters";
+import type { InboundSource, TicketChangeNotifier } from "@rakazo/adapters";
 import {
   inboundDeliveryClientNonce,
   inboundRoutineModelPin,
@@ -35,6 +35,7 @@ export type WebhookEvents = {
       thinkingLevel: string | null;
     };
   }): Promise<{ messageId: string; runId: string | null; seq: number }>;
+  notify(threadId: string, seq: number): Promise<void>;
 };
 
 export type WebhookDeps = {
@@ -42,6 +43,8 @@ export type WebhookDeps = {
   secrets: SecretStore;
   events: WebhookEvents;
   jobs: Pick<JobPublisher, "enqueue">;
+  /** Tells the board a ticket changed after a delivery updated it. */
+  onTicketChange?: TicketChangeNotifier;
 };
 
 export type WebhookTarget = {

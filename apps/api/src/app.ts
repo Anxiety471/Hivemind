@@ -94,6 +94,8 @@ import {
 } from "@rakazo/auth";
 import type { Actor, AuthCapabilities, ModelCredential } from "@rakazo/contracts";
 import {
+  DRIVE_OPEN_PATH,
+  DRIVE_SPACE_PARAM,
   isLocalhostOrLoopbackIp,
   PLUGIN_SUBMISSIONS_PATH,
   SERVER_BUILD_HEADER,
@@ -144,6 +146,7 @@ import { settleDirectoryChange } from "./account/account-status.js";
 import { mountAuditExportRoute } from "./account/audit-export.js";
 import { mountMobileAppDownloadRoute } from "./account/mobile-app-download.js";
 import { createAuthResponseAudit } from "./auth/security-audit.js";
+import { shareSessionCookies, withHostOnlyCookiesExpired } from "./auth/session-cookie-domain.js";
 import { endUserDeviceSession, mountUserDeviceRoutes } from "./auth/user-devices.js";
 import { createBillingService } from "./billing/billing.js";
 import { mountBillingRoutes } from "./billing/billing-webhook.js";
@@ -187,6 +190,7 @@ import {
   handleHttpError,
   handleRpcError,
   requestHitDatabaseOutage,
+  setRpcResponseHeaders,
 } from "./rpc-errors.js";
 import { afterSpaceDeparture } from "./spaces/space-departure.js";
 import { cspReportRoutes } from "./telemetry/csp-report.js";
@@ -569,6 +573,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
             )
         : undefined,
     extraOrigins: [...MOBILE_AUTH_ORIGINS, ...env.extraAuthOrigins],
+    cookieDomain: env.cookieDomain,
     androidAppCertFingerprints: env.passkeyAndroidCertFingerprints,
     beforeDeleteUser: async (userId) => {
       // Billing cancels inside, after the account's spaces are claimed and before anything is
@@ -833,6 +838,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       phoneCallsEnabled: env.phoneCallsEnabled,
       phoneCallRingSeconds: env.phoneCallRingSeconds,
       navLinks: env.navLinks,
+      driveUrl: env.driveUrl,
       mobileApp: env.mobileApp,
       adminEmails: env.adminEmails,
       maxUploadSizeBytes: env.maxUploadSizeBytes,
@@ -1030,7 +1036,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       auth.handler(withClientIp(emptyAuthBodyAsJson(c.req.raw), ip)),
     );
     await auditAuthResponse(path, ip, response);
-    return response;
+    return withHostOnlyCookiesExpired(response, env.cookieDomain);
   });
   mountLocalComputerHost(app, {
     token: env.desktopStackToken,
@@ -1056,6 +1062,33 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     return actor && { actor, sessionId: session.session.id };
   };
   const sessionActor = async (request: Request) => (await requestSession(request))?.actor ?? null;
+  if (env.driveUrl) {
+    const driveUrl = env.driveUrl;
+    // The Files menu item lands here first: the signed-in browser's session cookies are moved
+    // to the cookie domain so the Drive host receives them, then it follows to the Drive app.
+    app.get(DRIVE_OPEN_PATH, async (c) => {
+      const target = new URL("/app/files", driveUrl);
+      const spaceId = c.req.query(DRIVE_SPACE_PARAM);
+      if (spaceId) target.searchParams.set(DRIVE_SPACE_PARAM, spaceId);
+      const session = env.cookieDomain ? await readSession(c.req.raw, true) : null;
+      if (env.cookieDomain && session?.session) {
+        const maxAge = Math.floor(
+          (new Date(session.session.expiresAt).getTime() - Date.now()) / 1000,
+        );
+        if (maxAge > 0) {
+          for (const cookie of shareSessionCookies(
+            c.req.header("cookie") ?? null,
+            env.cookieDomain,
+            maxAge,
+          )) {
+            c.header("set-cookie", cookie, { append: true });
+          }
+        }
+      }
+      c.header("cache-control", "no-store");
+      return c.redirect(target.toString());
+    });
+  }
   if (userDeviceHub && userDevices) {
     mountUserDeviceRoutes(app, {
       prisma,
@@ -1111,10 +1144,10 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     });
     if (!matched) return next();
     const reply = c.newResponse(response.body, response);
-    if (requestHitDatabaseOutage())
-      reply.headers.set("Retry-After", String(DATABASE_RETRY_AFTER_SECONDS));
+    // A temporary failure says when to ask again, and a stream is flushed through proxies.
+    setRpcResponseHeaders(reply);
     // A signed-in request that went through reached the database, so any outage is over.
-    else if (actor && reply.status < 500) databaseOutage.succeeded();
+    if (!requestHitDatabaseOutage() && actor && reply.status < 500) databaseOutage.succeeded();
     return reply;
   });
   mountAccountExportRoute(app, { prisma, auth, artifacts, home });
@@ -1149,7 +1182,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     },
     sessionActor,
   );
-  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
+  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs, onTicketChange: ticketChanges });
   if (env.inboundEmail) {
     mountEmailInboundRoute(app, {
       prisma,

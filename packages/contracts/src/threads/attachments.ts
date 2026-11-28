@@ -14,6 +14,7 @@ export const ATTACHMENT_IMAGE_MAX_EDGE = 1_600;
 export const ATTACHMENT_IMAGE_QUALITY = 0.7;
 export const ARTIFACT_NAME_MAX_LENGTH = 255;
 export const ARTIFACT_DESCRIPTION_MAX_LENGTH = 280;
+export const ARTIFACT_SLUG_MAX_LENGTH = 120;
 /** Base64 expands payload by 4/3; cap before decode to reject oversize uploads cheaply. */
 export const ATTACHMENT_MAX_BASE64_LENGTH = Math.ceil(ATTACHMENT_MAX_BYTES / 3) * 4;
 

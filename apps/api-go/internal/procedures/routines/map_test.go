@@ -33,6 +33,7 @@ func TestMapRoutineShapesTheRow(t *testing.T) {
 		Watch:           []byte(`{"kind":"http","url":" https://status.example.com/health ","everyMinutes":"15"}`),
 		WatchState: []byte(`{"checkedAt":"2026-04-01T11:59:00.000Z","outcome":"changed",
 			"fingerprint":"abc","detail":null,"retrying":true,"unknown":1}`),
+		Prepare:   []byte(`{"command":"fetch_status","args":{"url":"https://example.com"},"extra":true}`),
 		LastRunAt: &last,
 		NextRunAt: &next,
 		CreatedAt: created,
@@ -48,7 +49,8 @@ func TestMapRoutineShapesTheRow(t *testing.T) {
 		`"githubEnabled":false,"messageProvider":"telegram","emailSenders":null,` +
 		`"modelProvider":"azure","modelId":"gpt-5","thinkingLevel":"high","watch":null,` +
 		`"watchState":{"checkedAt":"2026-04-01T11:59:00.000Z","outcome":"changed","retrying":true,` +
-		`"fingerprint":"abc","detail":null},"lastRunAt":"2026-04-01T11:00:00.000Z",` +
+		`"fingerprint":"abc","detail":null},"prepare":{"command":"fetch_status",` +
+		`"args":{"url":"https://example.com"}},"lastRunAt":"2026-04-01T11:00:00.000Z",` +
 		`"nextRunAt":"` + next.Format("2006-01-02T15:04:05.000Z") + `","scheduleDelayed":false,` +
 		`"createdAt":"2026-04-01T12:00:00.000Z"}`
 	if string(body) != want {

@@ -47,6 +47,7 @@ export {
   renameDriveFile,
   restoreDriveFile,
   trashDriveFile,
+  updateDriveFile,
 } from "./items.js";
 export { getDriveFolderTree, listDriveFiles } from "./listing.js";
 export { uploadSpaceFileStream } from "./upload.js";

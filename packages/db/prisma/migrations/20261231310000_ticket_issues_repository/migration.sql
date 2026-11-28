@@ -1,0 +1,2 @@
+ALTER TABLE "tickets" ADD COLUMN "issues" JSONB NOT NULL DEFAULT '[]',
+ADD COLUMN "repository" TEXT;

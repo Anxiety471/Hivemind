@@ -160,6 +160,7 @@ function replyBlockText(block: MessageBlock): string {
     case "handoff":
     case "bot_message_sent":
     case "bot_message_received":
+    case "agent_message_received":
       return block.text;
     case "choice":
       return block.question;
@@ -169,6 +170,7 @@ function replyBlockText(block: MessageBlock): string {
       return block.steps.map((step) => step.label).join(", ");
     case "voice_call":
     case "cloud_agent":
+    case "job":
     case "page":
       return block.title;
     case "call_request":

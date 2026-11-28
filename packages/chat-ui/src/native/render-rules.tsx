@@ -14,12 +14,13 @@ import {
   linkLabel,
   markdownMentionId,
   markdownPageId,
+  markdownTicketRef,
   remoteMarkdownImage,
   sanitizeMarkdownUrl,
 } from "../markdown";
 import { isMermaidFence } from "../mermaid";
 import { astText, cellPlainText, enclosingLink, soleRemoteImage } from "./ast";
-import { MarkdownMention, MarkdownPageChip } from "./chips";
+import { MarkdownMention, MarkdownPageChip, MarkdownTicketChip } from "./chips";
 import { CodeFence, CodeScrollView, MermaidFence, ProseFence } from "./code";
 import { CommitChecksMark } from "./commit-checks-mark";
 import { contraryDirection } from "./direction";
@@ -41,20 +42,14 @@ import { TableCell, TableRow, TableScrollView } from "./table";
 // outside the text flow and collapses the bubble height, overlapping later messages.
 export const renderRules: RenderRules = {
   list_item: listItemRule,
-  fence: (node, _children, _parents, styleMap, _onCopyCode, colorScheme) => {
+  fence: (node, _children, _parents, styleMap, _onCopyCode) => {
     const info = typeof node.sourceInfo === "string" ? node.sourceInfo : "";
     const source = node.content.replace(/\n$/, "");
     const language = info.trim().split(/\s+/)[0] ?? "";
     const codeBlock = isProseFence(language) ? (
       <ProseFence key={node.key} code={source} language={language} styleMap={styleMap} />
     ) : (
-      <CodeFence
-        key={node.key}
-        code={source}
-        language={language}
-        colorScheme={colorScheme === "dark" ? "dark" : "light"}
-        styleMap={styleMap}
-      />
+      <CodeFence key={node.key} code={source} language={language} styleMap={styleMap} />
     );
     if (!isMermaidFence(info)) return codeBlock;
     return <MermaidFence key={node.key} source={source} fallback={codeBlock} />;
@@ -173,6 +168,18 @@ function renderMarkdownLink(
       <MarkdownPageChip key={node.key} pageId={pageId} titleStyle={styleMap.page_chip_title}>
         {children}
       </MarkdownPageChip>
+    );
+  }
+  const ticketRef = markdownTicketRef(node.attributes.href);
+  if (ticketRef) {
+    return (
+      <MarkdownTicketChip
+        key={node.key}
+        ticketRef={ticketRef}
+        titleStyle={styleMap.page_chip_title}
+      >
+        {children}
+      </MarkdownTicketChip>
     );
   }
   const mentionId = markdownMentionId(node.attributes.href);

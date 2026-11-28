@@ -18,22 +18,23 @@ import (
 
 // Config is the process configuration.
 type Config struct {
-	DatabaseURL     string
-	AuthSecret      []byte
-	AuthURL         string
-	WebOrigin       string
-	APIURL          string
-	ExtraOrigins    []string
-	SignupAllowlist []string
-	OIDCBypass      bool
+	DatabaseURL        string
+	AuthSecret         []byte
+	AuthURL            string
+	WebOrigin          string
+	APIURL             string
+	ExtraOrigins       []string
+	SignupAllowlist    []string
+	OIDCBypass         bool
+	CookieDomain       string
 	MaxUploadBytes     int64
 	MaxFileUploadBytes int64
 	DataDir            string
 	ObjectStorage      *ObjectStorageConfig
 	Minimums           map[string]string
-	TrustedOrigins  []string
-	ClientIP        *effects.ClientIPResolver
-	ClientIPHeader  string
+	TrustedOrigins     []string
+	ClientIP           *effects.ClientIPResolver
+	ClientIPHeader     string
 	// EmailDelivery is whether the API sends email, which TypeScript derives from the same
 	// variables (configuredEmailProvider, or the development emulator): an invitee must then
 	// have verified their address.
@@ -54,6 +55,10 @@ type Config struct {
 	// BoardLab is TICKET_BOARD_ENABLED: the Labs board feature turned on for every account
 	// (packages/adapters/src/labs-env.ts:4-11).
 	BoardLab bool
+	// CodeModeLab and CodeFirstLab are CODE_MODE_ENABLED and CODE_FIRST_ENABLED: the code and
+	// codeFirst Labs features turned on for every account (packages/adapters/src/runs/labs-env.ts).
+	CodeModeLab  bool
+	CodeFirstLab bool
 	// PhoneCallsEnabled is PHONE_CALLS_ENABLED (phoneCallSettings, call-request.ts:5).
 	PhoneCallsEnabled bool
 	// PhoneCallRingSeconds is PHONE_CALL_RING_SECONDS: a positive Number(), else 45.
@@ -117,6 +122,7 @@ func Load() (Config, error) {
 	}
 	config.ExtraOrigins = splitList(os.Getenv("RAKAZO_EXTRA_AUTH_ORIGINS"))
 	config.SignupAllowlist = splitList(os.Getenv("SIGNUP_ALLOWLIST"))
+	config.CookieDomain = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(os.Getenv("COOKIE_DOMAIN"))), ".")
 	config.OIDCBypass = os.Getenv("OIDC_ALLOW_SIGNUP_BYPASS") == "true" && strings.TrimSpace(os.Getenv("OIDC_ISSUER")) != ""
 	config.MaxUploadBytes = uploadBytes(os.Getenv("MAX_UPLOAD_SIZE_MB"))
 	config.MaxFileUploadBytes = fileUploadBytes(os.Getenv("MAX_FILE_UPLOAD_SIZE_MB"), config.MaxUploadBytes)
@@ -150,6 +156,8 @@ func Load() (Config, error) {
 	}
 	config.MasterKeys = keys
 	config.BoardLab = os.Getenv("TICKET_BOARD_ENABLED") == "true"
+	config.CodeModeLab = os.Getenv("CODE_MODE_ENABLED") == "true"
+	config.CodeFirstLab = os.Getenv("CODE_FIRST_ENABLED") == "true"
 	config.PhoneCallsEnabled = os.Getenv("PHONE_CALLS_ENABLED") == "true"
 	config.PhoneCallRingSeconds = positiveNumber(os.Getenv("PHONE_CALL_RING_SECONDS"), 45)
 	config.RedisURL = strings.TrimSpace(os.Getenv("REDIS_URL"))

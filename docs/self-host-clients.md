@@ -202,3 +202,34 @@ signed-in user's session; that also blocks their own cookies and storage. Add `"
 link only for a service you control: a trusted page runs with the signed-in user's access, like a
 script allowed by `RAKAZO_CSP_SCRIPT_SRC`. The page must allow framing by the app
 (`frame-ancestors 'self'`). Links appear in the web app only; the desktop and mobile apps hide them.
+
+## Drive app
+
+The same web build can also serve Files on a host of its own, such as `drive.example.com`, which
+talks to the API and the Go gateway like the main app does. The account menu's Files item then opens
+it in a new tab; without `DRIVE_URL`, Files stays inside the app. Set these on the API and the Go
+gateway:
+
+```bash
+DRIVE_URL=https://drive.example.com
+COOKIE_DOMAIN=example.com
+RAKAZO_EXTRA_AUTH_ORIGINS=https://drive.example.com
+```
+
+`COOKIE_DOMAIN` makes the session cookie valid for every host under that domain, which is how the
+Drive app is signed in with no second login. It must contain `WEB_ORIGIN`'s host, or the API stops at
+start. A browser that signed in before keeps a cookie for the main host only; the API expires it on
+the next sign-in, so one fresh sign-in is enough. Add the host to `RAKAZO_ALLOWED_HOSTS` on the web
+server, and have the proxy answer `/` and `/app/…` with the web server's `/drive.html` and pass every
+other path through unchanged, for example in nginx:
+
+```nginx
+location ~ ^/(app/.*)?$ {
+    rewrite ^ /drive.html break;
+    proxy_pass http://127.0.0.1:5173;
+}
+location / { proxy_pass http://127.0.0.1:5173; }
+```
+
+Run the Drive app only on a host you control under that domain: every host under `COOKIE_DOMAIN`
+receives the session cookie.

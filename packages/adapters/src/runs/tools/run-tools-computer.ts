@@ -4,7 +4,10 @@ import type { BrowserProvider, SandboxProvider } from "@rakazo/adapter-kit";
 import type { ComputerCommand } from "@rakazo/contracts";
 import { COMPUTER_COMMAND_OUTPUT_MAX_CHARS } from "@rakazo/contracts";
 import { redactSecrets } from "@rakazo/core";
-import { sandboxCommandTimeoutMs } from "@rakazo/core/node/sandbox-command";
+import {
+  boundedSandboxCommandTimeoutMs,
+  MAX_SANDBOX_COMMAND_TIMEOUT_MS,
+} from "@rakazo/core/node/sandbox-command";
 import { RunHistoryWriteError, releasePayment } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { recordPagePayment } from "../../billing/spending-gate.js";
@@ -30,7 +33,6 @@ import {
   resolveBotUploadPath,
   resolveBotWorkspaceCwd,
   resolveBotWorkspacePath,
-  teamBotWorkspaceDirectory,
 } from "../../computers/screens/computer-support.js";
 import {
   advanceUnchangedVisualGuard,
@@ -285,12 +287,7 @@ export async function pageBrowserTool(ctx: RunContext, call: ToolCall) {
             approvedPurchase: paying,
             countPurchase: () => countPayment(ctx, call),
             releasePurchase: () => releaseUnpressedPayment(ctx, call),
-            // Team bots may send only their own folder or shared/ off the computer; a
-            // private computer's helper already confines uploads to its home folder.
-            uploadRoots:
-              ctx.computer.mode === "team"
-                ? [teamBotWorkspaceDirectory(bot.id), "shared"]
-                : undefined,
+            uploadRoots: undefined,
             resolveUploadPath: (path) =>
               ctx.computer.mode === "team"
                 ? resolveBotUploadPath(ctx.computer.mode, bot.id, path)
@@ -623,7 +620,7 @@ export const computerTools: ToolHandlers = {
             env:
               Object.keys(commandEnvironment.env).length > 0 ? commandEnvironment.env : undefined,
             unsetEnv: commandEnvironment.unsetEnv,
-            timeoutMs: sandboxCommandTimeoutMs(),
+            timeoutMs: shellTimeoutMs(call),
           },
           context,
         ),
@@ -756,3 +753,17 @@ export const computerTools: ToolHandlers = {
     }, call.finish);
   },
 };
+
+/**
+ * How long a shell command may run: what the bot asked for in `timeout_seconds` (an hour at
+ * most), else the operator's default, never past the call's own ceiling (a script's clock).
+ */
+export function shellTimeoutMs(call: Pick<ToolCall, "args" | "commandTimeoutMs">): number {
+  const asked = call.args.timeout_seconds;
+  const requested =
+    typeof asked === "number"
+      ? Math.min(Math.round(asked * 1000), MAX_SANDBOX_COMMAND_TIMEOUT_MS)
+      : undefined;
+  const timeoutMs = boundedSandboxCommandTimeoutMs(requested, call.commandTimeoutMs);
+  return Math.min(timeoutMs, call.commandTimeoutMs ?? timeoutMs);
+}

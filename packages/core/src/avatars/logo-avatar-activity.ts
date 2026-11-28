@@ -65,7 +65,13 @@ export function initialLogoAvatarSignals(botId: string): LogoAvatarSignals {
 }
 
 /** Exact built-in operations, never guesses from a provider's free-text status. */
-const READING_TOOLS = new Set(["read_file", "web_fetch", "read_history", "skill_read"]);
+const READING_TOOLS = new Set([
+  "read_file",
+  "web_fetch",
+  "read_history",
+  "skill_mode",
+  "skill_read",
+]);
 const WRITING_TOOLS = new Set(["write_file"]);
 const COMPUTER_TOOLS = new Set([
   "computer_observe",

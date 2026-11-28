@@ -1,11 +1,7 @@
 import { SandboxFileTooLargeError } from "@rakazo/adapter-kit";
 import { bestEffort, getLogger } from "@rakazo/logging";
 import { sandboxKindCapabilities } from "../../computers/sandbox/sandbox-kind-capabilities.js";
-import {
-  normalizeWorkspacePath,
-  teamBotWorkspaceDirectory,
-  toComputerRef,
-} from "../../computers/screens/computer-support.js";
+import { normalizeWorkspacePath, toComputerRef } from "../../computers/screens/computer-support.js";
 import type { RunContext } from "../assembly/run-context.js";
 
 export async function readStoppedRunFile(ctx: RunContext, storedPath: string, maxBytes: number) {
@@ -21,15 +17,8 @@ export async function readStoppedRunFile(ctx: RunContext, storedPath: string, ma
 
   const path = normalizeWorkspacePath(storedPath);
   // Normal startup materializes attachments and removes deleted bots' folders. The provider's
-  // snapshot predates that work, so use only ordinary files in this bot's home or shared files.
-  if (
-    !path ||
-    path.split("/").includes("attachments") ||
-    (computer.mode === "team" &&
-      !path.startsWith(`${teamBotWorkspaceDirectory(bot.id)}/`) &&
-      !path.startsWith("shared/"))
-  )
-    return undefined;
+  // snapshot predates that work, so skip attachment scratch paths.
+  if (!path || path.split("/").includes("attachments")) return undefined;
 
   const where = {
     id: stored.id,

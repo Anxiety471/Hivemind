@@ -11,11 +11,13 @@ import { expectLinearTime } from "@rakazo/contracts/test-timing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   APPROVED_ACTION_NOT_RUN_ERROR,
+  canRetryRunError,
   HOSTED_MODEL_CREDITS_REQUIRED_ERROR,
   isImageInputConfirmation,
   isModelRequiredSendError,
   MISSING_MODEL_RUN_ERROR,
   MISSING_TOOL_FINAL_RESPONSE_ERROR,
+  MODEL_ACCESS_REQUIRED_RUN_ERROR,
   MODEL_CONTENT_FILTER_ERROR,
   MODEL_CONTEXT_TOO_SMALL_ERROR,
   MODEL_CREDIT_CAP_REACHED_ERROR,
@@ -1046,4 +1048,60 @@ it("reads a reset date after spacing and a separator, and stays fast on long spa
   expectLinearTime(() =>
     normalizeRunError(`429: weekly limit reached, resets${" \t".repeat(100_000)}x`),
   );
+});
+
+describe("canRetryRunError", () => {
+  it.each([
+    ["500 error", '500: {"error":{"message":"Internal error"}}'],
+    ["502 bad gateway", "502 Bad Gateway"],
+    ["503 overloaded", "503 Service Unavailable"],
+    ["529 overloaded", '529: {"message":"Overloaded"}'],
+    ["429 rate limit", '429: {"message":"Too many requests"}'],
+    ["timeout", "Request timed out."],
+    ["network reset", "ECONNRESET while reading stream"],
+    ["internal server error", "Internal server error"],
+    ["empty model response", "Provider returned an empty response"],
+    ["malformed tool JSON", "Failed to parse tool call arguments as JSON"],
+    ["output cut at limit", MODEL_OUTPUT_CUT_ERROR],
+    ["missing final response after tools", MISSING_TOOL_FINAL_RESPONSE_ERROR],
+    [
+      "fallback wrapping 502",
+      modelFallbackFailure("502 Bad Gateway", [
+        { provider: "anthropic", modelId: "claude", status: "failed", reason: "503 overloaded" },
+      ]),
+    ],
+  ])("allows retrying %s", (_label, details) => {
+    expect(canRetryRunError(details)).toBe(true);
+  });
+
+  it.each([
+    ["empty string", ""],
+    ["whitespace", "   "],
+    ["null", null],
+    ["undefined", undefined],
+    ["401 auth", '401: {"message":"Invalid API key"}'],
+    ["402 credits", '402: {"message":"You have no credits remaining."}'],
+    ["403 access", '403: {"message":"Access denied"}'],
+    ["404 model not found", '404: {"message":"Model missing does not exist"}'],
+    ["413 context too long", '413: {"message":"prompt is too long"}'],
+    ["content filter", '{"error":{"code":"content_filter","message":"Filtered"}}'],
+    [
+      "fallback wrapping content filter",
+      modelFallbackFailure('400: {"error":{"code":"content_filter"}}', [
+        { provider: "openai", modelId: "gpt-4o", status: "skipped", reason: "No backup" },
+      ]),
+    ],
+    ["missing model", MISSING_MODEL_RUN_ERROR],
+    ["computer hours out", COMPUTER_ALLOWANCE_USED_ERROR],
+    ["computer damaged", COMPUTER_DAMAGED_ERROR],
+    ["computer recovery required", COMPUTER_RECOVERY_REQUIRED_ERROR],
+    ["access required", MODEL_ACCESS_REQUIRED_RUN_ERROR],
+    ["credit cap", MODEL_CREDIT_CAP_REACHED_ERROR],
+    [
+      "invalid effort level",
+      '400: {"error":{"type":"invalid_request_error","message":"Invalid effort level"}}',
+    ],
+  ])("disallows retrying %s", (_label, details) => {
+    expect(canRetryRunError(details)).toBe(false);
+  });
 });

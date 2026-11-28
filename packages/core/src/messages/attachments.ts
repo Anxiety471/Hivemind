@@ -285,6 +285,8 @@ function blockHistoryText(block: MessageBlock): string {
   if (block.kind === "steps") return toolStepsHistoryText(block.steps);
   if (block.kind === "chart") return `[chart: ${block.name}]`;
   if (block.kind === "app") return `[app: ${block.server} showed ${block.tool}]`;
+  // What a later turn knows of the job this bot started, and where it got to.
+  if (block.kind === "job") return `[job: ${block.title} (${block.state})]`;
   if (block.kind === "image") return `[image: ${block.name}]`;
   // The id lets a later turn, or another chat, update this page instead of making a new one.
   if (block.kind === "page") {
@@ -296,6 +298,7 @@ function blockHistoryText(block: MessageBlock): string {
   // Keep attribution on peer messages: without it a later turn cannot tell
   // which lines came from another bot rather than the user.
   if (block.kind === "bot_message_received") return `[from ${block.fromBotName}] ${block.text}`;
+  if (block.kind === "agent_message_received") return `[from ${block.agentName}] ${block.text}`;
   if (block.kind === "bot_message_sent") return `[to ${block.toBotName}] ${block.text}`;
   if (block.kind === "channel_message") return `[from ${block.fromLabel}] ${block.text}`;
   if (block.kind === "handoff") {
@@ -644,6 +647,51 @@ export function validateDriveName(name: string): string {
     }
   }
   return trimmed;
+}
+
+const SLUG_MAX_LENGTH = 120;
+
+export function normalizeFileSlug(raw: string): string {
+  const slug = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/g, "");
+  if (!slug) {
+    throw new AttachmentValidationError("File slug must contain letters or digits");
+  }
+  return slug;
+}
+
+/** Derives a lowercase kebab-case search slug from a filename, keeping a non-empty fallback. */
+export function slugifyFileName(name: string): string {
+  const trimmed = name.trim();
+  const dot = trimmed.lastIndexOf(".");
+  const stem = dot > 0 && dot < trimmed.length - 1 ? trimmed.slice(0, dot) : trimmed;
+  const candidate = (stem || trimmed)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/g, "");
+  return candidate || "file";
+}
+
+export function sanitizeDriveFolderName(raw: string, fallback = "Bot"): string {
+  const cleaned = [...raw]
+    .map((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 0x20 || code === 0x7f || ch === "/" || ch === "\\" ? " " : ch;
+    })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 255)
+    .trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return fallback;
+  return cleaned;
 }
 
 const CODE_MIME_TYPES = new Set([

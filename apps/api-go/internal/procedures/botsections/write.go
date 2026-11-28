@@ -10,6 +10,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -18,13 +19,6 @@ const nameMaxLength = 60
 var errIsolation = orpc.NotFound("Resource not found")
 
 func conflict(message string) *orpc.Error { return orpc.Conflict(message) }
-
-func unavailableOr(err error) *orpc.Error {
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
-}
 
 // CreateInput is botSections.create's input: exactly one of botId or groupId, and a name.
 type CreateInput struct {
@@ -112,6 +106,7 @@ func ParseRemove(raw orpc.Input) (string, *orpc.Error) {
 // lockSpace is lockSpaceForContentCreation: serialize with the empty-Space
 // deletion claim, and require the actor to be a member of a live Space.
 func lockSpace(ctx context.Context, tx pgx.Tx, actor db.Actor) error {
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, actor.SpaceID); err != nil {
 		return err
 	}
@@ -128,14 +123,6 @@ func lockSpace(ctx context.Context, tx pgx.Tx, actor db.Actor) error {
 		return conflict("Space deletion is already in progress")
 	}
 	return nil
-}
-
-func asFailure(err error) *orpc.Error {
-	var failure *orpc.Error
-	if errors.As(err, &failure) {
-		return failure
-	}
-	return unavailableOr(err)
 }
 
 type row struct {
@@ -198,19 +185,20 @@ func Create(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 			at := now()
 			section, err = scanRow(tx.QueryRow(ctx, `INSERT INTO bot_sections (id, "spaceId", "userId", name, position, "createdAt", "updatedAt")
 				VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING `+sectionColumns,
-				effects.NewID(), actor.SpaceID, actor.UserID, input.Name, next, at))
+				db.Data(effects.NewID(), actor.SpaceID, actor.UserID, input.Name, next, at)...))
 		}
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE `+table+` SET "sectionId" = $1, "updatedAt" = $2 WHERE id = $3`, section.id, now(), target); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE `+table+` SET "sectionId" = $1, "updatedAt" = $2 WHERE id = $3`,
+			append(db.Data(section.id, now()), target)...); err != nil {
 			return err
 		}
 		created = section.section()
 		return nil
 	})
 	if err != nil {
-		return Section{}, asFailure(err)
+		return Section{}, shared.Failure(err)
 	}
 	return created, nil
 }
@@ -250,7 +238,7 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 			return err
 		}
 		updated, err := scanRow(tx.QueryRow(ctx, `UPDATE bot_sections SET name = $1, "updatedAt" = $2 WHERE id = $3 RETURNING `+sectionColumns,
-			input.Name, now(), existing.id))
+			append(db.Data(input.Name, now()), existing.id)...))
 		if err != nil {
 			return err
 		}
@@ -258,7 +246,7 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return nil
 	})
 	if err != nil {
-		return Section{}, asFailure(err)
+		return Section{}, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -298,7 +286,7 @@ func Remove(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return err
 	})
 	if err != nil {
-		return Removed{}, asFailure(err)
+		return Removed{}, shared.Failure(err)
 	}
 	return result, nil
 }

@@ -1,5 +1,5 @@
 import type { LiveStepTiming } from "@rakazo/core";
-import { humanizeToolName, isBackgroundRunTrigger } from "@rakazo/core";
+import { humanizeToolName, isBackgroundRunTrigger, mergeSkillNames } from "@rakazo/core";
 import { getLogger } from "@rakazo/logging";
 import { isToolPauseResult } from "../../approvals/approval-effect.js";
 import { returnBotMessageOutcome } from "../../messaging/bot-messages.js";
@@ -43,12 +43,18 @@ import {
   keptToolArguments,
   saveLatestStepScreenshot,
 } from "./tool-step-calls.js";
-import { summarizeToolCallDetail } from "./tool-step-detail.js";
+import {
+  summarizeToolCallDetail,
+  summarizeToolCallSkills,
+  summarizeToolCompletionDetail,
+  summarizeToolCompletionSkills,
+} from "./tool-step-detail.js";
 
 function showToolStep(
   ctx: RunContext,
   event: RuntimeEvent<"tool">,
   detail: string | undefined,
+  skills: string[] | undefined,
 ): LiveStepTiming {
   const { reply } = ctx.state;
   const startedAtMs = Date.now();
@@ -66,9 +72,18 @@ function showToolStep(
     ...(attempt !== undefined ? { attempt } : {}),
     ...(forkedFromStep !== undefined ? { forkedFromStep } : {}),
   };
+  if (ownStep && skills?.length) {
+    reply.toolSkills ??= new Map();
+    reply.toolSkills.set(
+      event.executionId,
+      mergeSkillNames(reply.toolSkills.get(event.executionId), skills),
+    );
+  }
+  reply.pendingToolSkills ??= [];
   reply.pendingToolTimings ??= [];
   reply.pendingToolNames.push(...callSteps);
   reply.pendingToolDetails.push(...callSteps.map(() => (ownStep ? (detail ?? null) : null)));
+  reply.pendingToolSkills.push(...callSteps.map(() => (ownStep && skills?.length ? skills : null)));
   reply.pendingToolTimings.push(
     ...callSteps.map((_, index) => ({
       startedAtMs,
@@ -103,9 +118,10 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
   // client must see that text before the tool call it describes.
   await flushProgress(ctx);
   const detail = summarizeToolCallDetail(event.name, event.args, ctx.secrets);
+  const skills = summarizeToolCallSkills(event.name, event.args, ctx.secrets);
   // The call a paused turn resumes on already shows as a step in the reply it saved.
   const stepTiming = !reply.toolCalls.some((call) => call.executionId === event.executionId)
-    ? showToolStep(ctx, event, detail)
+    ? showToolStep(ctx, event, detail, skills)
     : undefined;
   // Text before ask_user stays pending: the run pauses next, and the question needs it.
   const heldNote =
@@ -127,6 +143,8 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
       name: event.name,
       executionId: event.executionId,
       ...(detail ? { detail } : {}),
+      ...(skills?.length ? { skills } : {}),
+      ...(reply.invokedSkills?.length ? { runSkills: reply.invokedSkills } : {}),
       ...(stepTiming?.startedAtMs !== undefined ? { startedAtMs: stepTiming.startedAtMs } : {}),
       ...(stepTiming?.attempt !== undefined ? { attempt: stepTiming.attempt } : {}),
       ...(stepTiming?.forkedFromStep !== undefined
@@ -189,6 +207,19 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
     );
     const outcome = toolCompletionOutcome(completion);
     if (outcome) reply.toolOutcomes.set(event.executionId, outcome);
+    const completedDetail = summarizeToolCompletionDetail(completion, ctx.secrets);
+    if (completedDetail) {
+      reply.toolDetails ??= new Map();
+      reply.toolDetails.set(event.executionId, completedDetail);
+    }
+    const completedSkills = summarizeToolCompletionSkills(completion, ctx.secrets);
+    if (completedSkills?.length) {
+      reply.toolSkills ??= new Map();
+      reply.toolSkills.set(
+        event.executionId,
+        mergeSkillNames(reply.toolSkills.get(event.executionId), completedSkills),
+      );
+    }
     keepToolStepResult(reply, completion, ctx.secrets);
     await appendToolCompletionAudit(deps, audit, completion, ctx.secrets);
     return isToolPauseResult(result);

@@ -1,3 +1,4 @@
+import type { ConnectorTool } from "@rakazo/adapter-kit";
 import {
   disabledBuiltinToolSet,
   FLEET_TOOL_NAMES,
@@ -6,17 +7,26 @@ import {
 import { BACKGROUND_HELPER_TRIGGER, isBackgroundRunTrigger, isOwnerStartedRun } from "@rakazo/core";
 import { selectCloudAgentTools } from "../../cloud-agents/cloud-agent-tools-select.js";
 import { selectMemoryTools } from "../../memory/memory-tools.js";
-import { filterImageReturningComputerTools } from "../../models/model-vision.js";
+import {
+  filterImageReturningComputerTools,
+  IMAGE_RETURNING_COMPUTER_TOOLS,
+} from "../../models/model-vision.js";
 import { builtinAgentTools } from "../../tools/builtin.tool-definition.js";
+import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
 import {
   filterBuiltinToolsForRun,
   filterBuiltinToolsForThread,
   SCHEDULE_TOOL_NAMES,
 } from "../../tools/schedule-tools.js";
+import { SKILL_MODE } from "../../tools/skill-mode.tool-definition.js";
 import { SKILL_TOOL_NAMES } from "../../tools/skill-tools.js";
 import { USER_COMPUTER_SCREEN_TOOLS } from "./run-tools-user-computer.js";
 
 export const READ_ONLY_AGENT_TOOLS = new Set([
+  // The script itself changes nothing, and it must run again each time it is called: every call
+  // it makes is gated and recorded on its own, so a stored result would only be stale.
+  CODE_MODE,
+  SKILL_MODE,
   "computer_observe",
   "list_files",
   "list_fleet",
@@ -32,6 +42,8 @@ export const READ_ONLY_AGENT_TOOLS = new Set([
   "task_catalog",
   "recall_memory",
   "reflect_memory",
+  "search_memory_docs",
+  "read_memory_doc",
   "schedule_list",
   "scratchpad_list",
   "board_tickets",
@@ -116,6 +128,8 @@ export function selectBuiltinToolsForRun(options: {
   mediaVideoEnabled?: boolean;
   /** The deployment configured paid data services. */
   paidServicesEnabled?: boolean;
+  /** The owner turned on the code lab: one script may call several tools. */
+  codeModeEnabled?: boolean;
   messagingChannelRun: boolean;
   /** Hanging up is only offered to a turn the caller spoke on a live call. */
   voiceCall?: boolean;
@@ -167,6 +181,7 @@ export function selectBuiltinToolsForRun(options: {
     Boolean(options.cloudAgentCleanupEnabled),
   ).filter(
     (tool) =>
+      tool.name !== "skill_read" &&
       !disabled.has(tool.name) &&
       (options.trigger !== "created" || CREATED_RUN_TOOL_NAMES.has(tool.name)) &&
       (options.trigger !== BACKGROUND_HELPER_TRIGGER || !SUBAGENT_HIDDEN_TOOLS.has(tool.name)) &&
@@ -177,6 +192,7 @@ export function selectBuiltinToolsForRun(options: {
       (options.mediaImagesEnabled || tool.name !== "generate_image") &&
       (options.mediaVideoEnabled || tool.name !== "generate_video") &&
       (options.paidServicesEnabled || !PAID_SERVICE_TOOL_NAMES.has(tool.name)) &&
+      (options.codeModeEnabled || tool.name !== CODE_MODE) &&
       (options.hasGroups === true || tool.name !== "post_to_group") &&
       (options.ticketBoardEnabled ||
         (tool.name !== "board_tickets" &&
@@ -214,6 +230,8 @@ export function selectBuiltinToolsForRun(options: {
           ![
             "remember",
             "save_shared_memory",
+            "search_memory_docs",
+            "read_memory_doc",
             "save_memory",
             "recall_memory",
             "forget_memory",
@@ -225,6 +243,62 @@ export function selectBuiltinToolsForRun(options: {
           !tool.name.startsWith("scratchpad_") &&
           !tool.name.startsWith("ticket_"))),
   );
+}
+
+/**
+ * The tools one code_mode script may not call: itself, a tool that returns an image (a script
+ * cannot show one), a tool that starts work of its own (a helper, a takeover), and the tools that
+ * act on the person's own computer, which each deserve a visible step of their own.
+ */
+const CODE_MODE_EXCLUDED_TOOLS: Readonly<Record<string, true>> = {
+  [CODE_MODE]: true,
+  run_subagent: true,
+  request_takeover: true,
+  user_computer_shell: true,
+  user_computer_observe: true,
+  user_computer_act: true,
+};
+
+/**
+ * Every tool one code_mode script may call. A write is callable too: each call goes through the
+ * same approval gate as a direct call, so a script gets no permission the model lacked.
+ */
+export function codeModeCallableTools(tools: readonly ConnectorTool[]): ConnectorTool[] {
+  return tools.filter(
+    (tool) =>
+      !Object.hasOwn(CODE_MODE_EXCLUDED_TOOLS, tool.name) &&
+      !IMAGE_RETURNING_COMPUTER_TOOLS.has(tool.name),
+  );
+}
+
+/**
+ * Callable tools a code-first run still lists on their own: the ones that talk to the person
+ * (their answer ends or pauses the turn) and shell, whose long and streaming work a script's
+ * short clock cannot hold.
+ */
+const CODE_FIRST_DIRECT_TOOLS: ReadonlySet<string> = new Set([
+  SKILL_MODE,
+  "shell",
+  "ask_user",
+  "message_user",
+  "request_secret",
+  "connect_app",
+  "end_call",
+  "call_user",
+]);
+
+/**
+ * What a code-first run lists to the model: code_mode, the tools a script cannot call, and the
+ * direct set above. Every other tool stays callable from a script and is simply not listed.
+ */
+export function codeFirstListedTools(tools: readonly ConnectorTool[]): ConnectorTool[] {
+  const scripted = new Set(codeModeCallableTools(tools).map((tool) => tool.name));
+  return tools.filter((tool) => CODE_FIRST_DIRECT_TOOLS.has(tool.name) || !scripted.has(tool.name));
+}
+
+/** A call that may change something, as opposed to one declared to only read. */
+export function isCodeModeWrite(tool: Pick<ConnectorTool, "name" | "readOnly">): boolean {
+  return tool.readOnly !== true && !READ_ONLY_AGENT_TOOLS.has(tool.name);
 }
 
 export const PAGE_BROWSER_TOOL_NAMES = new Set([

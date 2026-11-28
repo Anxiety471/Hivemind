@@ -51,7 +51,8 @@ COMPUTER_MAX_ACTIVE_UNBILLED_MS=0 # uptime cap for providers that do not bill wh
 SANDBOX_COMMAND_TIMEOUT_MS=300000 # stop a shell command after 5 minutes
 MAX_TOOL_CALLS_PER_TURN=  # optional Pi turn tool-call fuse; unset/0 = unlimited
 RAKAZO_MESSAGE_USER_MAX_CHARS=500 # message_user length cap; narration stays at 500
-BOT_MESSAGE_MAX_HOPS=6    # bot-to-bot messages one chain may carry before the next is refused
+RAKAZO_RUN_INSTRUCTIONS_FILE= # optional text file added to every run's instructions after the built-in tool guidance; re-read per run; skipped if a bot's instructions already contain it
+BOT_MESSAGE_MAX_HOPS=  # optional bot-to-bot chain hop fuse; unset/0 = unlimited
 E2B_API_KEY=              # when SANDBOX_PROVIDER=e2b
 NOVITA_API_KEY=           # when SANDBOX_PROVIDER=novita; build its template first
 DAYTONA_API_KEY=          # when SANDBOX_PROVIDER=daytona
@@ -130,12 +131,14 @@ callbacks.
 
 ## Feature switches
 
-| Variable               | Default         | Effect                                                                                                                                                  |
-| ---------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TICKET_BOARD_ENABLED` | `false`         | Turns the ticket board on for every account. Otherwise each person turns it on in **Settings → Labs**. Set it on the API and worker.                    |
-| `USER_DEVICES_ENABLED` | on              | `false` stops signed-in desktop apps from letting bots run commands on the user's own computer. Set it on the API and worker.                           |
-| `PI_SESSION_RECORDING` | off             | `true` records agent sessions as JSONL under `DATA_DIR/pi-sessions`. The files are not encrypted, so do not use it on a shared or multi-tenant install. |
-| `PRIVACY_POLICY_URL`   | Rakazo's policy | The privacy policy linked from the AI data-sharing notice. Set it on the API.                                                                           |
+| Variable               | Default         | Effect                                                                                                                                                                              |
+| ---------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TICKET_BOARD_ENABLED` | `false`         | Turns the ticket board on for every account. Otherwise each person turns it on in **Settings → Labs**. Set it on the API and worker.                                                |
+| `CODE_MODE_ENABLED`    | `false`         | Turns code mode on for every account: a bot can run several tool calls in one short script. Otherwise each person turns it on in **Settings → Labs**. Set it on the API and worker. |
+| `CODE_FIRST_ENABLED`   | `false`         | With code mode on, bots reach most tools only through scripts. Otherwise each person turns it on in **Settings → Labs**. Set it on the API and worker.                              |
+| `USER_DEVICES_ENABLED` | on              | `false` stops signed-in desktop apps from letting bots run commands on the user's own computer. Set it on the API and worker.                                                       |
+| `PI_SESSION_RECORDING` | off             | `true` records agent sessions as JSONL under `DATA_DIR/pi-sessions`. The files are not encrypted, so do not use it on a shared or multi-tenant install.                             |
+| `PRIVACY_POLICY_URL`   | Rakazo's policy | The privacy policy linked from the AI data-sharing notice. Set it on the API.                                                                                                       |
 
 ## Chat history retention
 

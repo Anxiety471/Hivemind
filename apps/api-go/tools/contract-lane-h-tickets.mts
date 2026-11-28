@@ -12,7 +12,17 @@ export function laneHTicketCases(system: System): Case[] {
     await withLab(seeded);
   };
   const seedTicket =
-    (options: { status?: string; title?: string; bot?: boolean; decision?: unknown } = {}) =>
+    (
+      options: {
+        status?: string;
+        title?: string;
+        bot?: boolean;
+        decision?: unknown;
+        pullRequests?: unknown;
+        issues?: unknown;
+        repository?: unknown;
+      } = {},
+    ) =>
     async (seeded: Seeded) => {
       await withLab(seeded);
       const spaceId = seeded.spaces[0];
@@ -49,6 +59,9 @@ export function laneHTicketCases(system: System): Case[] {
           status: options.status ?? "todo",
           priority: "normal",
           ...(options.decision !== undefined ? { decision: options.decision } : {}),
+          ...(options.pullRequests !== undefined ? { pullRequests: options.pullRequests } : {}),
+          ...(options.issues !== undefined ? { issues: options.issues } : {}),
+          ...(options.repository !== undefined ? { repository: options.repository } : {}),
           createdByUserId: seeded.userId,
           createdAt: OLD,
           updatedAt: OLD,
@@ -103,6 +116,48 @@ export function laneHTicketCases(system: System): Case[] {
       { ignoreSignals: true },
     ),
     c(
+      "tickets.create",
+      "tkd-create",
+      "with-pull-requests",
+      {
+        title: "Track the rollout PR",
+        pullRequests: [
+          { url: "https://github.com/acme/app/pull/241/files" },
+          { url: "https://gitlab.com/group/project/-/merge_requests/7", state: "merged" },
+        ],
+      },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
+    c(
+      "tickets.create",
+      "tkd-create",
+      "with-merged-pull-request",
+      {
+        title: "Record the merged fix",
+        pullRequests: [{ url: "https://github.com/acme/app/pull/242", state: "merged" }],
+      },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
+    // Issues carry the same normalized link form as pull requests, and the repository link drops
+    // its trailing ".git".
+    c(
+      "tickets.create",
+      "tkd-create",
+      "with-issues-and-repository",
+      {
+        title: "Track the rollout issue",
+        issues: [
+          { url: " HTTPS://GitHub.com/Acme/App/Issues/17/files " },
+          { url: "https://gitlab.com/group/project/-/issues/7", state: "closed" },
+        ],
+        repository: " HTTPS://GitHub.com/Acme/App.GIT ",
+      },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
+    c(
       "tickets.update",
       "tkd-update",
       "with-decision",
@@ -117,6 +172,48 @@ export function laneHTicketCases(system: System): Case[] {
       },
       seedTicket(),
     ),
+    // The input replaces the list: a link left in keeps its recorded state (the uppercase link
+    // normalizes to the stored one), a new link starts open unless stated, and an omitted link is
+    // unlinked.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "pull-requests-merge",
+      {
+        id: "__s-tkt__",
+        pullRequests: [
+          { url: " HTTPS://GitHub.com/Acme/App/Pull/241/files " },
+          { url: "https://example.com/o/r/pull/9", state: "closed" },
+        ],
+      },
+      seedTicket({
+        pullRequests: [
+          { url: "https://github.com/acme/app/pull/241", state: "merged" },
+          { url: "https://example.com/o/r/pull/2", state: "open" },
+        ],
+      }),
+    ),
+    // Recording a merge that leaves nothing open finishes a blocked ticket and drops its question,
+    // including one sent in the same write.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "pull-requests-merge-finishes",
+      {
+        id: "__s-tkt__",
+        pullRequests: [{ url: "https://github.com/acme/app/pull/241", state: "merged" }],
+        decision: {
+          question: "Close it?",
+          options: ["Close", "Keep open", "Leave blocked"],
+          recommended: "Close",
+        },
+      },
+      seedTicket({
+        status: "blocked",
+        decision: storedDecision,
+        pullRequests: [{ url: "https://github.com/acme/app/pull/241", state: "open" }],
+      }),
+    ),
     c(
       "tickets.update",
       "tkd-update",
@@ -125,6 +222,52 @@ export function laneHTicketCases(system: System): Case[] {
         id: "__s-tkt__",
         decision: { question: "Pick?", options: ["One", "Two"], recommended: "One" },
       },
+      seedTicket(),
+    ),
+    // The input list replaces the recorded issues: the uppercase link normalizes to the stored one
+    // and keeps its recorded state, a new link starts open unless stated, and an omitted link is
+    // unlinked. The repository link is set in the same write.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "issues-replace-and-repository",
+      {
+        id: "__s-tkt__",
+        issues: [
+          { url: " HTTPS://GitHub.com/Acme/App/Issues/241/ " },
+          { url: "https://example.com/o/r/issues/9", state: "closed" },
+        ],
+        repository: "https://github.com/acme/app/tree/main",
+      },
+      seedTicket({
+        issues: [
+          { url: "https://github.com/acme/app/issues/241", state: "closed" },
+          { url: "https://example.com/o/r/issues/2", state: "open" },
+        ],
+      }),
+    ),
+    // Null removes a recorded repository link.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "repository-cleared",
+      { id: "__s-tkt__", repository: null },
+      seedTicket({ repository: "https://github.com/acme/app" }),
+    ),
+    // A pull request link is refused as an issue and as a repository.
+    c(
+      "tickets.create",
+      "tkd-create",
+      "issue-refuses-pull-request",
+      { title: "Wrong link", issues: [{ url: "https://github.com/acme/app/pull/241" }] },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
+    c(
+      "tickets.update",
+      "tkd-update",
+      "repository-refuses-pull-request",
+      { id: "__s-tkt__", repository: "https://github.com/acme/app/pull/241" },
       seedTicket(),
     ),
     c(

@@ -140,3 +140,62 @@ describe("connector tool with an MCP app", () => {
     expect(storeMcpAppHtml).not.toHaveBeenCalled();
   });
 });
+
+describe("connector tool with a job card", () => {
+  const card = {
+    kind: "job",
+    jobId: "job-1",
+    title: "mcp-job-card",
+    agent: "pi",
+    branch: "Anxiety471/mcp-job-card",
+    state: "working",
+    startedAt: 1_770_000_000_000,
+    url: "https://code.example.test",
+  };
+
+  beforeEach(() => publishMessage.mockClear());
+
+  it("posts the card the call's own result carried, with the run's secrets redacted", async () => {
+    const secret = "sk-live-revealed-value";
+    const { ctx, call } = setup(
+      [
+        {
+          type: "result",
+          data: {
+            content: [{ type: "text", text: "started" }],
+            structuredContent: { card: { ...card, title: `job ${secret}` } },
+          },
+        },
+      ],
+      {},
+      [secret],
+    );
+
+    await connectorTool(ctx, call);
+
+    const blocks = publishMessage.mock.calls[0]?.[3] as unknown as (typeof card)[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ ...card, title: "job [redacted]" });
+    expect(JSON.stringify(blocks)).not.toContain(secret);
+  });
+
+  it("posts no card for a result it cannot read", async () => {
+    const { ctx, call } = setup([
+      { type: "result", data: { content: [], structuredContent: { card: { kind: "job" } } } },
+      { type: "result", data: { content: [], structuredContent: { other: true } } },
+      { type: "result", data: { content: [], isError: true, structuredContent: { card } } },
+    ]);
+
+    await connectorTool(ctx, call);
+
+    expect(publishMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns the call's result when the card cannot be posted", async () => {
+    publishMessage.mockRejectedValueOnce(new Error("thread is gone"));
+    const result = { content: [], structuredContent: { card } };
+    const { ctx, call } = setup([{ type: "result", data: result }]);
+
+    expect(await connectorTool(ctx, call)).toEqual(result);
+  });
+});

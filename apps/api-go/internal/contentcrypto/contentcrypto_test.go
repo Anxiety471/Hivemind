@@ -479,6 +479,23 @@ func TestEncryptTextRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestEncryptTextWritesUnpairedSurrogateLikeNode(t *testing.T) {
+	// Buffer.from("a\ud800b", "utf8") seals "a\uFFFDb"; WTF-8 carries the surrogate.
+	key := testKey()
+	location := testLocation()
+	sealed, err := EncryptText(key, location, "a"+string([]byte{0xed, 0xa0, 0x80})+"b")
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	opened, err := DecryptText(key, location, sealed)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if opened != "a\uFFFDb" {
+		t.Fatalf("opened = %q", opened)
+	}
+}
+
 func TestSealJSONWritesNegativeZeroLikeJSONStringify(t *testing.T) {
 	negativeZero := math.Copysign(0, -1)
 	identity := func(plaintext string) (string, error) { return plaintext, nil }

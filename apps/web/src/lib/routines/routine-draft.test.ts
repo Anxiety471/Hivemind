@@ -102,6 +102,7 @@ it("reads whether a routine runs in the chat", () => {
     modelId: null,
     thinkingLevel: null,
     watch: null,
+    prepare: null,
     watchState: null,
     lastRunAt: null,
     nextRunAt: null,

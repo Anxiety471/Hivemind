@@ -5,7 +5,11 @@ import {
   TICKET_DECISION_OPTION_MAX_LENGTH,
   TICKET_DECISION_QUESTION_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
+  TICKET_ISSUE_STATES,
+  TICKET_MAX_ISSUES,
+  TICKET_MAX_PULL_REQUESTS,
   TICKET_PRIORITIES,
+  TICKET_PULL_REQUEST_STATES,
   TICKET_STATUSES,
   TICKET_TITLE_MAX_LENGTH,
 } from "@rakazo/contracts";
@@ -47,6 +51,42 @@ const ticketDecisionSpec = {
   additionalProperties: false,
 };
 
+const ticketPullRequestsSpec = {
+  type: "array",
+  maxItems: TICKET_MAX_PULL_REQUESTS,
+  description:
+    "Pull request links the ticket tracks; on update this replaces the list. Omit state to keep the one recorded. Recording a merge (state merged) that leaves no linked pull request open moves the ticket to done and drops its pending decision, unless you also set status. A bot's Git event webhook records merges by itself.",
+  items: {
+    type: "object",
+    properties: {
+      url: { type: "string" },
+      state: { type: "string", enum: TICKET_PULL_REQUEST_STATES },
+    },
+    required: ["url"],
+  },
+};
+
+const ticketIssuesSpec = {
+  type: "array",
+  maxItems: TICKET_MAX_ISSUES,
+  description:
+    "Issue links the ticket tracks; on update this replaces the list. Omit state to keep the one recorded. An issue's state never moves the ticket.",
+  items: {
+    type: "object",
+    properties: {
+      url: { type: "string" },
+      state: { type: "string", enum: TICKET_ISSUE_STATES },
+    },
+    required: ["url"],
+  },
+};
+
+const ticketRepositorySpec = {
+  type: "string",
+  description:
+    "Optional home page link of the repository the work lives in; on update an empty string removes it.",
+};
+
 const scheduleCreateProperties = {
   name: { type: "string", description: "Short label shown in Routines." },
   prompt: {
@@ -59,9 +99,9 @@ const scheduleCreateProperties = {
     type: "boolean",
     description: "Run as a turn in this chat.",
   },
+  // Repeated in every timing branch, so it is explained once, in schedule_create's description.
+  prepare: {},
 };
-
-const scheduleTimingNames = [...SCHEDULE_TIMING_FIELDS, "watch"] as const;
 
 /**
  * Model serializers often emit unused optional fields as null or "". Those are
@@ -70,6 +110,8 @@ const scheduleTimingNames = [...SCHEDULE_TIMING_FIELDS, "watch"] as const;
 const blankScheduleTiming = {
   anyOf: [{ type: "null" }, { type: "string", pattern: "^\\s*$" }],
 };
+
+const scheduleTimingNames = [...SCHEDULE_TIMING_FIELDS, "watch"] as const;
 
 const scheduleTimingSpecs = {
   cron: { type: "string", description: "5-field cron for repeating schedules." },
@@ -348,6 +390,9 @@ export const workTools: ConnectorTool[] = [
           description: "Bot ids assigned to execute this ticket. Defaults to you.",
         },
         decision: ticketDecisionSpec,
+        pullRequests: ticketPullRequestsSpec,
+        issues: ticketIssuesSpec,
+        repository: ticketRepositorySpec,
       },
       required: ["title"],
     },
@@ -383,6 +428,9 @@ export const workTools: ConnectorTool[] = [
           description: "Bot ids assigned to execute this ticket.",
         },
         decision: { anyOf: [ticketDecisionSpec, { type: "null" }] },
+        pullRequests: ticketPullRequestsSpec,
+        issues: ticketIssuesSpec,
+        repository: ticketRepositorySpec,
       },
       required: ["id"],
     },
@@ -466,7 +514,7 @@ export const workTools: ConnectorTool[] = [
   {
     name: "schedule_create",
     description:
-      'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today. inChat true only when each run continues work this chat is doing, such as updating a draft or plan written here or fixing something started here; it then waits for work under way here. Otherwise false: it runs on time, seeing this chat\'s latest messages and its own earlier results. on: run on events too, or only (no timing); each run receives the event: webhook, git (a GitHub repo webhook the user adds with the routine URL and key; needs no connected app), chat (your connected chat app, by name), email (to your address from the owner or their domain).',
+      'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today. inChat true only when each run continues work this chat is doing, such as updating a draft or plan written here or fixing something started here; it then waits for work under way here. Otherwise false: it runs on time, seeing this chat\'s latest messages and its own earlier results. on: run on events too, or only (no timing); each run receives the event: webhook, git (a GitHub repo webhook the user adds with the routine URL and key; needs no connected app), chat (your connected chat app, by name), email (to your address from the owner or their domain). prepare {command,args}: saved command (codemode.cmd) each run calls first, read-only, for fixed fetching; you get its result, or it returns {skip:true} to end the run or {post:"text"} to reply instead.',
     inputSchema: scheduleCreateInputSchema,
   },
   {
@@ -477,7 +525,7 @@ export const workTools: ConnectorTool[] = [
   {
     name: "schedule_update",
     description:
-      "Edit one of this bot's schedules by routineId instead of cancelling and recreating it. Send only what changes. Timing fields replace the current timing; startAt alone moves the next run of the current repeat. active false pauses it. The result's changes lists each field that changed with its before and after; the prompt is returned only there. It cannot change a watch's interval or timezone; the user can change the interval in the routine's settings on the web. on replaces the routine's events; {} removes them.",
+      "Edit one of this bot's schedules by routineId instead of cancelling and recreating it. Send only what changes. Timing fields replace the current timing; startAt alone moves the next run of the current repeat. active false pauses it. The result's changes lists each field that changed with its before and after; the prompt is returned only there. It cannot change a watch's interval or timezone; the user can change the interval in the routine's settings on the web. on replaces the routine's events; {} removes them. prepare replaces the command it runs first, as in schedule_create; {} removes it.",
     inputSchema: {
       type: "object",
       properties: {

@@ -22,14 +22,23 @@ import { loadAgentTicketContext } from "../../tasks/ticket-context.js";
 import type { RunHold } from "../lifecycle/run-attempt.js";
 import { loadCurrentTurnImages } from "../turn/run-turn-images.js";
 import { messageToAgentHistorySegments, messageToAgentHistoryText } from "./reply-context.js";
-import type { ConnectedRun, RunRecords } from "./run-assembly-records.js";
+import type { ConnectedRun, RunRecords, SavedTurn } from "./run-assembly-records.js";
 import { threadContextForRun } from "./run-instructions.prompt.js";
 import { DELEGATED_EMPTY_NOTICE, runAllowsSilentEmpty } from "./run-replies.prompt.js";
 
-export async function readThreadHistory(hold: RunHold, parts: { records: RunRecords }) {
+export async function readThreadHistory(
+  hold: RunHold,
+  parts: { saved?: SavedTurn; records: RunRecords },
+) {
   const { deps, run } = hold;
   const { bot, historyReach, messages, nonOwnerChatRun, replaysToolHistory, thread } =
     parts.records;
+  // When resuming this run from a saved turn checkpoint, its own persisted partial reply is
+  // already carried inside the checkpoint (plus continuation prompt), so skip it here to avoid
+  // re-injecting it via addedHistory.
+  const historySourceMessages = parts.saved?.storedTurnCheckpoint
+    ? messages.filter((m) => !(m.runId === run.id && isPartialReplyClientNonce(m.clientNonce)))
+    : messages;
   // Group threads and spaces several people share: who wrote each message, so the model can
   // tell the bots and the people apart. A personal space's direct chat stays plain turns.
   const people = await loadSpacePeople(
@@ -48,7 +57,7 @@ export async function readThreadHistory(hold: RunHold, parts: { records: RunReco
   const threadContext = threadContextForRun(
     run.trigger,
     {
-      messages: [...messages].reverse().map((m) => {
+      messages: [...historySourceMessages].reverse().map((m) => {
         const speaker = historySpeaker(speakers, m);
         // In a group, turns from several speakers are joined, so no line may pose as a label.
         const neutral = (value: string) => (speakers ? neutralizeSpeakerLabels(value) : value);
@@ -217,6 +226,11 @@ export async function loadTurnContext(
           context,
         )
       : Promise.resolve(null);
+  // Every TASK-n discussed recently gets its live board state, not only the latest user turn.
+  const recentTicketText = [task.prompt, ...history.slice(-12).map((entry) => entry.content)]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 12_000);
   const [discovered, currentTurnImages, memoryContext, scratchpadContext, ticketContext, recalled] =
     await Promise.all([
       discoveredPromise,
@@ -232,7 +246,7 @@ export async function loadTurnContext(
         ? Promise.resolve(undefined)
         : loadAgentTicketContext(deps, {
             spaceId: run.spaceId,
-            text: task.prompt,
+            text: recentTicketText,
             botId: bot.id,
             userId: run.userId,
           }),

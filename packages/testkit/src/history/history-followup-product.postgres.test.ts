@@ -36,7 +36,6 @@ describe.skipIf(!enabled)("persisted source-verified history followups", () => {
               row.role === "assistant" && JSON.stringify(row.content).includes(verifiedReply),
           ).length,
         ).toBe(index);
-        expect(serialized).toContain("do not repeat retrieval solely because the user asks again");
       };
       const key = "synthetic-history-followup-key";
       const model = await startModelEmulator({

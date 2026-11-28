@@ -14,6 +14,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { infisicalFake } from "../../../../packages/adapters/src/secrets/secret-store-fake.js";
 import { readBoundedBody } from "../http/http-body.js";
+import { githubIssueState, githubPullRequestState } from "./github-webhook.js";
 import type { WebhookDeps } from "./webhook.js";
 import {
   formatGithubEventPrompt,
@@ -111,7 +112,7 @@ function createDeps(
     secrets: {
       load: async (ciphertext: string) => (overrides.load ?? (() => SECRET))(ciphertext),
     } as unknown as WebhookDeps["secrets"],
-    events: { sendUserMessage },
+    events: { sendUserMessage, notify: vi.fn(async () => {}) },
     jobs: { enqueue } as unknown as WebhookDeps["jobs"],
     sendUserMessage,
     enqueue,
@@ -201,6 +202,44 @@ describe("formatGithubEventPrompt", () => {
     expect(prompt).not.toContain('"number"');
     expect(prompt).not.toContain('"repositoryId"');
     expect(prompt).not.toContain("Sha");
+  });
+});
+
+describe("githubPullRequestState", () => {
+  const url = "https://github.com/acme/app/pull/42";
+  it.each([
+    ["a merge", { action: "closed", pull_request: { html_url: url, merged: true } }, "merged"],
+    ["a close without merging", { action: "closed", pull_request: { html_url: url } }, "closed"],
+    ["a reopen", { action: "reopened", pull_request: { html_url: url } }, "open"],
+  ])("reads %s", (_label, payload, state) => {
+    expect(githubPullRequestState("pull_request", payload)).toEqual({ url, state });
+  });
+
+  it("ignores events that leave the state as it was", () => {
+    const pull_request = { html_url: url, merged: true };
+    expect(githubPullRequestState("pull_request", { action: "edited", pull_request })).toBeNull();
+    expect(githubPullRequestState("issues", { action: "closed", pull_request })).toBeNull();
+    expect(githubPullRequestState("pull_request", { action: "closed" })).toBeNull();
+  });
+});
+
+describe("githubIssueState", () => {
+  const url = "https://github.com/acme/app/issues/7";
+  it("reads a close and a reopen", () => {
+    expect(githubIssueState("issues", { action: "closed", issue: { html_url: url } })).toEqual({
+      url,
+      state: "closed",
+    });
+    expect(githubIssueState("issues", { action: "reopened", issue: { html_url: url } })).toEqual({
+      url,
+      state: "open",
+    });
+  });
+
+  it("ignores other events and actions", () => {
+    const issue = { html_url: url };
+    expect(githubIssueState("issues", { action: "labeled", issue })).toBeNull();
+    expect(githubIssueState("issue_comment", { action: "closed", issue })).toBeNull();
   });
 });
 

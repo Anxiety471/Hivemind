@@ -9,6 +9,7 @@ const SPACE_CHANGE_PROCEDURES: Record<string, readonly SpaceChangeKind[]> = {
   "routines.create": ["routines"],
   "routines.update": ["routines"],
   "routines.remove": ["routines"],
+  "routines.setPrepare": ["routines"],
   "routines.testRun": ["runs"],
   // These can queue a run.
   "threads.sendWithRoutines": ["runs"],
@@ -27,6 +28,7 @@ const SPACE_CHANGE_PROCEDURES: Record<string, readonly SpaceChangeKind[]> = {
   "files.restoreFolder": ["files"],
   "files.deleteFolder": ["files"],
   "files.rename": ["files"],
+  "files.update": ["files"],
   "files.move": ["files"],
   "files.trash": ["files"],
   "files.restore": ["files"],

@@ -1,0 +1,57 @@
+name: api-go
+
+# The Go API's own tests. They mirror TypeScript tables (message blocks, enum copies, reply quotes,
+# block schemas) by reading packages/contracts, packages/core and apps/api, so this runs for any
+# change either side can make: a contract edit that Go mirrors is exactly the drift the guards
+# exist to catch. `push` watches the deployed branch, not `main`.
+on:
+  push:
+    branches: [hivemind-main]
+    paths:
+      - apps/api-go/**
+      - apps/api/src/**
+      - packages/contracts/**
+      - packages/core/**
+      - packages/db/**
+      - packages/adapters/**
+      - .github/workflows/api-go.yml
+  pull_request:
+    paths:
+      - apps/api-go/**
+      - apps/api/src/**
+      - packages/contracts/**
+      - packages/core/**
+      - packages/db/**
+      - packages/adapters/**
+      - .github/workflows/api-go.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request supersedes the older run.
+concurrency:
+  group: api-go-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Vet and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # The fixture-staleness guard runs the TypeScript generator through tsx, so the workspace has
+      # to be installed; the guard fails, rather than skips, when CI has no tsx.
+      - uses: ./.github/actions/setup-workspace
+      # The module's own go directive: the version the binary is built with, not a copy of it.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache-dependency-path: apps/api-go/go.sum
+      - run: go vet ./...
+        working-directory: apps/api-go
+      - run: go test ./...
+        working-directory: apps/api-go

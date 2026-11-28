@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 )
 
@@ -147,7 +148,7 @@ func (s snapshotReader) loadMessagePage(threadID string, query pageQuery) (messa
 		// explicitly retains them and must receive each page for pagination.
 		substantive := false
 		for _, row := range visible {
-			if !isPeerReceipt(storedBlocks(row.Blocks)) {
+			if !isPeerReceipt(messageblocks.StoredBlocks(row.Blocks)) {
 				substantive = true
 				break
 			}
@@ -192,6 +193,7 @@ func (s snapshotReader) fetchRange(threadID string, minSeq, maxSeq int64) ([]mes
 // queryMessages reads message rows with their reply parent, opens the sealed blocks of the page
 // and of each reply parent in its own thread, and returns them in the query's order.
 func (s snapshotReader) queryMessages(tail string, args ...any) ([]messageRow, error) {
+	// writeaudit:dynamic read: callers pass fixed WHERE tails; args are filters
 	rows, err := s.tx.Query(s.ctx, `SELECT m.id, m."threadId", m.seq, m.role, m.blocks, m."botId", m."authorUserId",
 			m."replyToMessageId", m."replyQuote", m."runId", m."clientNonce", m."createdAt",
 			p.id, p."threadId", p.role, p."botId", p."authorUserId", p.blocks
@@ -212,13 +214,13 @@ func (s snapshotReader) queryMessages(tail string, args ...any) ([]messageRow, e
 			rows.Close()
 			return nil, err
 		}
-		if row.Blocks, err = decodeJSON(blocks); err != nil {
+		if row.Blocks, err = messageblocks.DecodeJSON(blocks); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if parentID != nil {
 			parent.ThreadID, parent.Role = *parentThread, *parentRole
-			if parent.Blocks, err = decodeJSON(parentBlocks); err != nil {
+			if parent.Blocks, err = messageblocks.DecodeJSON(parentBlocks); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -306,7 +308,7 @@ func (s snapshotReader) withoutPeerRunMessages(rows []messageRow) ([]messageRow,
 			kept = append(kept, row)
 			continue
 		}
-		blocks := storedBlocks(row.Blocks)
+		blocks := messageblocks.StoredBlocks(row.Blocks)
 		switch {
 		case background[*row.RunID]:
 			// A person's own message stays visible unless it is a delivery; ticket work stays off the
@@ -398,10 +400,7 @@ var messageRoles = []string{"user", "bot", "system"}
 
 // threadMessage is toThreadMessage, then ThreadMessageSchema.
 func threadMessage(row messageRow, authors map[string]map[string]any) (map[string]any, error) {
-	blocks, valid, decidable := parseBlocks(storedBlocks(row.Blocks))
-	if !decidable {
-		return nil, local.ErrDecline
-	}
+	blocks, valid := messageblocks.ParseBlocks(messageblocks.StoredBlocks(row.Blocks))
 	if !valid || !slices.Contains(messageRoles, row.Role) || (row.BotID != nil && *row.BotID == "") ||
 		(row.RunID != nil && *row.RunID == "") || (row.ReplyToMessageID != nil && *row.ReplyToMessageID == "") {
 		return nil, outputInvalid()
@@ -455,10 +454,7 @@ func parentPreview(parent *parentRow, authors map[string]map[string]any) (map[st
 	if !isList {
 		return nil, nil
 	}
-	blocks, valid, decidable := parseBlocks(entries)
-	if !decidable {
-		return nil, local.ErrDecline
-	}
+	blocks, valid := messageblocks.ParseBlocks(entries)
 	if !valid {
 		return nil, nil
 	}

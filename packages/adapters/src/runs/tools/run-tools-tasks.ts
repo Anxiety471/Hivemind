@@ -1,4 +1,8 @@
-import type { TicketDecisionInput } from "@rakazo/contracts";
+import type {
+  TicketDecisionInput,
+  TicketIssueInput,
+  TicketPullRequestInput,
+} from "@rakazo/contracts";
 import { TicketDecisionInputSchema } from "@rakazo/contracts";
 import {
   desktopGuardApplies,
@@ -39,6 +43,7 @@ import {
 import {
   skillCreateFromTool,
   skillDeleteFromTool,
+  skillModeFromTool,
   skillReadFromTool,
   skillUpdateFromTool,
 } from "../../tools/skill-tools.js";
@@ -88,6 +93,27 @@ function parseDecisionArg(raw: unknown): {
     };
   }
   return { value: parsed.data };
+}
+
+/** Links may come as bare URLs or as { url, state }; createTicket/updateTicket validate each. */
+function parseLinksArg<Link>(
+  field: string,
+  raw: unknown,
+): {
+  value?: Link[];
+  error?: string;
+} {
+  if (raw === undefined) return {};
+  if (!Array.isArray(raw)) return { error: `${field}: Expected a list of links.` };
+  return {
+    value: raw.map((item) => (typeof item === "string" ? { url: item } : item)),
+  };
+}
+
+/** An empty repository link removes it, like null. */
+function parseRepositoryArg(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  return raw === null || raw === "" ? null : String(raw);
 }
 
 /** The task catalog, scratchpad, ticket board, schedules and skills. */
@@ -205,6 +231,11 @@ export const taskTools: ToolHandlers = {
       : undefined;
     const parsedDecision = parseDecisionArg(args.decision);
     if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
+    const pullRequests = parseLinksArg<TicketPullRequestInput>("pullRequests", args.pullRequests);
+    if (pullRequests.error) return call.finish({ error: pullRequests.error });
+    const issues = parseLinksArg<TicketIssueInput>("issues", args.issues);
+    if (issues.error) return call.finish({ error: issues.error });
+    const repository = parseRepositoryArg(args.repository);
     return call.finish(
       await createTicket(deps, {
         spaceId: run.spaceId,
@@ -217,6 +248,9 @@ export const taskTools: ToolHandlers = {
         ownerUserId,
         workerBotIds,
         ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
+        ...(pullRequests.value ? { pullRequests: pullRequests.value } : {}),
+        ...(issues.value ? { issues: issues.value } : {}),
+        ...(repository ? { repository } : {}),
       }),
     );
   },
@@ -234,6 +268,11 @@ export const taskTools: ToolHandlers = {
       : undefined;
     const parsedDecision = parseDecisionArg(args.decision);
     if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
+    const pullRequests = parseLinksArg<TicketPullRequestInput>("pullRequests", args.pullRequests);
+    if (pullRequests.error) return call.finish({ error: pullRequests.error });
+    const issues = parseLinksArg<TicketIssueInput>("issues", args.issues);
+    if (issues.error) return call.finish({ error: issues.error });
+    const repository = parseRepositoryArg(args.repository);
     return call.finish(
       await updateTicket(deps, {
         spaceId: run.spaceId,
@@ -248,6 +287,9 @@ export const taskTools: ToolHandlers = {
         ownerUserId,
         workerBotIds,
         ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
+        ...(pullRequests.value ? { pullRequests: pullRequests.value } : {}),
+        ...(issues.value ? { issues: issues.value } : {}),
+        ...(repository !== undefined ? { repository } : {}),
       }),
     );
   },
@@ -370,6 +412,7 @@ export const taskTools: ToolHandlers = {
         timezone: isScheduleValueProvided(args.timezone) ? String(args.timezone) : undefined,
         schedule: compactScheduleInput(scheduleTimingArgs(args)),
         on: isScheduleValueProvided(args.on) ? args.on : undefined,
+        prepare: isScheduleValueProvided(args.prepare) ? args.prepare : undefined,
       }),
     );
   },
@@ -392,6 +435,35 @@ export const taskTools: ToolHandlers = {
       name: args.name ? String(args.name) : undefined,
     });
     return call.finish(cancelled);
+  },
+  async skill_mode(ctx, call) {
+    const { deps, run, bot } = ctx;
+    const { args } = call;
+    const names = Array.isArray(args.names)
+      ? args.names.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+    return call.finish(
+      await skillModeFromTool(
+        deps.prisma,
+        {
+          spaceId: run.spaceId,
+          userId: run.userId,
+          botId: bot.id,
+          ownerStartedRun: ctx.source.ownerStartedRun,
+          nonOwnerChatRun: ctx.source.messagingChannelRun,
+          offeredToolNames: new Set(ctx.tools.offered.map((tool) => tool.name)),
+        },
+        {
+          query: typeof args.query === "string" ? args.query : undefined,
+          name: typeof args.name === "string" ? args.name : undefined,
+          names,
+          file: typeof args.file === "string" ? args.file : undefined,
+          list: typeof args.list === "boolean" ? args.list : undefined,
+          source: typeof args.source === "string" ? args.source : undefined,
+          limit: typeof args.limit === "number" ? args.limit : undefined,
+        },
+      ),
+    );
   },
   async skill_read(ctx, call) {
     const { deps, run } = ctx;

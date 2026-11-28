@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { i18n } from "@lingui/core";
 import type { MessageBlock, ThreadMessage } from "@rakazo/contracts";
 import type { ReactNode } from "react";
 import { act, useCallback, useMemo, useRef } from "react";
@@ -39,6 +40,8 @@ vi.mock("@lingui/react/macro", () => ({
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  i18n.load("en", {});
+  i18n.activate("en");
   messageRenders.clear();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   window.matchMedia ??= ((query: string) => ({
@@ -69,7 +72,15 @@ function message(id: string, text: string): ThreadMessage {
   };
 }
 
-function Host({ messages }: { messages: ThreadMessage[] }) {
+function Host({
+  messages,
+  failedRun = null,
+  onRetryRun,
+}: {
+  messages: ThreadMessage[];
+  failedRun?: { id: string; botId?: string; error: string; resumable?: boolean } | null;
+  onRetryRun?: (runId: string) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const artifactTarget = useMemo(() => ({ botId: "bot" }), []);
   const none = useMemo(() => new Set<string>(), []);
@@ -87,6 +98,7 @@ function Host({ messages }: { messages: ThreadMessage[] }) {
       scrollRequest={null}
       onScrollRequestHandled={reply}
       followRequest={0}
+      threadLoading={false}
       artifactTarget={artifactTarget}
       transcript={{
         messages,
@@ -102,6 +114,8 @@ function Host({ messages }: { messages: ThreadMessage[] }) {
       dismissableAskIds={none}
       running={false}
       workingBots={[]}
+      failedRun={failedRun}
+      onRetryRun={onRetryRun}
       onLoadOlder={reply}
       onOpenBot={reply}
       onAnswer={answer}
@@ -216,3 +230,54 @@ it.each(["Build a plan", "👍"])(
     ).toBeNull();
   },
 );
+
+it("renders Continue attached to a partial failed message and Retry standalone otherwise", () => {
+  const onRetryRun = vi.fn();
+  const partialBotMessage: ThreadMessage = {
+    ...message("bot-partial", "Part one..."),
+    runId: "run-failed",
+  };
+  act(() =>
+    root.render(
+      <Host
+        messages={[partialBotMessage]}
+        failedRun={{
+          id: "run-failed",
+          botId: "bot",
+          error: "503 Service Unavailable",
+          resumable: true,
+        }}
+        onRetryRun={onRetryRun}
+      />,
+    ),
+  );
+  const messageRow = container.querySelector('[data-message-id="bot-partial"]');
+  expect(messageRow?.querySelector('[data-testid="message-run-error"]')).not.toBeNull();
+  expect(container.querySelector('[data-testid="standalone-run-error"]')).toBeNull();
+  const continueBtn = messageRow?.querySelector<HTMLButtonElement>(
+    '[data-testid="message-retry-button"]',
+  );
+  expect(continueBtn?.textContent).toContain("Continue");
+  act(() => continueBtn?.click());
+  expect(onRetryRun).toHaveBeenCalledWith("run-failed");
+
+  act(() =>
+    root.render(
+      <Host
+        messages={[{ ...message("user-1", "Hi"), role: "user", runId: "run-failed" }]}
+        failedRun={{
+          id: "run-failed",
+          botId: "bot",
+          error: "Request timed out.",
+          resumable: false,
+        }}
+        onRetryRun={onRetryRun}
+      />,
+    ),
+  );
+  const standalone = container.querySelector('[data-testid="standalone-run-error"]');
+  expect(standalone).not.toBeNull();
+  expect(standalone?.querySelector('[data-testid="message-retry-button"]')?.textContent).toContain(
+    "Retry",
+  );
+});

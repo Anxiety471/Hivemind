@@ -1,5 +1,5 @@
 import { useLingui } from "@lingui/react/macro";
-import { isEmptyBotMemory } from "@rakazo/contracts";
+import { isArchiveMemoryPath, isEmptyBotMemory } from "@rakazo/contracts";
 import { writeSaved } from "@rakazo/core/query";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
@@ -32,7 +32,9 @@ export function BotContextCards({ botId, section }: { botId: string; section: "w
   const work = (section === "work" && workQuery.data) || [];
   const docs = useMemo(
     () =>
-      (section === "memory" ? (docsQuery.data ?? []) : []).filter((doc) => !isEmptyBotMemory(doc)),
+      (section === "memory" ? (docsQuery.data ?? []) : []).filter(
+        (doc) => !isEmptyBotMemory(doc) && !isArchiveMemoryPath(doc.path),
+      ),
     [section, docsQuery.data],
   );
   const change = useSave({

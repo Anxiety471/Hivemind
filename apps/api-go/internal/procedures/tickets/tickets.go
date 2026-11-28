@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"regexp"
 	"slices"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
@@ -40,6 +43,11 @@ const (
 	decisionQuestionMaxLength = 300
 	decisionOptionMaxLength   = 160
 	decisionAnswerMaxLength   = 2_000
+	// pullRequestMaxCount is TICKET_MAX_PULL_REQUESTS, issueMaxCount TICKET_MAX_ISSUES and
+	// linkURLMaxLength TICKET_LINK_URL_MAX_LENGTH (packages/contracts/src/artifacts/board.ts).
+	pullRequestMaxCount = 10
+	issueMaxCount       = 10
+	linkURLMaxLength    = 500
 )
 
 var (
@@ -49,11 +57,19 @@ var (
 	errTicketMissing = orpc.BadRequest("Ticket not found.")
 	errBotMissing    = orpc.BadRequest("Unknown bot.")
 	errUserMissing   = orpc.BadRequest("Unknown user.")
+	// errStoredPullRequests and errStoredIssues stop an update that would build on a stored list
+	// this release cannot read (readStoredTicketPullRequests' and readStoredTicketIssues' "reject"),
+	// answered as a 500.
+	errStoredPullRequests = errors.New("stored tickets.pullRequests does not match its schema")
+	errStoredIssues       = errors.New("stored tickets.issues does not match its schema")
 )
 
 var (
 	ticketStatuses   = []string{"todo", "doing", "review", "blocked", "done", "closed"}
 	ticketPriorities = []string{"low", "normal", "high", "urgent"}
+	// pullRequestStates is TICKET_PULL_REQUEST_STATES and issueStates TICKET_ISSUE_STATES.
+	pullRequestStates = []string{"open", "merged", "closed"}
+	issueStates       = []string{"open", "closed"}
 )
 
 // Completed is isTicketCompletedStatus: done and closed stamp the completion time.
@@ -84,17 +100,19 @@ func Enabled(ctx context.Context, tx pgx.Tx, deployment shared.Deployment, userI
 type Board struct {
 	ID, SpaceID, Name, Prefix string
 	NextNumber                int64
-	CreatedAt, UpdatedAt      time.Time
+	// Repositories is the raw repositories jsonb, read by the boards DTO.
+	Repositories         []byte
+	CreatedAt, UpdatedAt time.Time
 }
 
 // BoardColumns is the select list every boards row is read with.
-const BoardColumns = `id, "spaceId", name, "ticketPrefix", "nextNumber", "createdAt", "updatedAt"`
+const BoardColumns = `id, "spaceId", name, "ticketPrefix", "nextNumber", repositories, "createdAt", "updatedAt"`
 
 // ScanBoard reads one boards row.
 func ScanBoard(row pgx.Row) (Board, error) {
 	var board Board
 	err := row.Scan(&board.ID, &board.SpaceID, &board.Name, &board.Prefix, &board.NextNumber,
-		&board.CreatedAt, &board.UpdatedAt)
+		&board.Repositories, &board.CreatedAt, &board.UpdatedAt)
 	return board, err
 }
 
@@ -122,7 +140,8 @@ func EnsureBoard(ctx context.Context, tx pgx.Tx, spaceID string) (Board, error) 
 	}
 	at := now()
 	if _, err := tx.Exec(ctx, `INSERT INTO boards (id, "spaceId", name, "createdAt", "updatedAt")
-		VALUES ($1, $2, $3, $4, $4) ON CONFLICT ("spaceId") DO NOTHING`, effects.NewID(), spaceID, name, at); err != nil {
+		VALUES ($1, $2, $3, $4, $4) ON CONFLICT ("spaceId") DO NOTHING`,
+		db.Data(effects.NewID(), spaceID, name, at)...); err != nil {
 		return Board{}, err
 	}
 	board, err = ScanBoard(tx.QueryRow(ctx, `SELECT `+BoardColumns+` FROM boards WHERE "spaceId" = $1`, spaceID))
@@ -175,6 +194,17 @@ type TicketDecision struct {
 	Options    []TicketDecisionOption `json:"options"`
 	Answer     string                 `json:"answer,omitempty"`
 	AnsweredAt string                 `json:"answeredAt,omitempty"`
+}
+
+// AnswerLabel resolves the display text of a decision answer: the label of the option
+// whose ID matches the stored answer, or the answer itself (free text, "Other").
+func (d TicketDecision) AnswerLabel() string {
+	for _, opt := range d.Options {
+		if opt.ID == d.Answer {
+			return opt.Label
+		}
+	}
+	return d.Answer
 }
 
 // TicketDecisionInput is TicketDecisionInputSchema (packages/contracts/src/artifacts/board.ts).
@@ -231,26 +261,29 @@ func NormalizeTicketDecision(input TicketDecisionInput) (TicketDecision, bool) {
 
 // Ticket is TicketSchema (packages/contracts/src/artifacts/board.ts).
 type Ticket struct {
-	ID              string          `json:"id"`
-	BoardID         string          `json:"boardId"`
-	SpaceID         string          `json:"spaceId"`
-	Number          int64           `json:"number"`
-	Ref             string          `json:"ref"`
-	Title           string          `json:"title"`
-	Description     *string         `json:"description"`
-	Status          string          `json:"status"`
-	Priority        string          `json:"priority"`
-	AssigneeBotID   *string         `json:"assigneeBotId"`
-	OwnerUserID     *string         `json:"ownerUserId"`
-	OwnerBotID      *string         `json:"ownerBotId"`
-	WorkerBotIDs    []string        `json:"workerBotIds"`
-	CreatedByBotID  *string         `json:"createdByBotId"`
-	CreatedByUserID *string         `json:"createdByUserId"`
-	CreatedAt       string          `json:"createdAt"`
-	UpdatedAt       string          `json:"updatedAt"`
-	CompletedAt     *string         `json:"completedAt"`
-	Decision        *TicketDecision `json:"decision,omitempty"`
-	WaitingOnBotIDs []string        `json:"waitingOnBotIds,omitempty"`
+	ID              string              `json:"id"`
+	BoardID         string              `json:"boardId"`
+	SpaceID         string              `json:"spaceId"`
+	Number          int64               `json:"number"`
+	Ref             string              `json:"ref"`
+	Title           string              `json:"title"`
+	Description     *string             `json:"description"`
+	Status          string              `json:"status"`
+	Priority        string              `json:"priority"`
+	AssigneeBotID   *string             `json:"assigneeBotId"`
+	OwnerUserID     *string             `json:"ownerUserId"`
+	OwnerBotID      *string             `json:"ownerBotId"`
+	WorkerBotIDs    []string            `json:"workerBotIds"`
+	CreatedByBotID  *string             `json:"createdByBotId"`
+	CreatedByUserID *string             `json:"createdByUserId"`
+	CreatedAt       string              `json:"createdAt"`
+	UpdatedAt       string              `json:"updatedAt"`
+	CompletedAt     *string             `json:"completedAt"`
+	Decision        *TicketDecision     `json:"decision,omitempty"`
+	PullRequests    []TicketPullRequest `json:"pullRequests"`
+	Issues          []TicketIssue       `json:"issues"`
+	Repository      *string             `json:"repository"`
+	WaitingOnBotIDs []string            `json:"waitingOnBotIds,omitempty"`
 }
 
 // TicketComment is TicketCommentSchema (packages/contracts/src/board.ts:75-85).
@@ -285,22 +318,220 @@ type ticketRow struct {
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
 	Decision        []byte
+	PullRequests    []byte
+	Issues          []byte
+	Repository      *string
 }
 
 const ticketColumns = `id, "boardId", "spaceId", number, title, description, status, priority, "assigneeBotId",
-	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision`
+	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision,
+	"pullRequests", issues, repository`
 
 func scanTicket(row pgx.Row) (ticketRow, error) {
 	var value ticketRow
 	err := row.Scan(&value.ID, &value.BoardID, &value.SpaceID, &value.Number, &value.Title, &value.Description,
 		&value.Status, &value.Priority, &value.AssigneeBotID, &value.OwnerUserID, &value.OwnerBotID,
 		&value.WorkerBotIDs, &value.CreatedByBotID, &value.CreatedByUserID,
-		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt, &value.Decision)
+		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt, &value.Decision, &value.PullRequests,
+		&value.Issues, &value.Repository)
 	return value, err
 }
 
 func ticketRef(prefix string, number int64) string {
 	return prefix + "-" + strconv.FormatInt(number, 10)
+}
+
+// ticketItemURLPattern is TICKET_ITEM_URL (packages/contracts/src/artifacts/board.ts), kept to the
+// RE2 subset so the Go API normalizes a link exactly as TypeScript does.
+var ticketItemURLPattern = regexp.MustCompile(`^https://([a-z0-9.-]+)((?:/[a-z0-9_.~-]+)+?)/(-/)?(pull|pulls|merge_requests|pull-requests|issues)/([1-9][0-9]{0,9})(?:[/?#].*)?$`)
+
+// repositoryURLPattern is REPOSITORY_URL: a host and a repository path of 2 to 8 segments, with an
+// optional trailing slash, query or fragment.
+var repositoryURLPattern = regexp.MustCompile(`^https://([a-z0-9.-]+)((?:/[a-z0-9_.~-]+){2,8})/?(?:[?#].*)?$`)
+
+// linkLower is String.prototype.toLowerCase: the Unicode default full lowercase mapping
+// (cases.Lower), including the SpecialCasing entries strings.ToLower's simple mapping misses.
+var linkLower = cases.Lower(language.Und)
+
+// normalizeTicketItemURL is normalizeItemUrl: the one form a link item is stored in (lowercase,
+// https, ending at the number), for an issue link when issue is set and a pull or merge request
+// link otherwise.
+func normalizeTicketItemURL(value string, issue bool) (string, bool) {
+	text := linkLower.String(validate.JSTrim(value))
+	if wtf8.Length(text) > linkURLMaxLength {
+		return "", false
+	}
+	match := ticketItemURLPattern.FindStringSubmatch(text)
+	if match == nil || (match[4] == "issues") != issue {
+		return "", false
+	}
+	return "https://" + match[1] + match[2] + "/" + match[3] + match[4] + "/" + match[5], true
+}
+
+// normalizePullRequestURL is normalizePullRequestUrl: the one form a pull request link is stored
+// and matched in, or false when the text is not a pull or merge request link.
+func normalizePullRequestURL(value string) (string, bool) {
+	return normalizeTicketItemURL(value, false)
+}
+
+// normalizeIssueURL is normalizeIssueUrl: the one form an issue link is stored and matched in,
+// like normalizePullRequestURL.
+func normalizeIssueURL(value string) (string, bool) {
+	return normalizeTicketItemURL(value, true)
+}
+
+// NormalizeRepositoryURL is normalizeRepositoryUrl for the boards package's repository list.
+func NormalizeRepositoryURL(value string) (string, bool) { return normalizeRepositoryURL(value) }
+
+// RepositoryURLMessage is the message TicketRepositoryInputSchema raises for a bad link.
+const RepositoryURLMessage = repositoryURLMessage
+
+// normalizeRepositoryURL is normalizeRepositoryUrl: the one form a repository link is stored in
+// (lowercase, https, the repository path without a trailing ".git" or slash), or false when the
+// text is not a repository home page link, including a pull request or issue link.
+func normalizeRepositoryURL(value string) (string, bool) {
+	text := linkLower.String(validate.JSTrim(value))
+	if wtf8.Length(text) > linkURLMaxLength || ticketItemURLPattern.MatchString(text) {
+		return "", false
+	}
+	match := repositoryURLPattern.FindStringSubmatch(text)
+	if match == nil {
+		return "", false
+	}
+	path := strings.TrimSuffix(match[2], ".git")
+	// A last segment of exactly ".git" leaves nothing to name the repository.
+	if strings.HasSuffix(path, "/") {
+		return "", false
+	}
+	return "https://" + match[1] + path, true
+}
+
+// TicketLink is one stored link on a ticket: TicketPullRequestSchema or TicketIssueSchema.
+type TicketLink struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+}
+
+// TicketPullRequest is TicketPullRequestSchema (packages/contracts/src/artifacts/board.ts).
+type TicketPullRequest = TicketLink
+
+// TicketIssue is TicketIssueSchema (packages/contracts/src/artifacts/board.ts).
+type TicketIssue = TicketLink
+
+// readStoredLinks is readTicketPullRequests and readTicketIssues over a tickets.pullRequests or
+// tickets.issues value: a shape this release does not know (not an array of objects with a string
+// url and a known state) reads as no links at all, the whole list rather than one item at a time.
+// An item's unknown keys are dropped, as zod's object strips them. The bool reports whether the
+// stored value matched the schema.
+func readStoredLinks(raw []byte, states []string) ([]TicketLink, bool) {
+	value, err := validate.DecodeAny(raw)
+	if err != nil {
+		return []TicketLink{}, false
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return []TicketLink{}, false
+	}
+	out := make([]TicketLink, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(*validate.Object)
+		if !ok {
+			return []TicketLink{}, false
+		}
+		url, ok := object.Values["url"].(string)
+		if !ok {
+			return []TicketLink{}, false
+		}
+		state, ok := object.Values["state"].(string)
+		if !ok || !slices.Contains(states, state) {
+			return []TicketLink{}, false
+		}
+		out = append(out, TicketLink{URL: url, State: state})
+	}
+	return out, true
+}
+
+// readStoredPullRequests is readStoredLinks over tickets.pullRequests.
+func readStoredPullRequests(raw []byte) ([]TicketPullRequest, bool) {
+	return readStoredLinks(raw, pullRequestStates)
+}
+
+// readStoredIssues is readStoredLinks over tickets.issues.
+func readStoredIssues(raw []byte) ([]TicketIssue, bool) {
+	return readStoredLinks(raw, issueStates)
+}
+
+// readTicketLinks is the DTO's read: a stored value that does not match shows no links.
+func readTicketLinks(raw []byte, states []string) []TicketLink {
+	list, ok := readStoredLinks(raw, states)
+	if !ok {
+		return []TicketLink{}
+	}
+	return list
+}
+
+// readTicketPullRequests is the DTO's read of tickets.pullRequests.
+func readTicketPullRequests(raw []byte) []TicketPullRequest {
+	return readTicketLinks(raw, pullRequestStates)
+}
+
+// readTicketIssues is the DTO's read of tickets.issues.
+func readTicketIssues(raw []byte) []TicketIssue {
+	return readTicketLinks(raw, issueStates)
+}
+
+// ticketLinkInput is one TicketPullRequestInputSchema or TicketIssueInputSchema value after its
+// url was normalized.
+type ticketLinkInput struct {
+	URL   string
+	State *string
+}
+
+// mergeTicketLinks is mergeTicketLinks (packages/contracts/src/artifacts/board.ts): the input's
+// order with duplicate links dropped, each keeping the state the input sets, else the one already
+// recorded, else open. Pull requests and issues share it.
+func mergeTicketLinks(current []TicketLink, input []ticketLinkInput) []TicketLink {
+	known := make(map[string]string, len(current))
+	for _, item := range current {
+		known[item.URL] = item.State
+	}
+	seen := make(map[string]bool, len(input))
+	out := make([]TicketLink, 0, len(input))
+	for _, item := range input {
+		if seen[item.URL] {
+			continue
+		}
+		seen[item.URL] = true
+		state := "open"
+		if item.State != nil {
+			state = *item.State
+		} else if recorded, ok := known[item.URL]; ok {
+			state = recorded
+		}
+		out = append(out, TicketLink{URL: item.URL, State: state})
+	}
+	return out
+}
+
+// pullRequestMergeFinishesTicket is pullRequestMergeFinishesTicket: the write records a merge the
+// ticket did not have, and no linked pull request is left open.
+func pullRequestMergeFinishesTicket(before, after []TicketPullRequest) bool {
+	merged := make(map[string]bool, len(before))
+	for _, item := range before {
+		if item.State == "merged" {
+			merged[item.URL] = true
+		}
+	}
+	newMerge := false
+	for _, item := range after {
+		if item.State == "open" {
+			return false
+		}
+		if item.State == "merged" && !merged[item.URL] {
+			newMerge = true
+		}
+	}
+	return newMerge
 }
 
 // coerceStatus and coercePriority are toTicketDto's fallbacks for a legacy stored value.
@@ -326,6 +557,11 @@ func coercePriority(value *string) string {
 	return "normal"
 }
 
+// ReadStoredDecision decodes a stored tickets.decision value; nil when absent or malformed.
+func ReadStoredDecision(raw []byte) *TicketDecision {
+	return readStoredDecision(raw)
+}
+
 func readStoredDecision(raw []byte) *TicketDecision {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -343,6 +579,24 @@ func readStoredDecision(raw []byte) *TicketDecision {
 		}
 	}
 	return &d
+}
+
+// decisionValue is a tickets.decision payload for an INSERT or UPDATE: NULL stays
+// NULL, and stored JSON text is sanitized per leaf as Prisma does for a Json column.
+func decisionValue(encoded []byte) any {
+	if encoded == nil {
+		return nil
+	}
+	return db.JSONText(string(encoded))
+}
+
+// nullableText is a nullable string data value: nil stays NULL, and the string is
+// wrapped by db.Data like any other written string.
+func nullableText(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 // dto is toTicketDto over a ticketRow.
@@ -367,7 +621,10 @@ func dto(value ticketRow, prefix string) (Ticket, bool) {
 		WorkerBotIDs: workers, CreatedByBotID: value.CreatedByBotID,
 		CreatedByUserID: value.CreatedByUserID,
 		CreatedAt:       shared.ISO(value.CreatedAt), UpdatedAt: shared.ISO(value.UpdatedAt),
-		Decision: readStoredDecision(value.Decision),
+		Decision:     readStoredDecision(value.Decision),
+		PullRequests: readTicketPullRequests(value.PullRequests),
+		Issues:       readTicketIssues(value.Issues),
+		Repository:   value.Repository,
 	}
 	if value.CompletedAt != nil {
 		at := shared.ISO(*value.CompletedAt)
@@ -478,7 +735,8 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		value, err := scanTicket(tx.QueryRow(ctx, `UPDATE tickets SET status = $2, "completedAt" = $3, "updatedAt" = $4,
 			"archivedAt" = CASE WHEN $2 IN ('done', 'closed') THEN "archivedAt" END,
 			decision = $5
-			WHERE id = $1 RETURNING `+ticketColumns, current.ID, input.Status, completed, updated, nextDecision))
+			WHERE id = $1 RETURNING `+ticketColumns,
+			append([]any{current.ID}, db.Data(input.Status, completed, updated, decisionValue(nextDecision))...)...))
 		if err != nil {
 			return err
 		}
@@ -589,11 +847,12 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 		id := effects.NewID()
 		at := now()
 		if _, err := tx.Exec(ctx, `INSERT INTO ticket_comments (id, "ticketId", "spaceId", "authorUserId", body, "createdAt", "updatedAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $6)`, id, ticket.ID, actor.SpaceID, actor.UserID,
-			shared.StoredText(input.Body), at); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+			db.Data(id, ticket.ID, actor.SpaceID, actor.UserID, shared.StoredText(input.Body), at)...); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE tickets SET "updatedAt" = $2 WHERE id = $1`, ticket.ID, at); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE tickets SET "updatedAt" = $2 WHERE id = $1`,
+			append([]any{ticket.ID}, db.Data(at)...)...); err != nil {
 			return err
 		}
 		// The comment's DTO joins the author's name; a person's account is never deleted mid-write.
@@ -736,7 +995,7 @@ func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			updatedDecision := *existingDecision
 			updatedDecision.Answer = answerText
 			updatedDecision.AnsweredAt = shared.ISO(at)
-			encoded, err := json.Marshal(updatedDecision)
+			encoded, err := wtf8.Marshal(updatedDecision)
 			if err != nil {
 				return err
 			}
@@ -746,11 +1005,13 @@ func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		if nextStatus == "todo" {
 			value, err = scanTicket(tx.QueryRow(ctx, `UPDATE tickets
 				SET status = 'todo', "completedAt" = NULL, "archivedAt" = NULL, decision = $2, "updatedAt" = $3
-				WHERE id = $1 RETURNING `+ticketColumns, current.ID, nextDecisionBytes, at))
+				WHERE id = $1 RETURNING `+ticketColumns,
+				append([]any{current.ID}, db.Data(decisionValue(nextDecisionBytes), at)...)...))
 		} else {
 			value, err = scanTicket(tx.QueryRow(ctx, `UPDATE tickets
 				SET decision = $2, "updatedAt" = $3
-				WHERE id = $1 RETURNING `+ticketColumns, current.ID, nextDecisionBytes, at))
+				WHERE id = $1 RETURNING `+ticketColumns,
+				append([]any{current.ID}, db.Data(decisionValue(nextDecisionBytes), at)...)...))
 		}
 		if err != nil {
 			return err
@@ -759,7 +1020,8 @@ func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		commentID := effects.NewID()
 		storedBody := shared.StoredText(commentBody)
 		if _, err := tx.Exec(ctx, `INSERT INTO ticket_comments (id, "ticketId", "spaceId", "authorUserId", body, "createdAt", "updatedAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $6)`, commentID, current.ID, actor.SpaceID, actor.UserID, storedBody, at); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+			db.Data(commentID, current.ID, actor.SpaceID, actor.UserID, storedBody, at)...); err != nil {
 			return err
 		}
 		var authorName *string
@@ -1101,6 +1363,7 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			clauses = append(clauses, fmt.Sprintf(`(title ILIKE %s ESCAPE '\' OR COALESCE(description, '') ILIKE %s ESCAPE '\')`, p, p))
 		}
 		query := `SELECT ` + ticketColumns + ` FROM tickets WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY "updatedAt" DESC, id DESC`
+		// writeaudit:dynamic read: clauses are fixed fragments; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -1182,6 +1445,12 @@ type createInput struct {
 	AssigneeBotID    *string
 	HasDecision      bool
 	Decision         *TicketDecision
+	HasPullRequests  bool
+	PullRequests     []ticketLinkInput
+	HasIssues        bool
+	Issues           []ticketLinkInput
+	HasRepository    bool
+	Repository       *string
 }
 
 func parseNullableDecision(object *validate.Object, found *[]validate.Issue) (bool, *TicketDecision) {
@@ -1300,6 +1569,104 @@ func parseWorkerBotIDs(object *validate.Object, found *[]validate.Issue) (bool, 
 	return true, ids
 }
 
+// pullRequestURLMessage is the custom issue TicketPullRequestInputSchema's transform raises,
+// issueURLMessage the one TicketIssueInputSchema's raises, and repositoryURLMessage the one
+// TicketRepositoryInputSchema's raises.
+const (
+	pullRequestURLMessage = "Use a pull request link such as https://example.com/owner/repo/pull/12."
+	issueURLMessage       = "Use an issue link such as https://example.com/owner/repo/issues/12."
+	repositoryURLMessage  = "Use a repository link such as https://example.com/owner/repo."
+)
+
+// parseLinks is `z.array(TicketPullRequestInputSchema).max(TICKET_MAX_PULL_REQUESTS).optional()` and
+// `z.array(TicketIssueInputSchema).max(TICKET_MAX_ISSUES).optional()`: each item's url is
+// normalized, and state stays unset when the input leaves it out. An array past the limit reports
+// only the length, as zod's size cap stops before the items are parsed.
+func parseLinks(object *validate.Object, found *[]validate.Issue, key string, maxCount int,
+	normalize func(string) (string, bool), message string, states []string) (bool, []ticketLinkInput) {
+	v := object.Field(key)
+	if v == validate.Undefined {
+		return false, nil
+	}
+	path := validate.Path{key}
+	items, problems := validate.AsArray(path, v)
+	if problems != nil {
+		*found = append(*found, problems...)
+		return true, nil
+	}
+	if len(items) > maxCount {
+		*found = append(*found, validate.ArrayBounds(path, len(items), 0, maxCount)...)
+		return true, nil
+	}
+	out := make([]ticketLinkInput, 0, len(items))
+	for index, item := range items {
+		itemPath := path.With(index)
+		fields, problems := validate.AsObject(item, itemPath)
+		if problems != nil {
+			*found = append(*found, problems...)
+			continue
+		}
+		var url string
+		rawURL, urlProblems := validate.String(itemPath.With("url"), fields.Field("url"),
+			validate.StringRules{Max: linkURLMaxLength})
+		*found = append(*found, urlProblems...)
+		if urlProblems == nil {
+			normalized, ok := normalize(rawURL)
+			if !ok {
+				*found = append(*found, validate.Issue{
+					"code": "custom", "path": itemPath.With("url").Raw(), "message": message,
+				})
+			} else {
+				url = normalized
+			}
+		}
+		var state *string
+		if rawState := fields.Field("state"); rawState != validate.Undefined {
+			parsed, stateProblems := validate.Enum(itemPath.With("state"), rawState, states...)
+			*found = append(*found, stateProblems...)
+			state = &parsed
+		}
+		out = append(out, ticketLinkInput{URL: url, State: state})
+	}
+	return true, out
+}
+
+// parsePullRequests is the `pullRequests` field of CreateTicketInput and UpdateTicketInput.
+func parsePullRequests(object *validate.Object, found *[]validate.Issue) (bool, []ticketLinkInput) {
+	return parseLinks(object, found, "pullRequests", pullRequestMaxCount,
+		normalizePullRequestURL, pullRequestURLMessage, pullRequestStates)
+}
+
+// parseIssues is the `issues` field of CreateTicketInput and UpdateTicketInput.
+func parseIssues(object *validate.Object, found *[]validate.Issue) (bool, []ticketLinkInput) {
+	return parseLinks(object, found, "issues", issueMaxCount, normalizeIssueURL, issueURLMessage, issueStates)
+}
+
+// parseRepository is `TicketRepositoryInputSchema.nullable().optional()`: an absent link leaves
+// the column, null clears it, and a string is normalized after its length is checked.
+func parseRepository(object *validate.Object, found *[]validate.Issue) (bool, *string) {
+	v := object.Field("repository")
+	if v == validate.Undefined {
+		return false, nil
+	}
+	if v == nil {
+		return true, nil
+	}
+	rawURL, problems := validate.String(validate.Path{"repository"}, v, validate.StringRules{Max: linkURLMaxLength})
+	*found = append(*found, problems...)
+	if problems != nil {
+		return true, nil
+	}
+	normalized, ok := normalizeRepositoryURL(rawURL)
+	if !ok {
+		*found = append(*found, validate.Issue{
+			"code": "custom", "path": []any{"repository"}, "message": repositoryURLMessage,
+		})
+		return true, nil
+	}
+	return true, &normalized
+}
+
 // parseCreate is CreateTicketInput (packages/contracts/src/artifacts/board.ts:133-147).
 func parseCreate(raw orpc.Input) (createInput, *orpc.Error) {
 	object, issues := validate.Decode(raw.Raw, nil)
@@ -1335,6 +1702,9 @@ func parseCreate(raw orpc.Input) (createInput, *orpc.Error) {
 	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
 	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
+	out.HasPullRequests, out.PullRequests = parsePullRequests(object, &found)
+	out.HasIssues, out.Issues = parseIssues(object, &found)
+	out.HasRepository, out.Repository = parseRepository(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -1460,26 +1830,37 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			stored := shared.StoredText(*input.Description)
 			desc = &stored
 		}
-		var decisionJSON *string
-		if input.Decision != nil {
-			encoded, err := json.Marshal(input.Decision)
-			if err != nil {
-				return err
-			}
-			s := string(encoded)
-			decisionJSON = &s
+		// Create starts from no recorded links; an input list is the whole list (mergeTicketLinks).
+		pullRequests := mergeTicketLinks(nil, input.PullRequests)
+		issues := mergeTicketLinks(nil, input.Issues)
+		// Linking work that already merged records finished work, which waits on no decision.
+		finished := pullRequestMergeFinishesTicket(nil, pullRequests)
+		var decisionJSON any
+		if input.Decision != nil && !finished {
+			decisionJSON = db.JSON(*input.Decision)
 		}
+		pullRequestsJSON := db.JSON(pullRequests)
+		issuesJSON := db.JSON(issues)
 		at := now()
+		status := "todo"
+		var completedAt any
+		if finished {
+			status = "done"
+			completedAt = at
+		}
 		value, err := scanTicket(tx.QueryRow(ctx, `
 			INSERT INTO tickets (
 				id, "boardId", "spaceId", number, title, description, status, priority,
 				"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
-				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision
+				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision, "pullRequests",
+				issues, repository, "completedAt"
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14)
+			VALUES ($1, $2, $3, $4, $5, $6, $16, $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14, $15, $18, $19, $17)
 			RETURNING `+ticketColumns,
-			effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), desc,
-			input.Priority, assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, actor.UserID, at, decisionJSON,
+			db.Data(effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), nullableText(desc),
+				input.Priority, nullableText(assigneeBotID), nullableText(ownerUserID), nullableText(ownerBotID),
+				workerBotIDs, actor.UserID, at, decisionJSON, pullRequestsJSON, status, completedAt,
+				issuesJSON, nullableText(input.Repository))...,
 		))
 		if err != nil {
 			return err
@@ -1532,6 +1913,12 @@ type updateInput struct {
 	AssigneeBotID    *string
 	HasDecision      bool
 	Decision         *TicketDecision
+	HasPullRequests  bool
+	PullRequests     []ticketLinkInput
+	HasIssues        bool
+	Issues           []ticketLinkInput
+	HasRepository    bool
+	Repository       *string
 }
 
 // parseUpdate is UpdateTicketInput (packages/contracts/src/artifacts/board.ts:150-165).
@@ -1582,6 +1969,9 @@ func parseUpdate(raw orpc.Input) (updateInput, *orpc.Error) {
 	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
 	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
+	out.HasPullRequests, out.PullRequests = parsePullRequests(object, &found)
+	out.HasIssues, out.Issues = parseIssues(object, &found)
+	out.HasRepository, out.Repository = parseRepository(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -1764,11 +2154,41 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			}
 		}
 
+		// A provided list replaces the recorded one; a stored shape this release cannot read stops
+		// the write (readStoredTicketPullRequests' "reject"), and an absent list leaves the column.
+		var pullRequestsValue any
+		finished := false
+		if input.HasPullRequests {
+			stored, ok := readStoredPullRequests(current.PullRequests)
+			if !ok {
+				return errStoredPullRequests
+			}
+			next := mergeTicketLinks(stored, input.PullRequests)
+			pullRequestsValue = db.JSON(next)
+			// Recording a merge that leaves nothing open finishes the ticket, as the webhook does,
+			// unless the same write sets a status itself.
+			finished = !input.HasStatus && !completedStatus(coerceStatus(current.Status)) &&
+				pullRequestMergeFinishesTicket(stored, next)
+		}
+		// The issues list replaces the recorded one the same way; issue states never finish a ticket.
+		var issuesValue any
+		if input.HasIssues {
+			stored, ok := readStoredIssues(current.Issues)
+			if !ok {
+				return errStoredIssues
+			}
+			issuesValue = db.JSON(mergeTicketLinks(stored, input.Issues))
+		}
+
 		status := current.Status
 		completedAt := current.CompletedAt
-		if input.HasStatus {
-			statusChanged = input.Status != current.Status
-			status = input.Status
+		if input.HasStatus || finished {
+			if input.HasStatus {
+				statusChanged = input.Status != current.Status
+				status = input.Status
+			} else {
+				status = "done"
+			}
 			if completedStatus(status) {
 				if completedAt == nil {
 					at := now()
@@ -1780,9 +2200,9 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		}
 
 		nextDecision := current.Decision
-		if input.HasDecision {
+		if input.HasDecision && !finished {
 			if input.Decision != nil {
-				encoded, err := json.Marshal(input.Decision)
+				encoded, err := wtf8.Marshal(input.Decision)
 				if err != nil {
 					return err
 				}
@@ -1790,7 +2210,8 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			} else {
 				nextDecision = nil
 			}
-		} else if input.HasStatus && status != "blocked" && status != "review" {
+		} else if (input.HasStatus || finished) && status != "blocked" && status != "review" {
+			// A finished ticket waits on nobody, so a question sent with the merge is dropped too.
 			if existing := readStoredDecision(current.Decision); existing != nil && existing.Answer == "" {
 				nextDecision = nil
 			}
@@ -1804,13 +2225,16 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			    "workerBotIds" = $7, "assigneeBotId" = $8,
 			    status = $9, "completedAt" = $10, "updatedAt" = $11,
 			    "archivedAt" = CASE WHEN $9 IN ('done', 'closed') THEN "archivedAt" END,
-			    decision = $12
+			    decision = $12, "pullRequests" = COALESCE($13, "pullRequests"),
+			    issues = COALESCE($14, issues),
+			    repository = CASE WHEN $15::boolean THEN $16 ELSE repository END
 			WHERE id = $1
 			RETURNING `+ticketColumns,
-			current.ID, title, description, priority,
-			ownerUserID, ownerBotID,
-			workerBotIDs, assigneeBotID,
-			status, completedAt, updatedAt, nextDecision,
+			append([]any{current.ID}, db.Data(title, nullableText(description), priority,
+				nullableText(ownerUserID), nullableText(ownerBotID),
+				workerBotIDs, nullableText(assigneeBotID),
+				status, completedAt, updatedAt, decisionValue(nextDecision), pullRequestsValue,
+				issuesValue, input.HasRepository, nullableText(input.Repository))...)...,
 		))
 		if err != nil {
 			return err

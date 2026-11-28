@@ -1,12 +1,26 @@
 // @vitest-environment jsdom
+import type { ChatJobReference, ChatReferenceContext } from "@rakazo/chat-ui/web";
 import type { ThreadMessage } from "@rakazo/contracts";
 import type { ComponentProps, ReactNode } from "react";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rpc } from "../../../lib/query/rpc";
 import { MessageView } from "./message-view";
+
+const references = vi.hoisted(() => ({
+  context: undefined as ChatReferenceContext | undefined,
+  openTicket: undefined as ((ticketRef: string) => void) | undefined,
+  decideTicket: undefined as ((ticketId: string, optionId: string) => void) | undefined,
+}));
+vi.mock("./chat-references", () => ({
+  useChatReferences: () => ({
+    referenceContext: references.context,
+    decideTicket: references.decideTicket,
+  }),
+  useOpenTicket: () => references.openTicket,
+}));
 
 const skills = vi.hoisted(() => ({
   updateDraft: vi.fn(async () => ({})),
@@ -517,6 +531,32 @@ it("shows a reasoning-only live message as one slim activity line, not a bubble"
   );
 });
 
+it("renders nothing for a persisted no-response reply", () => {
+  renderView(
+    "bot",
+    [
+      { kind: "thinking", durationMs: 800, lines: ["Checking the calendar."] },
+      { kind: "text", text: "No response. Try again." },
+    ],
+    { showToolActivity: true },
+  );
+  expect(container.textContent).toBe("");
+  expect(container.querySelector('[data-testid="tool-activity"]')).toBeNull();
+  expect(container.querySelector('[data-testid="message-bot-bubble"]')).toBeNull();
+});
+
+it("renders nothing for a persisted thinking-only reply", () => {
+  renderView("bot", [{ kind: "thinking", durationMs: 800, lines: ["Checking the calendar."] }], {
+    showToolActivity: true,
+  });
+  expect(container.textContent).toBe("");
+});
+
+it("keeps a user message that repeats the fallback text", () => {
+  renderView("user", [{ kind: "text", text: "No response. Try again." }]);
+  expect(container.textContent).toContain("No response. Try again.");
+});
+
 it("hides the activity panel when the preference is off", () => {
   renderView(
     "bot",
@@ -548,4 +588,147 @@ it("puts one standalone activity panel beside a message's cards, before them", (
   expect(container.textContent?.indexOf("Open calendar")).toBeLessThan(
     container.textContent?.indexOf("Tuesday at 2 pm") ?? -1,
   );
+});
+
+describe("chat references", () => {
+  const board: ChatReferenceContext = {
+    ticketPrefix: "TASK",
+    repositories: [{ url: "https://example.com/owner/repo", isDefault: true }],
+    tickets: [],
+  };
+
+  beforeEach(() => {
+    references.context = board;
+    references.openTicket = vi.fn();
+  });
+  afterEach(() => {
+    references.context = undefined;
+    references.openTicket = undefined;
+  });
+
+  it("opens the ticket a reply names in the board's detail view", () => {
+    renderView("bot", [{ kind: "text", text: "Picked up TASK-397 this morning." }]);
+    const chip = container.querySelector<HTMLButtonElement>("button.rk-chat-ticket-chip");
+    expect(chip?.textContent).toBe("TASK-397");
+    act(() => chip?.click());
+    expect(references.openTicket).toHaveBeenCalledWith("TASK-397");
+  });
+
+  it("opens the ticket a person names in their own message too", () => {
+    renderView("user", [{ kind: "text", text: "Check TASK-397 please." }]);
+    const chip = container.querySelector<HTMLButtonElement>("button.rk-chat-ticket-chip");
+    act(() => chip?.click());
+    expect(references.openTicket).toHaveBeenCalledWith("TASK-397");
+  });
+
+  it("links a pull request number and a commit from the thread's job cards", () => {
+    const threadJobs: ChatJobReference[] = [{ repo: "owner/repo", commit: "ffc2c036" }];
+    renderView("bot", [{ kind: "text", text: "Merged PR #19 at `ffc2c036`, so the fix is in." }], {
+      threadJobs,
+    });
+    const pullRequest = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://example.com/owner/repo/pull/19"]',
+    );
+    const commit = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://example.com/owner/repo/commit/ffc2c036"]',
+    );
+    expect(pullRequest?.textContent).toContain("#19");
+    expect(commit?.textContent).toContain("ffc2c036");
+  });
+
+  it("shows a preview card when a ticket, pull request or commit link is focused", async () => {
+    const sha = "ffc2c036f5804d114af39ea6b91c8a75b9cbe55b";
+    references.context = {
+      ticketPrefix: "TASK",
+      repositories: [{ url: "https://example.com/owner/repo" }],
+      tickets: [
+        {
+          ref: "TASK-397",
+          title: "Show reference previews",
+          status: "doing",
+          assigneeName: "Grok Bot",
+          repository: "https://example.com/owner/repo",
+          pullRequests: [{ url: "https://example.com/owner/repo/pull/19", state: "open" }],
+        },
+      ],
+    };
+    renderView(
+      "bot",
+      [{ kind: "text", text: "Working on TASK-397, PR #19 is open, fixed in `ffc2c036`." }],
+      {
+        threadJobs: [
+          { repo: "owner/repo", commit: sha, title: "Preview job", branch: "feat/previews" },
+        ],
+      },
+    );
+    const cards: [string, string, string[]][] = [
+      ["ticket", "button.rk-chat-ticket-chip", ["TASK-397", "Show reference previews", "Grok Bot"]],
+      [
+        "pull_request",
+        'a[href="https://example.com/owner/repo/pull/19"]',
+        ["Pull request #19", "open", "owner/repo", "example.com", "TASK-397"],
+      ],
+      [
+        "commit",
+        'a[href="https://example.com/owner/repo/commit/ffc2c036"]',
+        ["Commit", sha, "feat/previews", "Preview job"],
+      ],
+    ];
+    for (const [kind, selector, expected] of cards) {
+      const link = container.querySelector<HTMLElement>(selector);
+      expect(link).not.toBeNull();
+      act(() => link?.focus());
+      await vi.waitFor(() => {
+        expect(document.querySelector(`[data-ref-kind="${kind}"]`)).not.toBeNull();
+      });
+      const card = document.querySelector(`[data-ref-kind="${kind}"]`);
+      for (const text of expected) expect(card?.textContent).toContain(text);
+      act(() => link?.blur());
+      await vi.waitFor(() => {
+        expect(document.querySelector(`[data-ref-kind="${kind}"]`)).toBeNull();
+      });
+    }
+  });
+
+  it("answers a ticket's pending decision from its hover card", async () => {
+    const decideTicket = vi.fn();
+    references.decideTicket = decideTicket;
+    references.context = {
+      ticketPrefix: "TASK",
+      tickets: [
+        {
+          id: "ticket-388",
+          ref: "TASK-388",
+          title: "Pick a cache",
+          status: "doing",
+          decision: {
+            question: "Keep the cache?",
+            options: [
+              { id: "keep", label: "Keep it", recommended: true },
+              { id: "drop", label: "Drop it" },
+            ],
+          },
+        },
+      ],
+    };
+    renderView("bot", [{ kind: "text", text: "Blocked on TASK-388." }]);
+    const chip = container.querySelector<HTMLElement>("button.rk-chat-ticket-chip");
+    act(() => chip?.focus());
+    await vi.waitFor(() => {
+      expect(document.querySelector(".rk-chat-ref-card-choice")).not.toBeNull();
+    });
+    const choice = [
+      ...document.querySelectorAll<HTMLButtonElement>(".rk-chat-ref-card-choice"),
+    ].find((button) => button.textContent?.includes("Drop it"));
+    await act(async () => choice?.click());
+    expect(decideTicket).toHaveBeenCalledTimes(1);
+    expect(decideTicket).toHaveBeenCalledWith("ticket-388", "drop");
+  });
+
+  it("leaves a pull request number plain when the board names no repository", () => {
+    references.context = undefined;
+    renderView("bot", [{ kind: "text", text: "Merged PR #19 today." }]);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("#19");
+  });
 });

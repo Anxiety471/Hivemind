@@ -13,6 +13,8 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
       copied: t`Copied`,
       copyCode: t`Copy code`,
       copyDiagramSource: t`Copy diagram source`,
+      expandCode: t`Expand code`,
+      collapseCode: t`Collapse code`,
       table: t`Table`,
       markdownTable: t`Markdown table`,
       noRows: t`No rows`,
@@ -50,6 +52,54 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
       },
       checkSeconds: (seconds) =>
         seconds < 60 ? t`${seconds}s` : t`${Math.floor(seconds / 60)}m ${seconds % 60}s`,
+      openTicket: t`Open ticket`,
+      ticketStatus: (status) => {
+        switch (status) {
+          case "todo":
+            return t`To do`;
+          case "doing":
+            return t`In progress`;
+          case "review":
+            return t`Review`;
+          case "blocked":
+            return t`Blocked`;
+          case "done":
+            return t`Done`;
+          case "closed":
+            return t`Closed`;
+          default:
+            return status;
+        }
+      },
+      ticketPriority: (priority) => {
+        switch (priority) {
+          case "low":
+            return t`Low`;
+          case "high":
+            return t`High`;
+          case "urgent":
+            return t`Urgent`;
+          default:
+            return priority;
+        }
+      },
+      pullRequestCount: (count) => t`${plural(count, { one: "# PR", other: "# PRs" })}`,
+      pullRequestTitle: (number) => t`Pull request #${number}`,
+      pullRequestState: (state) => {
+        switch (state) {
+          case "open":
+            return t`Open`;
+          case "merged":
+            return t`Merged`;
+          case "closed":
+            return t`Closed`;
+          default:
+            return state;
+        }
+      },
+      commitTitle: t`Commit`,
+      recommended: t`Recommended`,
+      decided: (label) => t`Decided: ${label}`,
     }),
     [t],
   );

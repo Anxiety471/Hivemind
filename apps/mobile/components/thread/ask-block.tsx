@@ -14,6 +14,7 @@ import { useMobileTokens } from "../../lib/native/native";
 import { secretDestinationLabel, siteHost } from "../../lib/vault/secret-destination";
 import { secretFieldTraits } from "../../lib/vault/secret-field-traits";
 import { vaultKindSymbol } from "../../lib/vault/vault";
+import { AskItemsActions } from "../cards/AskActions";
 import { SecretAskSheet } from "../cards/secret-ask-sheet";
 import { NativeActionButton } from "../native/native-action-button";
 import { NativeSymbol } from "../native/native-symbol";
@@ -119,6 +120,37 @@ export function AskBlock({
       : sentOnce || ask.remembered === false || ask.oneTimeCode
         ? t`Sent`
         : t`Saved`;
+
+  if (ask.items?.length) {
+    return (
+      <View
+        style={{
+          width: "90%",
+          borderRadius: 18,
+          backgroundColor: tokens.card,
+          paddingHorizontal: 16,
+          paddingVertical: 14,
+        }}
+      >
+        <Text {...actionProps} style={{ color: tokens.foreground, ...typeScale.cardTitle }}>
+          {plainAskTitle(ask.text)}
+        </Text>
+        {ask.detail ? (
+          <Text style={{ color: tokens.mutedForeground, marginTop: 4, ...typeScale.secondary }}>
+            {ask.detail}
+          </Text>
+        ) : null}
+        <AskItemsActions
+          items={ask.items}
+          answered={ask.status === "answered"}
+          disabled={!canAnswer}
+          accessibilityActions={actionProps.accessibilityActions}
+          onAccessibilityAction={actionProps.onAccessibilityAction}
+          onAnswer={onAnswer}
+        />
+      </View>
+    );
+  }
 
   if (sheetInput && itemType && ask.credential) {
     const symbol = vaultKindSymbol(vaultKind(itemType));
