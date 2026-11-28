@@ -337,10 +337,14 @@ describePostgres("steering after a run ends without completing (PostgreSQL)", ()
         trigger: "messaging",
       }),
     );
-    expect(inbound.runId).toBe(run.id);
+    // Held: the messaging text is not the app run's, so it names no run until its continuation.
+    expect(inbound.runId).toBeNull();
     expect(
       await system.steeringMessage.findFirstOrThrow({ where: { messageId: inbound.messageId } }),
     ).toMatchObject({ runId: null, originTrigger: "messaging" });
+    expect(
+      await system.message.findUniqueOrThrow({ where: { id: inbound.messageId } }),
+    ).toMatchObject({ runId: null });
     // The held text is marked as waiting for this bot; one only another bot waits on is not.
     const peer = await system.bot.create({
       data: { spaceId, userId, name: "Peer", color: "blue" },

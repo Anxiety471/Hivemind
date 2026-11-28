@@ -17,7 +17,6 @@ import {
 import type { MessageBlock } from "@rakazo/contracts";
 import {
   botMessageHopExhausted,
-  botMessageMaxHops,
   chatAppAskText,
   chatAppTakeoverText,
   nextBotMessageHop,
@@ -1311,9 +1310,10 @@ export class MessagingDelivery {
   private async findExternalOrigin(sourceMessageId: string | null) {
     const { prisma } = this.deps;
     let current: string | null = sourceMessageId;
+    // Walks reply links to the run that started the chain; `visited` ends a cycle. Not the hop fuse:
+    // a long chain of person replies still reaches its external origin.
     const visited = new Set<string>();
-    const maxHops = botMessageMaxHops();
-    for (let depth = 0; current && (maxHops === 0 || depth <= maxHops); depth += 1) {
+    while (current) {
       const source = await prisma.message.findUnique({
         where: { id: current },
         select: { replyTo: { select: { runId: true } } },

@@ -52,7 +52,7 @@ SANDBOX_COMMAND_TIMEOUT_MS=300000 # stop a shell command after 5 minutes
 MAX_TOOL_CALLS_PER_TURN=  # optional Pi turn tool-call fuse; unset/0 = unlimited
 RAKAZO_MESSAGE_USER_MAX_CHARS=500 # message_user length cap; narration stays at 500
 RAKAZO_RUN_INSTRUCTIONS_FILE= # optional text file added to every run's instructions after the built-in tool guidance; re-read per run; skipped if a bot's instructions already contain it
-BOT_MESSAGE_MAX_HOPS=  # optional bot-to-bot chain hop fuse; unset/0 = unlimited
+BOT_MESSAGE_MAX_HOPS=  # bot-to-bot chain hop fuse; unset = 6; 0 = unlimited
 E2B_API_KEY=              # when SANDBOX_PROVIDER=e2b
 NOVITA_API_KEY=           # when SANDBOX_PROVIDER=novita; build its template first
 DAYTONA_API_KEY=          # when SANDBOX_PROVIDER=daytona

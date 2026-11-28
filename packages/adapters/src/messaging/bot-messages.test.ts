@@ -519,7 +519,24 @@ describe("messaging another bot", () => {
     expect(sent.ok).toBe(false);
   });
 
-  it("keeps chains going past six hops by default", async () => {
+  it("refuses the next hop past the default six-hop fuse", async () => {
+    const harness = deps({
+      hopBlocks: [
+        { kind: "bot_message_received", fromBotId: "b", fromBotName: "B", text: "hi", hop: 6 },
+      ],
+    });
+    const sent = await messageBot(
+      harness.deps,
+      { ...run, sourceMessageId: "message-source" },
+      sender,
+      { bot_id: "bot-target", message: "again" },
+    );
+    expect(sent.ok).toBe(false);
+    expect(harness.tx.run.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps chains going past six hops when BOT_MESSAGE_MAX_HOPS=0 opts out", async () => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "0");
     const harness = deps({
       hopBlocks: [
         { kind: "bot_message_received", fromBotId: "b", fromBotName: "B", text: "hi", hop: 100 },
@@ -532,6 +549,27 @@ describe("messaging another bot", () => {
       { bot_id: "bot-target", message: "again" },
     );
     expect(sent.ok).toBe(true);
+  });
+
+  it("refuses a bot_id and confirm_name that name different bots", async () => {
+    const harness = deps({
+      bots: [
+        { id: "bot-target", name: "Analyst", thread: { id: "thread-target" } },
+        { id: "bot-other", name: "Editor", thread: { id: "thread-other" } },
+      ],
+    });
+    const sent = await messageBot(harness.deps, run, sender, {
+      bot_id: "bot-target",
+      confirm_name: "Editor",
+      message: "chart the q3 numbers",
+    });
+
+    expect(sent).toEqual({
+      ok: false,
+      error: "bot_id and confirm_name do not match the same bot",
+    });
+    expect(harness.tx.run.create).not.toHaveBeenCalled();
+    expect(harness.enqueue).not.toHaveBeenCalled();
   });
 
   it("keeps a person-started chain going", async () => {

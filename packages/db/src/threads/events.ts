@@ -554,6 +554,8 @@ export async function sendUserMessage(
         null;
       let task = null;
       let run = null;
+      // The busy run this message steers, if any. A message it cannot take (held) is not tied to it.
+      let steeredRunId: string | null = null;
       if (createRun && !busy) {
         task = await tx.task.create({
           data: {
@@ -619,11 +621,15 @@ export async function sendUserMessage(
               : {}),
           },
         });
-        await tx.message.update({ where: { id: message.id }, data: { runId: busy.id } });
+        // A held message stays unowned until its continuation run starts (see createPendingSteeringRun).
+        if (!held) {
+          steeredRunId = busy.id;
+          await tx.message.update({ where: { id: message.id }, data: { runId: busy.id } });
+        }
       }
       if (
         input.claim &&
-        !(await input.claim(tx, { messageId: message.id, runId: run?.id ?? busy?.id ?? null }))
+        !(await input.claim(tx, { messageId: message.id, runId: run?.id ?? steeredRunId }))
       )
         throw new SendClaimLostError();
       const event = await appendEventInTransaction(tx, {
@@ -631,7 +637,7 @@ export async function sendUserMessage(
         threadId: input.threadId,
         botId: input.botId,
         type: "thread.message.created",
-        runId: run?.id ?? busy?.id,
+        runId: run?.id ?? steeredRunId ?? undefined,
         payload: {
           messageId: message.id,
           role: "user",
@@ -642,7 +648,7 @@ export async function sendUserMessage(
           callId: callIdFromClientNonce(message.clientNonce),
         },
       });
-      return { message, task, run, busy, event };
+      return { message, task, run, steeredRunId, event };
     }, THREAD_LOCK_TRANSACTION_OPTIONS);
   const committed = await commit().catch(async (error) => {
     const winner = await replay();
@@ -664,7 +670,7 @@ export async function sendUserMessage(
     messageId: committed.message.id,
     seq: committed.message.seq,
     taskId: committed.task?.id ?? null,
-    runId: committed.run?.id ?? committed.busy?.id ?? null,
+    runId: committed.run?.id ?? committed.steeredRunId,
   };
 }
 
