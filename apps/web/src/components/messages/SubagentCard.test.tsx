@@ -50,7 +50,7 @@ const finished = {
   kind: "subagent" as const,
   agentId: "agent-1",
   name: "writer",
-  task: "A long brief",
+  task: "A long brief. It runs on\nto a second line.",
   status: "completed" as const,
   result: "A long report",
 };
@@ -70,33 +70,37 @@ describe("SubagentCard", () => {
       card.unmount();
     },
   );
-  it("starts folded to one line of the task, without the result", () => {
+  it("starts folded to one line of the brief, without the brief or the result", () => {
     const card = mountCard({ ...finished, agentId: "agent-folded" });
     expect(card.toggle()?.getAttribute("aria-expanded")).toBe("false");
-    expect(card.get("subagent-task")?.textContent).toBe("A long brief");
-    expect(card.get("subagent-task")?.className).toContain("line-clamp-2");
+    expect(card.get("subagent-summary")?.textContent).toBe("A long brief.");
+    expect(card.get("subagent-summary")?.className).toContain("truncate");
+    expect(card.get("subagent-task")).toBeNull();
     expect(card.get("subagent-body")).toBeNull();
     expect(card.get("subagent-chevron")?.getAttribute("class")).not.toContain("rotate-180");
     card.unmount();
   });
 
-  it("opens to the full task and result, and folds again", async () => {
+  it("opens to the full brief in a scrolling region that keeps its line breaks, then the result", async () => {
     const card = mountCard({ ...finished, agentId: "agent-toggle" });
     card.click();
     expect(card.get("subagent-chevron")?.getAttribute("class")).toContain("rotate-180");
     expect(card.toggle()?.getAttribute("aria-expanded")).toBe("true");
-    expect(card.get("subagent-task")?.className).not.toContain("line-clamp-2");
-    expect(card.get("subagent-task")?.className).toContain("wrap-anywhere");
+    const brief = card.get("subagent-task");
+    expect(brief?.textContent).toBe(finished.task);
+    expect(brief?.className).toContain("whitespace-pre-wrap");
+    expect(brief?.className).toContain("max-h-60");
+    expect(brief?.className).toContain("overflow-y-auto");
     expect(card.get("subagent-body")?.textContent).toBe("A long report");
 
     card.click();
     expect(card.toggle()?.getAttribute("aria-expanded")).toBe("false");
-    expect(card.get("subagent-task")?.className).toContain("line-clamp-2");
-    await vi.waitFor(() => expect(card.get("subagent-body")).toBeNull());
+    await vi.waitFor(() => expect(card.get("subagent-task")).toBeNull());
+    expect(card.get("subagent-body")).toBeNull();
     card.unmount();
   });
 
-  it("shows progress when opened while the helper runs", () => {
+  it("shows the one line as the progress while it runs, and the brief when opened", () => {
     const card = mountCard({
       ...finished,
       agentId: "agent-progress",
@@ -105,9 +109,24 @@ describe("SubagentCard", () => {
       progress: "Reading files",
     });
     expect(card.status()).toBe("Running");
-    expect(card.get("subagent-body")).toBeNull();
+    expect(card.get("subagent-summary")?.textContent).toBe("Reading files");
     card.click();
-    expect(card.get("subagent-body")?.textContent).toBe("Reading files");
+    // The progress is already the one line, so only the full brief follows it.
+    expect(card.get("subagent-body")).toBeNull();
+    expect(card.get("subagent-task")?.textContent).toBe(finished.task);
+    card.unmount();
+  });
+
+  it("keeps a body that repeats the one line out of the open card", () => {
+    const card = mountCard({
+      agentId: "agent-same",
+      kind: "subagent",
+      name: "writer",
+      task: "Reply with ok.",
+      status: "completed",
+      result: "Reply with ok.",
+    });
+    expect(card.get("subagent-chevron")?.getAttribute("class")).toContain("invisible");
     card.unmount();
   });
 

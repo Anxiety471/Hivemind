@@ -6,6 +6,7 @@ import {
   assertTransition,
   canTransition,
   helperCardState,
+  helperTextSummary,
   isActive,
   isBackgroundRunTrigger,
   isConversationalRun,
@@ -154,6 +155,19 @@ describe("run state machine", () => {
       }),
       { seed: 42, numRuns: 200 },
     );
+  });
+});
+
+describe("helperTextSummary", () => {
+  it("keeps the first sentence of the first line, and any first line without one", () => {
+    expect(helperTextSummary("Review a git diff for bugs. Repo checkout: /x.\nMore.")).toBe(
+      "Review a git diff for bugs.",
+    );
+    expect(helperTextSummary("\n\n  Constraints that must hold\nmore")).toBe(
+      "Constraints that must hold",
+    );
+    expect(helperTextSummary("no ending punctuation at all")).toBe("no ending punctuation at all");
+    expect(helperTextSummary("   ")).toBe("");
   });
 });
 

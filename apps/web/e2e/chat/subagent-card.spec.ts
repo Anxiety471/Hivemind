@@ -35,8 +35,9 @@ test("a completed subagent card folds, opens from its header, and fills its widt
   await header.click();
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await expect(body).toContainText("helper result:");
-  const task = card.getByTestId("subagent-task");
-  expect(await task.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  // The folded line stays one row however long the brief is.
+  const summary = card.getByTestId("subagent-summary");
+  expect(await summary.evaluate((el) => el.getBoundingClientRect().height < 30)).toBe(true);
   await page.mouse.move(1, 1);
   await captureScreenshot(page, testInfo, "subagent-card-open");
   await header.click();
