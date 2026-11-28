@@ -34,6 +34,7 @@ import {
 } from "./home-archive.js";
 import type { PreviousRevision } from "./home-incremental.js";
 import { peekIncremental, prepareRevision, readManifest, restoreHome } from "./home-incremental.js";
+import { takeHomeSaveLease } from "./home-save-lease.js";
 import type { HomeVersion, HomeVersions } from "./home-versions.js";
 import {
   HomeVersionNotFoundError,
@@ -420,6 +421,19 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
     botId: string,
     options: { base?: string | null; verify?: boolean; source?: string } = {},
   ): Promise<{ revision: string }> {
+    const release = await takeHomeSaveLease(this.pathFor(botId));
+    try {
+      return await this.uploadHeld(botId, options, release);
+    } finally {
+      await release();
+    }
+  }
+
+  private async uploadHeld(
+    botId: string,
+    options: { base?: string | null; verify?: boolean; source?: string },
+    releaseLease: () => Promise<void>,
+  ): Promise<{ revision: string }> {
     const stored = await this.records.create(botId);
     if (!stored) throw new Error("Agent home has no computer");
     const base = options.base === undefined ? stored.revision : options.base;
@@ -479,6 +493,9 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
     const previousMarker = !options.source ? await this.localRevision(botId) : undefined;
     const proposal = JSON.stringify({ version: 1, storageId: stored.storageId, base, revision });
     if (!options.source) await super.writeRevision(botId, proposal);
+    // Packed and proposed: the next save of this home may start now, and is refused at the move
+    // if it was read before this one, exactly as when both packed at once.
+    await releaseLease();
     // Only a confirmed refusal discards the upload. An error may hide a committed update, so
     // that object is left for the sweep, which keeps whatever revision the home points at.
     const advanced = await this.records
