@@ -40,6 +40,18 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
           ? t`Sorted by ${column}, ascending`
           : t`Sorted by ${column}, descending`,
       resetZoom: (percent) => t`Reset zoom, ${percent}%`,
+      checksPassed: t`Checks passed`,
+      checksFailed: t`Checks failed`,
+      checksProgress: (passed, total) => t`Checks: ${passed} of ${total} passed`,
+      checkStates: {
+        queued: t`Queued`,
+        running: t`Running`,
+        passed: t`Passed`,
+        failed: t`Failed`,
+        skipped: t`Skipped`,
+      },
+      checkSeconds: (seconds) =>
+        seconds < 60 ? t`${seconds}s` : t`${Math.floor(seconds / 60)}m ${seconds % 60}s`,
       openTicket: t`Open ticket`,
       ticketStatus: (status) => {
         switch (status) {

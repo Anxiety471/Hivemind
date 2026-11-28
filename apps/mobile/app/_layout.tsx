@@ -1,10 +1,13 @@
 import { i18n } from "@lingui/core";
 import { I18nProvider } from "@lingui/react";
 import { useLingui } from "@lingui/react/macro";
-import type { LinkFavicons } from "@rakazo/chat-ui/native";
+import type { LinkFavicons, MarkdownCopy } from "@rakazo/chat-ui/native";
 import {
   CodeCopyButtonContext,
+  CommitChecksContext,
+  defaultMarkdownCopy,
   LinkFaviconsContext,
+  MarkdownCopyProvider,
   MarkdownLinkPromptProvider,
   MermaidDiagramContext,
   RemoteImagesContext,
@@ -76,6 +79,7 @@ import {
   setInboxHidden,
   useSplitView,
 } from "../lib/layout/split-view";
+import { CommitChecksLive, commitChecksSource } from "../lib/messages/commit-checks";
 import { loadLinkFavicon } from "../lib/messages/link-favicons";
 import { OpenPageContext } from "../lib/messages/message-mentions";
 import { loadHapticsPreference } from "../lib/native/haptics";
@@ -253,6 +257,15 @@ function ChatContentProviders({
   useEffect(() => {
     void loadTrustedLinkSites().catch(() => undefined);
   }, [endpoint, session]);
+  const checksCopy = useMemo<MarkdownCopy>(
+    () => ({
+      ...defaultMarkdownCopy,
+      checksPassed: t`Checks passed`,
+      checksFailed: t`Checks failed`,
+      checksProgress: (passed, total) => t`Checks: ${passed} of ${total} passed`,
+    }),
+    [t],
+  );
   return (
     <MarkdownLinkPromptProvider
       appOrigin={endpoint}
@@ -270,7 +283,12 @@ function ChatContentProviders({
           <MermaidDiagramContext.Provider value={MermaidDiagram}>
             <CodeCopyButtonContext.Provider value={CodeCopyButton}>
               <OpenPageContext.Provider value={openPage}>
-                <ChatReferencesProvider>{children}</ChatReferencesProvider>
+                <CommitChecksContext.Provider value={commitChecksSource}>
+                  <MarkdownCopyProvider copy={checksCopy}>
+                    <CommitChecksLive enabled={session !== null} />
+                    <ChatReferencesProvider>{children}</ChatReferencesProvider>
+                  </MarkdownCopyProvider>
+                </CommitChecksContext.Provider>
               </OpenPageContext.Provider>
             </CodeCopyButtonContext.Provider>
           </MermaidDiagramContext.Provider>

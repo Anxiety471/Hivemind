@@ -117,6 +117,8 @@ export const ROW_SECURITY_MODELS: ReadonlySet<string> = new Set([
   "MemoryRevision",
   "Artifact",
   "FileFolder",
+  "CommitCheck",
+  "PullRequestHead",
   "Secret",
   "BotSecret",
   "VaultCredential",

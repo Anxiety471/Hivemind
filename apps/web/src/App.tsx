@@ -1,7 +1,7 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { useTimeout } from "@rakazo/chat-ui/hooks";
 import type { LinkFavicons } from "@rakazo/chat-ui/web";
-import { LinkFaviconsContext, RemoteImagesContext } from "@rakazo/chat-ui/web";
+import { CommitChecksContext, LinkFaviconsContext, RemoteImagesContext } from "@rakazo/chat-ui/web";
 import { analyticsScreen } from "@rakazo/core";
 import { Button } from "@rakazo/ui-web";
 import {
@@ -17,6 +17,7 @@ import { LoadingState } from "./components/ai/primitives";
 import { SubscriptionGate } from "./components/billing/SubscriptionGate";
 import { CallLayout } from "./components/call/CallLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { commitChecksSource } from "./components/messages/commit-checks-source";
 import { MarkdownLinkPrompt } from "./components/messages/markdown-link-prompt";
 import { PageLoading } from "./components/PageLoading";
 import { authClient } from "./lib/auth/auth";
@@ -107,15 +108,17 @@ export function App() {
   return (
     <RemoteImagesContext.Provider value={loadRemoteImages}>
       <LinkFaviconsContext.Provider value={linkFavicons}>
-        <ErrorBoundary fallback={<AppFailed />}>
-          {window.location.pathname === SSO_CALLBACK_PATH ? (
-            <SsoCallbackPage />
-          ) : window.location.pathname === "/integrations/callback" ? (
-            <IntegrationCallbackPage />
-          ) : (
-            <SessionApp />
-          )}
-        </ErrorBoundary>
+        <CommitChecksContext.Provider value={commitChecksSource}>
+          <ErrorBoundary fallback={<AppFailed />}>
+            {window.location.pathname === SSO_CALLBACK_PATH ? (
+              <SsoCallbackPage />
+            ) : window.location.pathname === "/integrations/callback" ? (
+              <IntegrationCallbackPage />
+            ) : (
+              <SessionApp />
+            )}
+          </ErrorBoundary>
+        </CommitChecksContext.Provider>
       </LinkFaviconsContext.Provider>
     </RemoteImagesContext.Provider>
   );

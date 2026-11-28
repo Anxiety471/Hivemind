@@ -7,7 +7,7 @@ import {
   isPermanentDecryptFailure,
   wakeRun,
 } from "@rakazo/adapters";
-import type { MessageBlock } from "@rakazo/contracts";
+import type { MessageBlock, SpaceChangeKind } from "@rakazo/contracts";
 import { inboundRoutineBlock, messageBlockForArtifact } from "@rakazo/core";
 import type { PrismaClient, SendUserMessageInput } from "@rakazo/db";
 import { accountDeactivated, SpaceDeletionInProgressError } from "@rakazo/db";
@@ -17,6 +17,8 @@ export const WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 export const WEBHOOK_SECRET_KIND = "webhook";
 
 export type WebhookEvents = {
+  /** Tells the Space's apps to read again, with no content in the signal. Optional for test fakes. */
+  publishSpaceChange?(spaceId: string, kind: SpaceChangeKind): Promise<void>;
   sendUserMessage(input: {
     spaceId: string;
     threadId: string;

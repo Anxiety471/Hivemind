@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { SecretStoreUnavailableError } from "@rakazo/adapter-kit";
 import { recordTicketIssueState, recordTicketPullRequestState } from "@rakazo/adapters";
-import type { TicketIssueState, TicketPullRequestState } from "@rakazo/contracts";
+import type { CommitCheckState, TicketIssueState, TicketPullRequestState } from "@rakazo/contracts";
+import type { CommitCheckReport, PullRequestHeadReport } from "@rakazo/db";
+import { recordCommitCheck, recordPullRequestHead } from "@rakazo/db";
+import { bestEffort } from "@rakazo/logging";
 import type { Hono } from "hono";
 import { readBoundedBytes } from "../http/http-body.js";
 import { githubEventMetadataPrompt } from "../messaging/inbound-delivery.prompt.js";
@@ -153,6 +156,105 @@ function githubDeliveryMetadata(
   return metadata;
 }
 
+/** A commit check or pull request head read from a delivery, ready to record in the Space. */
+export type CommitCheckUpdate =
+  | { kind: "check"; report: Omit<CommitCheckReport, "spaceId"> }
+  | { kind: "pullRequest"; report: Omit<PullRequestHeadReport, "spaceId"> };
+
+/** Host and full name, lowercased, so a link's address and a delivery name the same repository. */
+function repositoryKey(repository: Record<string, unknown> | undefined): string | undefined {
+  const fullName = typeof repository?.full_name === "string" ? repository.full_name : undefined;
+  const htmlUrl = typeof repository?.html_url === "string" ? repository.html_url : undefined;
+  if (!fullName || !htmlUrl) return undefined;
+  try {
+    return `${new URL(htmlUrl).host}/${fullName}`.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function checkState(check: Record<string, unknown>): CommitCheckState | undefined {
+  if (check.status === "queued") return "queued";
+  if (check.status === "in_progress") return "running";
+  if (check.status !== "completed") return undefined;
+  if (check.conclusion === "success") return "passed";
+  if (check.conclusion === "neutral" || check.conclusion === "skipped") return "skipped";
+  if (check.conclusion === "stale" || check.conclusion === null) return "skipped";
+  return "failed";
+}
+
+function isoDate(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * Reads the commit checks and pull request heads a delivery reports. Other events, and
+ * deliveries missing what a row needs, give nothing. Commit statuses are not read yet.
+ */
+export function commitCheckUpdate(
+  event: string,
+  payload: Record<string, unknown>,
+): CommitCheckUpdate | undefined {
+  const repository = repositoryKey(record(payload.repository));
+  if (!repository) return undefined;
+  if (event === "check_run") {
+    const check = record(payload.check_run);
+    const state = check && checkState(check);
+    const headSha = safeSha(check?.head_sha);
+    const name = typeof check?.name === "string" ? check.name.slice(0, 300) : undefined;
+    const checkRunId = safeInteger(check?.id);
+    if (!check || !state || !headSha || !name || checkRunId === undefined) return undefined;
+    return {
+      kind: "check",
+      report: {
+        repository,
+        headSha: headSha.toLowerCase(),
+        name,
+        checkRunId: BigInt(checkRunId),
+        state,
+        url: typeof check.html_url === "string" ? check.html_url : null,
+        startedAt: isoDate(check.started_at),
+        completedAt: isoDate(check.completed_at),
+      },
+    };
+  }
+  if (event === "pull_request") {
+    const pullRequest = record(payload.pull_request);
+    const headSha = safeSha(record(pullRequest?.head)?.sha);
+    const updatedAt = isoDate(pullRequest?.updated_at);
+    const number = safeInteger(payload.number);
+    if (!headSha || !updatedAt || number === undefined || number === 0) return undefined;
+    return {
+      kind: "pullRequest",
+      report: { repository, number, headSha: headSha.toLowerCase(), updatedAt },
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Records what a delivery says about checks, and tells the Space's apps to read again only when
+ * something changed. A failure is logged and never holds up the bot's own delivery.
+ */
+export async function recordGithubCommitChecks(
+  deps: Pick<WebhookDeps, "prisma" | "events">,
+  spaceId: string,
+  event: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const update = commitCheckUpdate(event, payload);
+  if (!update) return;
+  const changed = await bestEffort(
+    "record commit check",
+    update.kind === "check"
+      ? recordCommitCheck(deps.prisma, { ...update.report, spaceId })
+      : recordPullRequestHead(deps.prisma, { ...update.report, spaceId }),
+  );
+  if (changed) await deps.events.publishSpaceChange?.(spaceId, "checks");
+}
+
 export function formatGithubEventPrompt(event: string, payload: Record<string, unknown>): string {
   return githubEventMetadataPrompt(event, githubDeliveryMetadata(event, payload));
 }
@@ -238,6 +340,8 @@ export function mountGithubWebhookRoute(
     }
     const issue = githubIssueState(githubEvent, payload);
     if (issue) await recordTicketIssueState(deps, { spaceId: target.bot.spaceId, ...issue });
+    // Checks are recorded for every bot on the repository, before a bot without routines ignores it.
+    await recordGithubCommitChecks(deps, target.bot.spaceId, githubEvent, payload);
 
     const githubRoutines = await deps.prisma.routine.findMany({
       where: {

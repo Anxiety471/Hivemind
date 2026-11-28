@@ -127,6 +127,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   );
 });
 
+export type { CommitChecksSource, CommitCheckTarget } from "./commit-checks";
+export { CommitChecksContext, commitCheckSeconds, summarizeCommitChecks } from "./commit-checks";
 export type { ChatMarkdownProps, LinkFavicons } from "./markdown";
 export {
   LinkFaviconsContext,
@@ -135,6 +137,8 @@ export {
   useLinkFavicon,
   withBlockMentions,
 } from "./markdown";
+export type { MarkdownCopy } from "./markdown-copy";
+export { defaultMarkdownCopy, MarkdownCopyProvider } from "./markdown-copy";
 export { MarkdownLinkPromptProvider } from "./markdown-link-prompt";
 export { PageIcon } from "./native/chips";
 export type { MermaidDiagramProps } from "./native/code";

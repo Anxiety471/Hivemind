@@ -1,3 +1,4 @@
+import { SpaceChangeKind } from "@rakazo/contracts";
 import { flush } from "@rakazo/core/test-async";
 import { describe, expect, it } from "vitest";
 import { followSpaceChanges, publishSpaceChange } from "./space-changes.js";
@@ -22,7 +23,7 @@ function fakeFanout() {
 }
 
 /** Every kind a fresh follower learns on open, in the order the contract lists them. */
-const KINDS = ["computerUpdates", "runs", "routines", "files"];
+const KINDS = SpaceChangeKind.options;
 
 async function opened(iterator: AsyncGenerator<string>) {
   const kinds = [];

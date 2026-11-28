@@ -4,9 +4,11 @@ import type { ReactNode } from "react";
 import { Fragment, memo } from "react";
 import type { TextStyle } from "react-native";
 import { Text, View } from "react-native";
+import { commitCheckTarget } from "../commit-checks";
 import { linkFaviconOrigin, linkLabel, plainTextLinkParts } from "../markdown";
 import type { ChatReferenceContext } from "../references";
 import { MarkdownPageChip, MarkdownTicketChip } from "./chips";
+import { CommitChecksMark } from "./commit-checks-mark";
 import { contraryDirection } from "./direction";
 import { ISOLATE, LinkFavicon, POP_ISOLATE, useNativeLinkConfirm, WORD_JOINER } from "./links";
 import { layout } from "./styles";
@@ -124,7 +126,7 @@ export const LinkifiedText = memo(function LinkifiedText({
           );
         }
         const label = linkLabel(part.value, part.href);
-        return (
+        const link = (
           <Text
             accessibilityRole="link"
             accessibilityLabel={label}
@@ -141,6 +143,16 @@ export const LinkifiedText = memo(function LinkifiedText({
             <Text style={labelStyle}>{label}</Text>
             {POP_ISOLATE}
           </Text>
+        );
+        // The status mark follows the link; it is its own control, so it is not inside the link.
+        const target = commitCheckTarget(part.href);
+        return target ? (
+          <Fragment key={index}>
+            {link}
+            <CommitChecksMark target={target} />
+          </Fragment>
+        ) : (
+          link
         );
       })}
     </Text>

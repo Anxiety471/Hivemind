@@ -28,6 +28,8 @@ export * from "./bots/bot-settings-layout.js";
 export * from "./bots/bot-template.js";
 export * from "./bots/builtin-tools.js";
 export * from "./bots/scratchpad.js";
+export * from "./checks/commit-checks.js";
+export * from "./checks/commit-checks-rpc.js";
 export * from "./clients/client-build.js";
 export * from "./clients/desktop.js";
 export * from "./clients/drive-open.js";

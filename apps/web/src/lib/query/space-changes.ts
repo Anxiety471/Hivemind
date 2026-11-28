@@ -15,6 +15,7 @@ const READS: Record<ReadChangeKind, readonly Procedure[]> = {
     ["usage", "breakdown"],
   ],
   routines: [["routines", "list"]],
+  checks: [["commitChecks", "list"]],
   files: [
     ["files", "list"],
     ["files", "folderTree"],

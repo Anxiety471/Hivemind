@@ -5,7 +5,9 @@ import type {
 } from "@ronradtke/react-native-markdown-display";
 import { renderRules as libraryRenderRules } from "@ronradtke/react-native-markdown-display";
 import type { ReactNode } from "react";
+import { Fragment } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { commitCheckTarget } from "../commit-checks";
 import {
   inlineMarkdownImageSrc,
   isProseFence,
@@ -20,6 +22,7 @@ import { isMermaidFence } from "../mermaid";
 import { astText, cellPlainText, enclosingLink, soleRemoteImage } from "./ast";
 import { MarkdownMention, MarkdownPageChip, MarkdownTicketChip } from "./chips";
 import { CodeFence, CodeScrollView, MermaidFence, ProseFence } from "./code";
+import { CommitChecksMark } from "./commit-checks-mark";
 import { contraryDirection } from "./direction";
 import { FitImage, LinkedRemoteImage, RemoteMarkdownImage } from "./images";
 import {
@@ -204,23 +207,26 @@ function renderMarkdownLink(
   }
   if (!block && isWebsiteLink(node)) {
     const text = astText(node);
+    const target = commitCheckTarget(href);
     return (
-      <NativeLink
-        href={href}
-        accessibilityLabel={text === undefined ? undefined : linkLabel(text, href)}
-        key={node.key}
-        style={styleMap.website_link}
-      >
-        <LinkFavicon href={href} plate={styleMap.link_favicon_plate} />
-        {WORD_JOINER}
-        {ISOLATE}
-        {text === undefined ? (
-          children
-        ) : (
-          <Text style={styleMap.website_link_label}>{linkLabel(text, href)}</Text>
-        )}
-        {POP_ISOLATE}
-      </NativeLink>
+      <Fragment key={node.key}>
+        <NativeLink
+          href={href}
+          accessibilityLabel={text === undefined ? undefined : linkLabel(text, href)}
+          style={styleMap.website_link}
+        >
+          <LinkFavicon href={href} plate={styleMap.link_favicon_plate} />
+          {WORD_JOINER}
+          {ISOLATE}
+          {text === undefined ? (
+            children
+          ) : (
+            <Text style={styleMap.website_link_label}>{linkLabel(text, href)}</Text>
+          )}
+          {POP_ISOLATE}
+        </NativeLink>
+        {target ? <CommitChecksMark target={target} /> : null}
+      </Fragment>
     );
   }
   if (!block) {

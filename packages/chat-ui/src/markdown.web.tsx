@@ -41,6 +41,7 @@ import {
   useDrawing,
 } from "./code-blocks/code-block.web";
 import { mayHaveCodeBlock } from "./code-blocks/scan";
+import { LinkChecks } from "./commit-checks-badge";
 import { GlobeIcon, ImageIcon } from "./icons";
 import type { ChatMarkdownProps } from "./markdown";
 import {
@@ -577,6 +578,7 @@ function MarkdownAnchor({
       ) : (
         link
       )}
+      {opens ? <LinkChecks href={href} /> : null}
     </InsideLinkContext.Provider>
   );
 }
@@ -761,11 +763,14 @@ export function LinkifiedText({
             {part.value}
           </TicketChip>
         ) : linkFaviconOrigin(part.href) ? (
-          <LinkPreview key={index} href={part.href} referenceContext={referenceContext}>
-            <WebsiteLink href={part.href} className="rk-chat-link-in-bubble">
-              {linkLabel(part.value, part.href)}
-            </WebsiteLink>
-          </LinkPreview>
+          <Fragment key={index}>
+            <LinkPreview href={part.href} referenceContext={referenceContext}>
+              <WebsiteLink href={part.href} className="rk-chat-link-in-bubble">
+                {linkLabel(part.value, part.href)}
+              </WebsiteLink>
+            </LinkPreview>
+            <LinkChecks href={part.href} />
+          </Fragment>
         ) : (
           <LinkPreview key={index} href={part.href} referenceContext={referenceContext}>
             <ConfirmableAnchor href={part.href} className="underline">
@@ -958,6 +963,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   );
 });
 
+export type { CommitChecksSource, CommitCheckTarget } from "./commit-checks";
+export { CommitChecksContext, commitCheckTarget } from "./commit-checks";
 export type { ChatMarkdownProps, LinkFavicons } from "./markdown";
 export {
   LinkFaviconsContext,
