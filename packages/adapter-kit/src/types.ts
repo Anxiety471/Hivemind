@@ -790,6 +790,11 @@ export interface AgentRunRequest {
   optionalReply?: boolean;
   /** Contextual fallback when a non-silent run produces no written response. */
   emptyResponseText?: string;
+  /**
+   * Judges whether a final reply leaves a decision for the user in prose. When it says so, the
+   * runtime asks the run to call ask_user once instead of ending. A failing judge lets it through.
+   */
+  finalReplyJudge?: (reply: string) => Promise<boolean>;
   executeTool?: (
     name: string,
     args: Record<string, unknown>,

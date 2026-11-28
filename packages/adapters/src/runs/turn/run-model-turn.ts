@@ -29,6 +29,7 @@ import {
 } from "../tools/run-tool-selection.js";
 import { applyTool } from "../tools/run-tools.js";
 import { preTurnMemorySearch } from "../tools/run-tools-memory.js";
+import { finalReplyDecisionJudge } from "./final-reply-judge.js";
 import { consumeRunEvents } from "./run-turn.js";
 import { claimRunSteering } from "./run-turn-images.js";
 import { appendToolCompletionAudit, toolCompletionOutcome } from "./tool-completion-audit.js";
@@ -372,6 +373,18 @@ function modelTurnRequest(
     allowSilentEmpty: allowSilentEmptyRun,
     optionalReply: groupReplyOptional,
     emptyResponseText,
+    // A reply that leaves a decision in prose gets one corrective turn toward ask_user. Voice
+    // turns are excluded: their instructions forbid option cards.
+    finalReplyJudge:
+      listedTools.some((tool) => tool.name === "ask_user") && !ctx.source.voiceCall
+        ? finalReplyDecisionJudge({
+            deps,
+            scope: { userId: run.userId, spaceId: run.spaceId, botId: bot.id },
+            fallbackModel: mainRunModel,
+            secrets: runSecrets,
+            registerSecrets: (values) => runSecrets.push(...values),
+          })
+        : undefined,
     executeTool: scripted
       ? undefined
       : (name, args, executionId, route, observer) =>

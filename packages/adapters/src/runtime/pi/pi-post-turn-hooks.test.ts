@@ -1,5 +1,5 @@
 import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
   EMPTY_RESPONSE_REMINDER_PROMPT,
@@ -7,12 +7,14 @@ import {
   SILENT_TOOL_CONTINUATION_PROMPT,
   UNFINISHED_WORK_CONTINUATION_PROMPT,
 } from "../../runs/assembly/continuation.prompt.js";
+import { UNDECIDED_ASK_CORRECTION_PROMPT } from "../../runs/assembly/final-reply-decision.prompt.js";
 import type { PiPostTurnContext, PiPostTurnHook } from "./pi-post-turn-hooks.js";
 import {
   createPostTurnHookRunner,
   DEFAULT_PI_POST_TURN_HOOKS,
   emptyResponseReminderHook,
   silentToolContinuationHook,
+  undecidedAskCorrectionHook,
   unfinishedWorkContinuationHook,
 } from "./pi-post-turn-hooks.js";
 
@@ -154,7 +156,110 @@ describe("DEFAULT_PI_POST_TURN_HOOKS", () => {
       silentToolContinuationHook,
       emptyResponseReminderHook,
       unfinishedWorkContinuationHook,
+      undecidedAskCorrectionHook,
     ]);
+  });
+});
+
+describe("undecidedAskCorrectionHook", () => {
+  const decision = "Decision for owner: either option A or option B?";
+  const judged = (needsDecision: boolean) => {
+    const judge = vi.fn(async (_reply: string) => needsDecision);
+    return {
+      judge,
+      ctx: finalTurn({ messageText: decision, finalTurnText: decision, finalReplyJudge: judge }),
+    };
+  };
+
+  it("sends the correction when the judge says the reply leaves a decision in prose", async () => {
+    const { judge, ctx } = judged(true);
+
+    expect(await undecidedAskCorrectionHook.evaluate(ctx)).toEqual({
+      action: "follow_up",
+      prompt: UNDECIDED_ASK_CORRECTION_PROMPT,
+      logEvent: "agent.undecided_ask_correction",
+      resetPendingFinalBoundary: true,
+    });
+    expect(judge).toHaveBeenCalledWith(decision);
+  });
+
+  it("allows when the judge says no decision is pending", async () => {
+    const { ctx } = judged(false);
+
+    expect(await undecidedAskCorrectionHook.evaluate(ctx)).toEqual({ action: "allow" });
+  });
+
+  it("allows, not fails, when the judge errors", async () => {
+    const ctx = finalTurn({
+      messageText: decision,
+      finalTurnText: decision,
+      finalReplyJudge: async () => {
+        throw new Error("judge down");
+      },
+    });
+
+    expect(await undecidedAskCorrectionHook.evaluate(ctx)).toEqual({ action: "allow" });
+  });
+
+  it.each([
+    ["the run has no ask_user judge", { finalReplyJudge: undefined }],
+    ["the reply is the exact no-response token", { messageText: "NO_RESPONSE" }],
+    ["the turn has tool calls", { hasToolCalls: true }],
+    ["the turn has tool results", { hasToolResults: true }],
+    ["tool work is still pending", { toolWorkPendingFinal: true }],
+    ["the run is paused", { pausePending: true }],
+    ["the stop reason is not stop", { stopReason: "length" }],
+    ["the provider failed", { hasProviderFailure: true }],
+  ])("does not call the judge when %s", async (_name, overrides) => {
+    const judge = vi.fn(async () => true);
+
+    expect(
+      await undecidedAskCorrectionHook.evaluate(
+        finalTurn({
+          messageText: decision,
+          finalTurnText: decision,
+          finalReplyJudge: judge,
+          ...overrides,
+        }),
+      ),
+    ).toEqual({ action: "allow" });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("fires once per run", async () => {
+    const judge = vi.fn(async () => true);
+    const runner = createPostTurnHookRunner(DEFAULT_PI_POST_TURN_HOOKS);
+    const turn = finalTurn({
+      messageText: decision,
+      finalTurnText: decision,
+      finalReplyJudge: judge,
+    });
+
+    expect(await runner.evaluate(turn)).toMatchObject({ hookName: "undecided_ask_correction" });
+    expect(await runner.evaluate(turn)).toBeUndefined();
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs after unfinished-work: a draft with unfinished checks never reaches the judge", async () => {
+    const judge = vi.fn(async () => true);
+    const runner = createPostTurnHookRunner(DEFAULT_PI_POST_TURN_HOOKS);
+
+    expect(
+      await runner.evaluate(
+        finalTurn({ messageText: premature, finalTurnText: premature, finalReplyJudge: judge }),
+      ),
+    ).toMatchObject({ hookName: "unfinished_work_continuation" });
+    expect(judge).not.toHaveBeenCalled();
+
+    expect(
+      await runner.evaluate(
+        finalTurn({ messageText: decision, finalTurnText: decision, finalReplyJudge: judge }),
+      ),
+    ).toMatchObject({
+      hookName: "undecided_ask_correction",
+      decision: { prompt: UNDECIDED_ASK_CORRECTION_PROMPT },
+    });
+    expect(judge).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -165,18 +270,18 @@ describe("createPostTurnHookRunner", () => {
     evaluate: () => ({ action: "follow_up", prompt }),
   });
 
-  it("caps each hook at its maxTriggers", () => {
+  it("caps each hook at its maxTriggers", async () => {
     const runner = createPostTurnHookRunner([emptyResponseReminderHook]);
 
-    expect(runner.evaluate(finalTurn({ messageText: "", streamed: false }))).toMatchObject({
+    expect(await runner.evaluate(finalTurn({ messageText: "", streamed: false }))).toMatchObject({
       hookName: "empty_response_reminder",
       attempt: 1,
     });
-    expect(runner.evaluate(finalTurn({ messageText: "", streamed: false }))).toBeUndefined();
+    expect(await runner.evaluate(finalTurn({ messageText: "", streamed: false }))).toBeUndefined();
     expect(runner.triggerCount("empty_response_reminder")).toBe(1);
   });
 
-  it("clears a resetOnToolTurn hook's count on a tool turn", () => {
+  it("clears a resetOnToolTurn hook's count on a tool turn", async () => {
     const runner = createPostTurnHookRunner([silentToolContinuationHook]);
     const pending = finalTurn({
       toolWorkPendingFinal: true,
@@ -186,39 +291,39 @@ describe("createPostTurnHookRunner", () => {
     });
 
     for (let i = 1; i <= 3; i += 1) {
-      expect(runner.evaluate(pending)).toMatchObject({ attempt: i });
+      expect(await runner.evaluate(pending)).toMatchObject({ attempt: i });
     }
-    expect(runner.evaluate(pending)).toBeUndefined();
+    expect(await runner.evaluate(pending)).toBeUndefined();
 
     runner.onToolTurn();
     expect(runner.triggerCount("silent_tool_continuation")).toBe(0);
-    expect(runner.evaluate(pending)).toMatchObject({ attempt: 1 });
+    expect(await runner.evaluate(pending)).toMatchObject({ attempt: 1 });
   });
 
-  it("keeps a count that does not opt into resetOnToolTurn", () => {
+  it("keeps a count that does not opt into resetOnToolTurn", async () => {
     const runner = createPostTurnHookRunner([emptyResponseReminderHook]);
-    runner.evaluate(finalTurn({ messageText: "", streamed: false }));
+    await runner.evaluate(finalTurn({ messageText: "", streamed: false }));
 
     runner.onToolTurn();
 
     expect(runner.triggerCount("empty_response_reminder")).toBe(1);
   });
 
-  it("lets the first hook that asks for a follow-up win", () => {
+  it("lets the first hook that asks for a follow-up win", async () => {
     const runner = createPostTurnHookRunner([followUp("first", "one"), followUp("second", "two")]);
 
-    expect(runner.evaluate(finalTurn())).toMatchObject({
+    expect(await runner.evaluate(finalTurn())).toMatchObject({
       hookName: "first",
       decision: { prompt: "one" },
     });
     expect(runner.triggerCount("second")).toBe(0);
-    expect(runner.evaluate(finalTurn())).toMatchObject({
+    expect(await runner.evaluate(finalTurn())).toMatchObject({
       hookName: "second",
       decision: { prompt: "two" },
     });
   });
 
-  it("passes priorTriggers to each hook", () => {
+  it("passes priorTriggers to each hook", async () => {
     const seen: number[] = [];
     const counting: PiPostTurnHook = {
       name: "counting",
@@ -230,14 +335,14 @@ describe("createPostTurnHookRunner", () => {
     };
     const runner = createPostTurnHookRunner([counting]);
 
-    runner.evaluate(finalTurn());
-    runner.evaluate(finalTurn());
-    runner.evaluate(finalTurn());
+    await runner.evaluate(finalTurn());
+    await runner.evaluate(finalTurn());
+    await runner.evaluate(finalTurn());
 
     expect(seen).toEqual([0, 1]);
   });
 
-  it("logs a throwing hook and moves on to the next one", () => {
+  it("logs a throwing hook and moves on to the next one", async () => {
     const sink = createTestSink();
     installLogger(createLogger({ service: "rakazo-worker", sinks: [sink] }));
     const broken: PiPostTurnHook = {
@@ -249,7 +354,7 @@ describe("createPostTurnHookRunner", () => {
     };
     const runner = createPostTurnHookRunner([broken, followUp("after")]);
 
-    expect(runner.evaluate(finalTurn())).toMatchObject({ hookName: "after" });
+    expect(await runner.evaluate(finalTurn())).toMatchObject({ hookName: "after" });
     expect(sink.events).toEqual([
       expect.objectContaining({
         message: "agent.post_turn_hook_error",

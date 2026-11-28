@@ -1,4 +1,5 @@
-import { getLogger } from "@rakazo/logging";
+import type { AgentRunRequest } from "@rakazo/adapter-kit";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import {
   EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
   EMPTY_RESPONSE_REMINDER_PROMPT,
@@ -6,7 +7,9 @@ import {
   SILENT_TOOL_CONTINUATION_PROMPT,
   UNFINISHED_WORK_CONTINUATION_PROMPT,
 } from "../../runs/assembly/continuation.prompt.js";
+import { UNDECIDED_ASK_CORRECTION_PROMPT } from "../../runs/assembly/final-reply-decision.prompt.js";
 import { detectPrematureStopReason } from "../../runs/assembly/premature-stop.js";
+import { isExactNoResponse } from "../../runs/assembly/silent-reply.js";
 
 /** Snapshot of the turn that just ended, read by post-turn hooks. */
 export interface PiPostTurnContext {
@@ -35,6 +38,8 @@ export interface PiPostTurnContext {
   readonly stopReason: string | undefined;
   readonly hasProviderFailure: boolean;
   readonly hadThinking: boolean;
+  /** Judges whether a final reply leaves a decision for the user; absent when the run has no `ask_user`. */
+  readonly finalReplyJudge?: AgentRunRequest["finalReplyJudge"];
   /** Triggers this hook already fired in the run. */
   readonly priorTriggers: number;
 }
@@ -51,8 +56,8 @@ export type PiPostTurnDecision =
     };
 
 /**
- * Synchronous on purpose: `turn_end` listeners are awaited, but the agent loop checks its
- * follow-up queue right after them, so a follow-up must be queued before `evaluate` returns.
+ * `turn_end` listeners are awaited before the agent loop checks its follow-up queue, so an
+ * async `evaluate` may await its judgement; the follow-up must be decided before it resolves.
  */
 export interface PiPostTurnHook {
   readonly name: string;
@@ -60,7 +65,7 @@ export interface PiPostTurnHook {
   readonly maxTriggers: number;
   /** Clear this hook's trigger count when a tool turn runs. */
   readonly resetOnToolTurn?: boolean;
-  evaluate(ctx: PiPostTurnContext): PiPostTurnDecision;
+  evaluate(ctx: PiPostTurnContext): PiPostTurnDecision | Promise<PiPostTurnDecision>;
 }
 
 const ALLOW: PiPostTurnDecision = { action: "allow" };
@@ -156,10 +161,47 @@ export const unfinishedWorkContinuationHook: PiPostTurnHook = {
   },
 };
 
+// One corrective turn when a completed final reply leaves a decision for the user in prose.
+// Runs after the unfinished-work nudge, so a draft that still has self-executable work never
+// reaches the judge; the corrected turn is then judged the same way.
+export const undecidedAskCorrectionHook: PiPostTurnHook = {
+  name: "undecided_ask_correction",
+  maxTriggers: 1,
+  async evaluate(ctx) {
+    if (
+      !ctx.finalReplyJudge ||
+      ctx.hasToolCalls ||
+      ctx.hasToolResults ||
+      ctx.toolWorkPendingFinal ||
+      ctx.pausePending ||
+      ctx.aborted ||
+      !ctx.isAssistant ||
+      ctx.stopReason !== "stop" ||
+      ctx.hasProviderFailure
+    ) {
+      return ALLOW;
+    }
+    const reply = ctx.messageText.trim();
+    if (!reply || isExactNoResponse(reply)) return ALLOW;
+    const needsDecision = await bestEffort(
+      "final reply decision judge",
+      ctx.finalReplyJudge(reply),
+    );
+    if (!needsDecision) return ALLOW;
+    return {
+      action: "follow_up",
+      prompt: UNDECIDED_ASK_CORRECTION_PROMPT,
+      logEvent: "agent.undecided_ask_correction",
+      resetPendingFinalBoundary: true,
+    };
+  },
+};
+
 export const DEFAULT_PI_POST_TURN_HOOKS: readonly PiPostTurnHook[] = [
   silentToolContinuationHook,
   emptyResponseReminderHook,
   unfinishedWorkContinuationHook,
+  undecidedAskCorrectionHook,
 ];
 
 export interface PiPostTurnFollowUp {
@@ -184,13 +226,15 @@ export function createPostTurnHookRunner(hooks: readonly PiPostTurnHook[]) {
     triggerCount(name: string): number {
       return triggers.get(name) ?? 0;
     },
-    evaluate(baseCtx: Omit<PiPostTurnContext, "priorTriggers">): PiPostTurnFollowUp | undefined {
+    async evaluate(
+      baseCtx: Omit<PiPostTurnContext, "priorTriggers">,
+    ): Promise<PiPostTurnFollowUp | undefined> {
       for (const hook of hooks) {
         const priorTriggers = triggers.get(hook.name) ?? 0;
         if (priorTriggers >= hook.maxTriggers) continue;
         let decision: PiPostTurnDecision;
         try {
-          decision = hook.evaluate({ ...baseCtx, priorTriggers });
+          decision = await hook.evaluate({ ...baseCtx, priorTriggers });
         } catch (error) {
           getLogger().error("agent.post_turn_hook_error", error, {
             runId: baseCtx.runId,

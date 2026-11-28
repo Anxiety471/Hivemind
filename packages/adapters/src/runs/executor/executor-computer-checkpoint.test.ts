@@ -427,6 +427,9 @@ function respond(target: Model<"openai-completions">, calls: ToolCall[] = [], sa
   stream.end(message);
   return stream;
 }
+// The approval checker's call that judges a final reply is not a main-model call.
+const modelCallIds = () =>
+  fake.stream.mock.calls.map((call) => call[0].id).filter((id) => id !== "checker");
 const click = {
   type: "toolCall" as const,
   id: "click",
@@ -486,7 +489,7 @@ it("resumes an approved browser action followed by leave in the same assistant b
   expect(f.browserAct).toHaveBeenCalledTimes(1);
   expect(f.effect).toMatchObject({ status: "completed", idempotencyKey: key });
   expect(f.effects.filter((entry) => entry.kind === "browser_act")).toHaveLength(1);
-  expect(fake.stream.mock.calls.map((call) => call[0].id)).toEqual(["main-a"]);
+  expect(modelCallIds()).toEqual(["main-a"]);
 });
 it("finishes the reply it had written before an approval, showing the approved step once", async () => {
   const f = fixture();
@@ -593,20 +596,25 @@ it("resolves saved A/C before unavailable current B and executes the pending eff
   expect(f.browserAct).toHaveBeenCalledTimes(1);
   expect(f.effect).toMatchObject({ status: "completed", idempotencyKey: key });
   expect(f.effects.filter((entry) => entry.kind === "browser_act")).toHaveLength(1);
-  expect(fake.stream.mock.calls.map((call) => call[0].id)).toEqual(["computer-c", "main-a"]);
+  expect(modelCallIds()).toEqual(["computer-c", "main-a"]);
   expect(findConnectedModelCredential).not.toHaveBeenCalled();
   expect(
     vi
       .mocked(resolveConnectedRunModel)
-      .mock.calls.every((call) => ["main-a", "computer-c"].includes(call[3])),
+      .mock.calls.every((call) => ["main-a", "computer-c", "checker"].includes(call[3])),
   ).toBe(true);
-  expect(f.runtimeRun.mock.calls.at(-1)?.[0].model).toMatchObject({
+  expect(
+    f.runtimeRun.mock.calls.filter((call) => call[0].model?.id !== "checker").at(-1)?.[0].model,
+  ).toMatchObject({
     id: "main-a",
     connectionId: "main-account",
     thinkingLevel: "high",
   });
   expect(
-    f.prisma.usageRecord.createMany.mock.calls.slice(-2).map((call) => call[0].data[0]?.model),
+    f.prisma.usageRecord.createMany.mock.calls
+      .map((call) => call[0].data[0]?.model)
+      .filter((model) => model !== "checker")
+      .slice(-2),
   ).toEqual(["computer-c", "main-a"]);
 });
 it("resumes a denied browser action plus leave without dispatching the denied effect", async () => {
@@ -619,7 +627,7 @@ it("resumes a denied browser action plus leave without dispatching the denied ef
   expect(f.browserAct).not.toHaveBeenCalled();
   expect(f.effect).toMatchObject({ status: "rejected", idempotencyKey: key });
   expect(f.effects.filter((entry) => entry.kind === "browser_act")).toHaveLength(1);
-  expect(fake.stream.mock.calls.map((call) => call[0].id)).toEqual(["main-a"]);
+  expect(modelCallIds()).toEqual(["main-a"]);
 });
 it("does not dispatch an approved pending action or transition after cancellation", async () => {
   const f = await paused([leave]);

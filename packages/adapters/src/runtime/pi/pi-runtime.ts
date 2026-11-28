@@ -1064,7 +1064,7 @@ export class PiAgentRuntime implements AgentRuntime {
             // Built-in and custom hooks decide here whether the turn needs a follow-up.
             const finalTurnText =
               messageText.trim() || streamed.slice(streamedBeforePendingFinal).trim();
-            const followUp = postTurnHooks.evaluate({
+            const followUp = await postTurnHooks.evaluate({
               runId: request.runId,
               turnIndex,
               messageText,
@@ -1084,6 +1084,7 @@ export class PiAgentRuntime implements AgentRuntime {
               hadThinking:
                 event.message.role === "assistant" &&
                 event.message.content.some((part) => part.type === "thinking"),
+              finalReplyJudge: request.finalReplyJudge,
             });
             if (followUp) {
               const { decision } = followUp;

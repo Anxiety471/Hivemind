@@ -185,6 +185,21 @@ func trimmedMinMax(limit int) parser {
 	}
 }
 
+// discriminated is a z.discriminatedUnion: the entry's discriminator selects the schema, which
+// then validates the whole object.
+func discriminated(value any, key string, schemas map[string]parser) (any, bool) {
+	input, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	name, _ := input[key].(string)
+	schema, known := schemas[name]
+	if !known {
+		return nil, false
+	}
+	return schema(input)
+}
+
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // botSettingsValues is BotSettingsValuesSchema.
@@ -230,6 +245,29 @@ func loginFieldLabels(value any) (any, bool) {
 	return cleaned, true
 }
 
+// askAction is AskActionSchema: a choice on an ask, with the short line explaining it.
+func askAction(value any) (any, bool) {
+	return object(
+		required("id", str),
+		required("label", str),
+		optional("description", str),
+		optional("outcome", enum("created", "cancelled")),
+		optional("recommended", boolean),
+	)(value)
+}
+
+// askItem is AskItemSchema: one independent decision of a batch ask (207fca777).
+func askItem(value any) (any, bool) {
+	return object(
+		required("id", str),
+		required("question", str),
+		optional("detail", str),
+		optional("ticketRef", str),
+		optional("actions", array(askAction)),
+		optional("answer", str),
+	)(value)
+}
+
 func askBlock(value any) (any, bool) {
 	return object(
 		required("text", str),
@@ -257,11 +295,8 @@ func askBlock(value any) (any, bool) {
 		optional("answerMessageId", str),
 		optional("dismissed", literal(true)),
 		optional("remembered", literal(false)),
-		optional("actions", array(object(
-			required("id", str), required("label", str),
-			optional("outcome", enum("created", "cancelled")),
-			optional("recommended", boolean),
-		))),
+		optional("actions", array(askAction)),
+		optional("items", array(askItem)),
 	)(value)
 }
 
@@ -299,6 +334,20 @@ func chartBlock(value any) (any, bool) {
 }
 
 var intents = []string{"request", "result", "question", "status", "fyi"}
+
+// jobStates is JobCardStateSchema (packages/contracts/src/integrations/tool-card.ts:4): how a job
+// the card reports is going. The set guard pins it to TypeScript.
+var jobStates = []string{"starting", "working", "finished", "needs_input", "exited", "timed_out"}
+
+// jobCaps is ToolCardSchema's string caps by field; `reply` names JOB_CARD_REPLY_MAX_CHARS. A cap
+// TS raises accepts a longer value that Go would otherwise refuse, so the guard pins them.
+var jobCaps = map[string]int{
+	"jobId": 200, "title": 200, "agent": 80, "branch": 240, "url": 2048,
+	"reply": jobCardReplyMaxChars,
+}
+
+// mcpTransports is McpTransportSchema (packages/contracts/src/integrations/mcp.ts:6).
+var mcpTransports = []string{"streamable_http", "sse", "stdio"}
 
 var step = object(
 	required("label", str),
@@ -378,17 +427,18 @@ var jobCardStats = object(
 )
 
 // jobBlock is ToolCardSchema: a job a tool started elsewhere, with the coding details it
-// reports. Every detail is optional, so a minimal legacy card still parses.
+// reports. Every detail is optional, so a minimal legacy card still parses. The six string caps
+// come from jobCaps and the states from jobStates, so one TypeScript change updates the card.
 var jobBlock = object(
 	required("kind", literal("job")),
-	required("jobId", trimmedMinMax(200)),
-	required("title", trimmedMinMax(200)),
-	optional("agent", trimmedMinMax(80)),
-	optional("branch", trimmedMinMax(240)),
-	required("state", enum("starting", "working", "finished", "needs_input", "exited", "timed_out")),
+	required("jobId", trimmedMinMax(jobCaps["jobId"])),
+	required("title", trimmedMinMax(jobCaps["title"])),
+	optional("agent", trimmedMinMax(jobCaps["agent"])),
+	optional("branch", trimmedMinMax(jobCaps["branch"])),
+	required("state", enum(jobStates...)),
 	optional("startedAt", nonNegative),
-	optional("url", trimmedMax(2048)),
-	optional("reply", trimmedMax(jobCardReplyMaxChars)),
+	optional("url", trimmedMax(jobCaps["url"])),
+	optional("reply", trimmedMax(jobCaps["reply"])),
 	optional("finishedAt", nonNegative),
 	optional("turn", positive),
 	optional("repo", trimmedMinMax(120)),
@@ -458,7 +508,7 @@ var blockSchemas = map[string]parser{
 		required("status", enum("draft", "saved"))),
 	"chart": withKind("chart", chartBlock),
 	"mcp_approval": withDefault(object(required("kind", literal("mcp_approval")), required("name", str),
-		required("serverId", id), required("transport", enum("streamable_http", "sse", "stdio")),
+		required("serverId", id), required("transport", enum(mcpTransports...)),
 		required("endpoint", nullable(str)), required("needsOAuth", boolean),
 		field{name: "status", parse: enum("pending", "connected", "dismissed"), def: "pending", hasDef: true})),
 	"import_setup": importSetup,
@@ -504,16 +554,7 @@ func withDefault(inner parser) parser { return inner }
 
 // parseBlock is MessageBlock.parse of one stored entry.
 func parseBlock(value any) (any, bool) {
-	input, ok := value.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	kind, _ := input["kind"].(string)
-	schema, known := blockSchemas[kind]
-	if !known {
-		return nil, false
-	}
-	return schema(input)
+	return discriminated(value, "kind", blockSchemas)
 }
 
 // ParseBlocks is MessageBlock.array().parse: every entry must be a valid block. The
