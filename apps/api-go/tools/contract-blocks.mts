@@ -36,8 +36,8 @@ const fixture = JSON.parse(
 /**
  * The kinds the guard's first run reported as diverging. Every one turned out to be a probe
  * artifact (the guard decoded numbers as float64 and re-derived zod's output instead of using
- * it), so these cases now hold the kinds to the same bytes end to end: the endpoint that would
- * have answered 500 before the lane's fixes.
+ * it), so these cases hold those kinds to the same bytes end to end: the endpoints the report
+ * named as answering 500 are now proven equal by a real stored row, not only by the parser.
  */
 const KINDS = [
   "ask",
