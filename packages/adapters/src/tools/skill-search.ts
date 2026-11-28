@@ -251,6 +251,10 @@ const SKILL_SYNONYM_CLUSTERS: readonly (readonly string[])[] = [
   ["delete", "remove", "rm", "destroy", "drop"],
   ["update", "edit", "modify", "patch", "change"],
   ["search", "find", "query", "lookup", "filter"],
+  ["docx", "word", "doc", "document", "letterhead", "memo", "report", "annex"],
+  ["pdf", "typst", "docutil", "printable", "report"],
+  ["xlsx", "xls", "excel", "spreadsheet", "sheet", "workbook", "csv"],
+  ["pptx", "powerpoint", "slides", "slide", "deck", "presentation"],
 ];
 
 const SKILL_SYNONYM_MAP: ReadonlyMap<string, ReadonlySet<string>> = (() => {

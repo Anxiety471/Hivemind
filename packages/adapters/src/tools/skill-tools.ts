@@ -14,6 +14,7 @@ import {
   BOARD_SKILL_NAME,
   BUILTIN_AGENT_SKILLS,
   COMPUTER_SKILL_NAME,
+  computerToolsOffered,
   DOCUMENTS_SKILL_NAME,
   HISTORY_SKILL_NAME,
   ROUTINES_SKILL_NAME,
@@ -357,11 +358,7 @@ export function filterRunAgentSkills<T extends SkillRecord & { id?: string }>(
   const historyOffered = offeredToolNames.has("search_history");
   const routinesOffered =
     offeredToolNames.has("schedule_create") && offeredToolNames.has("command_save");
-  const computerOffered =
-    offeredToolNames.has("shell") ||
-    offeredToolNames.has("browser_navigate") ||
-    offeredToolNames.has("computer_observe") ||
-    offeredToolNames.has("read_file");
+  const computerOffered = computerToolsOffered(offeredToolNames);
   const subagentsOffered = offeredToolNames.has("run_subagent");
   const base = nonOwnerChatRun ? (builtinAgentSkillRecords() as unknown as T[]) : [...agentSkills];
   return base.filter(

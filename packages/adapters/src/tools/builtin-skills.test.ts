@@ -56,7 +56,7 @@ describe("built-in skills", () => {
       },
       {
         name: "Documents",
-        description: "Create, edit, convert, and visually QA PDF, DOCX, XLSX, and PPTX files",
+        description: "Create, edit, convert, check PDF, DOCX, XLSX, and PPTX reports and files",
       },
     ]);
   });

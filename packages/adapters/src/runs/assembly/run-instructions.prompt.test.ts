@@ -150,6 +150,30 @@ describe("userTurnInstructions code mode clause", () => {
     }).join("\n");
     expect(withoutFollowUps).not.toContain('skill_mode({ name: "Routines" })');
   });
+
+  it("points at the Documents skill for office and PDF files only when a computer or file tool is offered", () => {
+    const documentsTrigger =
+      'Before creating, editing, converting, or checking a PDF, DOCX, XLSX, or PPTX file, call skill_mode({ name: "Documents" }) and follow it.';
+    for (const tool of ["shell", "read_file"]) {
+      const withTool = userTurnInstructions({
+        ...base,
+        offeredToolNames: new Set(["skill_mode", tool]),
+      }).join("\n");
+      expect(withTool).toContain(documentsTrigger);
+    }
+
+    const withoutSkillMode = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["shell", "read_file"]),
+    }).join("\n");
+    expect(withoutSkillMode).not.toContain('skill_mode({ name: "Documents" })');
+
+    const withoutComputerTools = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["skill_mode", "drive_read", "attach_file"]),
+    }).join("\n");
+    expect(withoutComputerTools).not.toContain('skill_mode({ name: "Documents" })');
+  });
 });
 
 describe("contextToolsInstruction", () => {
@@ -271,8 +295,9 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview.match(/10–20/g)?.length).toBe(1);
     expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
     // The skills catalog is injected on every turn, so its growth is bounded here on purpose.
-    // Raised for the attachment and teammate-ownership guardrails, which every turn needs.
-    expect(preview.length).toBeLessThan(7_000);
+    // Raised for the attachment and teammate-ownership guardrails, which every turn needs, and for
+    // the Documents trigger, which runs with a computer or file tools need before office files.
+    expect(preview.length).toBeLessThan(7_200);
     const catalogAt = preview.indexOf("Available skills (8):");
     expect(catalogAt).toBeGreaterThan(-1);
     expect(preview).toContain("- Computer: ");

@@ -258,6 +258,27 @@ describe("skill-search BM25F engine", () => {
       expect(matchRelevantSkillsForPrompt(prompt, corpus)).toEqual([]);
     });
 
+    it.each([
+      "make a Word report",
+      "update the PDF annex",
+      "build an Excel spreadsheet",
+      "create presentation slides",
+      "fix the docx table",
+    ])("surfaces Documents for document-format prompt %j", (prompt) => {
+      const hintNames = matchRelevantSkillsForPrompt(prompt, corpus, { maxHints: 3 }).map(
+        (h) => h.name,
+      );
+      expect(hintNames).toContain("Documents");
+    });
+
+    it.each(["hi", "check server load", "restart nginx", "send an email"])(
+      "keeps Documents out of unrelated prompt %j",
+      (prompt) => {
+        const hintNames = matchRelevantSkillsForPrompt(prompt, corpus).map((h) => h.name);
+        expect(hintNames).not.toContain("Documents");
+      },
+    );
+
     it("excludes skills already expanded via /Name or @Name", () => {
       const hints = matchRelevantSkillsForPrompt("Track this on the Kanban board", corpus, {
         excludeNames: ["Tasks"],
@@ -342,5 +363,28 @@ describe("borrowed context precision", () => {
         }),
       ).toEqual([]);
     }
+  });
+});
+
+describe("Documents borrowed context", () => {
+  const corpus = builtinCorpus();
+  const shortFollowUp = "fix these two rows";
+
+  it.each([
+    "Revised the PDF report annex; rows 4 and 5 still show last quarter's totals",
+    "Updated the Q3 report.docx table, but two rows still have the old figures",
+    "Ticket: refresh the quarterly report.pdf annex table before Friday",
+  ])("surfaces Documents for a short follow-up borrowing context %j", (contextText) => {
+    const hintNames = matchRelevantSkillsForPrompt(shortFollowUp, corpus, { contextText }).map(
+      (h) => h.name,
+    );
+    expect(hintNames).toContain("Documents");
+  });
+
+  it("does not surface Documents for a short follow-up borrowing unrelated context", () => {
+    const hintNames = matchRelevantSkillsForPrompt(shortFollowUp, corpus, {
+      contextText: "Ticket: improve the onboarding email copy and the welcome page",
+    }).map((h) => h.name);
+    expect(hintNames).not.toContain("Documents");
   });
 });

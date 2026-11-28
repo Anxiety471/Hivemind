@@ -5,7 +5,11 @@ import {
   toolRequiresExplicitApproval,
 } from "@rakazo/core";
 import { MODEL_CANNOT_SEE_MESSAGE } from "../../models/model-vision.prompt.js";
-import { BUILTIN_AGENT_SKILLS } from "../../tools/builtin-skills.prompt.js";
+import {
+  BUILTIN_AGENT_SKILLS,
+  computerToolsOffered,
+  DOCUMENTS_SKILL_NAME,
+} from "../../tools/builtin-skills.prompt.js";
 import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
 import { SCHEDULE_TOOL_NAMES } from "../../tools/schedule-tools.js";
 import { SKILL_MODE } from "../../tools/skill-mode.tool-definition.js";
@@ -278,6 +282,8 @@ function toolUsageLine(parts: {
   codeModeOffered?: boolean;
   /** The run offers skill_mode, so a listed skill can be loaded before scripted work. */
   skillModeOffered?: boolean;
+  /** The run offers skill_mode and a computer, shell, or file tool (the Documents skill's gate). */
+  documentsSkillOffered?: boolean;
   /** The run offers the Routines skill (it can save a command and schedule one). */
   routinesSkillOffered?: boolean;
   /** Most tools are called only from a code_mode script. */
@@ -314,6 +320,9 @@ function toolUsageLine(parts: {
         ]
           .filter(Boolean)
           .join(" ")
+      : undefined,
+    parts.documentsSkillOffered
+      ? `Before creating, editing, converting, or checking a PDF, DOCX, XLSX, or PPTX file, call skill_mode({ name: "${DOCUMENTS_SKILL_NAME}" }) and follow it.`
       : undefined,
     ticketBoardClause(parts.ticketBoardEnabled, disabled),
     parts.ticketBoardEnabled ? undefined : scratchpadClause(disabled),
@@ -506,6 +515,9 @@ export function userTurnInstructions(parts: {
       ...parts,
       codeModeOffered: parts.offeredToolNames?.has(CODE_MODE),
       skillModeOffered: parts.offeredToolNames?.has(SKILL_MODE),
+      documentsSkillOffered:
+        parts.offeredToolNames?.has(SKILL_MODE) === true &&
+        computerToolsOffered(parts.offeredToolNames),
       routinesSkillOffered:
         parts.offeredToolNames?.has("schedule_create") === true &&
         parts.offeredToolNames?.has("command_save") === true,
