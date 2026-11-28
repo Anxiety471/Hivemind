@@ -1,7 +1,7 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import type { HelperCardStatus } from "@rakazo/core";
-import { helperCardState } from "@rakazo/core";
+import { helperCardState, helperTextSummary } from "@rakazo/core";
 import { Button } from "@rakazo/ui-web/components/ui/button";
 import {
   Collapsible,
@@ -91,9 +91,10 @@ export function HelperStatusIcon({ status }: { status: HelperCardStatus }) {
 const openHelpers = new Set<string>();
 
 /**
- * A helper's card. It starts folded to its name, status and a two-line task, so a long brief or
- * report does not fill the chat. The header opens it to the full task and the result or progress;
- * Stop (while running) and Open sit in the same header row.
+ * A helper's card. Folded, it is one header row (status, name, expand, open) and one muted line
+ * of what the helper is doing or was asked, so a long brief or report never fills the chat. Open
+ * shows the full brief in a short scrolling region, then the result or progress. Stop, while the
+ * helper runs, sits on the summary line, so the header controls never move.
  */
 export function SubagentCard({
   block,
@@ -111,6 +112,13 @@ export function SubagentCard({
   const [stopping, setStopping] = useState(false);
   const running = block.status === "running";
   const { status, body } = helperCardState(block);
+  // While it works, the line says what it is doing now; otherwise what it was asked.
+  const summary = helperTextSummary(running && block.progress ? block.progress : block.task);
+  // The brief is shown in full only when the one line leaves something out.
+  const briefIsLonger = helperTextSummary(block.task) !== block.task.trim();
+  // The result or progress shows below the brief unless the one line already says it all.
+  const showBody = Boolean(body) && body.trim() !== summary;
+  const expandable = briefIsLonger || showBody;
   return (
     <Collapsible
       open={open}
@@ -120,10 +128,10 @@ export function SubagentCard({
         setOpen(next);
       }}
       data-testid="subagent-card"
-      className="w-[420px] max-w-full rounded-2xl border border-border bg-muted px-3.5 py-3"
+      className="w-[420px] max-w-full rounded-2xl border border-border bg-muted px-3.5 py-2.5"
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-start focus-ring">
+      <div className="flex min-w-0 items-center gap-1">
+        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-start focus-ring">
           <HelperStatusIcon status={status} />
           <span
             className="min-w-0 flex-1 truncate text-body font-medium text-foreground"
@@ -134,13 +142,36 @@ export function SubagentCard({
           <ChevronDown
             data-testid="subagent-chevron"
             aria-hidden
-            size={14}
-            strokeWidth={1.8}
-            className={`shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none ${
+            className={`size-4 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none ${
               open ? "rotate-180" : ""
-            }`}
+            } ${expandable ? "" : "invisible"}`}
+            strokeWidth={1.8}
           />
         </CollapsibleTrigger>
+        {onOpen ? (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={t`Open helper thread`}
+            title={t`Open helper thread`}
+            className="text-muted-foreground"
+            onClick={onOpen}
+          >
+            <ArrowUpRight aria-hidden />
+          </Button>
+        ) : (
+          <span aria-hidden className="size-6 shrink-0" />
+        )}
+      </div>
+      <div className="mt-0.5 flex min-w-0 items-center gap-2">
+        <span
+          data-testid="subagent-summary"
+          className="min-w-0 flex-1 truncate text-body-sm text-muted-foreground"
+          dir="auto"
+          title={summary}
+        >
+          {summary}
+        </span>
         {running && onStop ? (
           <Button
             variant="outline"
@@ -155,34 +186,26 @@ export function SubagentCard({
             <Trans>Stop</Trans>
           </Button>
         ) : null}
-        {onOpen ? (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={t`Open helper thread`}
-            title={t`Open helper thread`}
-            className="text-muted-foreground"
-            onClick={onOpen}
-          >
-            <ArrowUpRight aria-hidden />
-          </Button>
-        ) : null}
       </div>
-      <span
-        data-testid="subagent-task"
-        className={`mt-1.5 block text-body-sm text-muted-foreground ${open ? "wrap-anywhere" : "line-clamp-2"}`}
-        dir="auto"
-      >
-        {block.task}
-      </span>
-      {body ? (
+      {expandable && open ? (
         <CollapsibleContent>
-          <div
-            data-testid="subagent-body"
-            className="mt-2.5 text-body-lg leading-[1.5] text-foreground/75"
-          >
-            <ChatMarkdown streaming={running}>{body}</ChatMarkdown>
-          </div>
+          {briefIsLonger ? (
+            <div
+              data-testid="subagent-task"
+              className="mt-2.5 max-h-60 overflow-y-auto rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-body-sm leading-normal whitespace-pre-wrap text-muted-foreground wrap-anywhere rk-scroll"
+              dir="auto"
+            >
+              {block.task.trim()}
+            </div>
+          ) : null}
+          {showBody ? (
+            <div
+              data-testid="subagent-body"
+              className="mt-2.5 text-body-lg leading-[1.5] text-foreground/75"
+            >
+              <ChatMarkdown streaming={running}>{body}</ChatMarkdown>
+            </div>
+          ) : null}
         </CollapsibleContent>
       ) : null}
     </Collapsible>

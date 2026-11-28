@@ -59,12 +59,13 @@ vi.mock("react-native", async () => {
     };
   return {
     ActivityIndicator: element("i"),
+    ScrollView: element("div"),
     Alert: { alert: vi.fn() },
     Appearance: { getColorScheme: () => "light", addChangeListener: () => ({ remove() {} }) },
     Linking: { openURL: vi.fn().mockResolvedValue(undefined) },
     Platform: { OS: "ios", select: (options: { ios?: unknown }) => options.ios },
     Pressable: element("button"),
-    StyleSheet: { create: <T,>(styles: T) => styles },
+    StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 1 },
     Text: element("span"),
     TextInput: element("input"),
     View: element("div"),
@@ -674,12 +675,12 @@ describe("thread cards", () => {
     const task = () =>
       [...container.querySelectorAll("span")].find((span) => span.textContent === longQuestion);
     expect(card()?.getAttribute("aria-expanded")).toBe("false");
-    expect(task()?.getAttribute("data-number-of-lines")).toBe("2");
+    expect(task()?.getAttribute("data-number-of-lines")).toBe("1");
     expect(container.textContent).not.toContain("A long report");
 
     act(() => (card() as HTMLElement).click());
     expect(card()?.getAttribute("aria-expanded")).toBe("true");
-    expect(task()?.hasAttribute("data-number-of-lines")).toBe(false);
+    expect(task()?.getAttribute("data-number-of-lines")).toBe("1");
     expect(container.textContent).toContain("A long report");
 
     onLongPress.mockClear();

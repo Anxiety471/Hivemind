@@ -2,11 +2,24 @@ import { ph } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
 import type { MessageBlock } from "@rakazo/contracts";
-import { cloudAgentHttpsUrl, helperCardState, displayName as safeDisplayName } from "@rakazo/core";
+import {
+  cloudAgentHttpsUrl,
+  helperCardState,
+  helperTextSummary,
+  displayName as safeDisplayName,
+} from "@rakazo/core";
 import { typeScale } from "@rakazo/ui-tokens";
 import { useEffect, useRef, useState } from "react";
 import type { ViewInstance } from "react-native";
-import { ActivityIndicator, Linking, Pressable, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -100,6 +113,12 @@ function HelperMessageCard({
   const running = special.status === "running";
   const helperName = safeDisplayName(special.name, t`subagent`);
   const { status, body } = helperCardState(special);
+  // While it works, the line says what it is doing now; otherwise what it was asked.
+  const summary = helperTextSummary(running && special.progress ? special.progress : special.task);
+  // The brief is shown in full only when the one line leaves something out, and the result or
+  // progress only when the line does not already say it.
+  const briefIsLonger = helperTextSummary(special.task) !== special.task.trim();
+  const showBody = Boolean(body) && body.trim() !== summary;
   const statusLabel =
     status === "running"
       ? t`Running`
@@ -223,26 +242,8 @@ function HelperMessageCard({
                 {helperName}
               </Text>
             </View>
-            {special.task ? (
-              <Text
-                numberOfLines={subagentOpen ? undefined : 2}
-                style={{ color: tokens.mutedForeground, marginTop: 6, ...typeScale.secondary }}
-              >
-                {special.task}
-              </Text>
-            ) : null}
           </View>
         </Pressable>
-        {running && stopHelper && !readOnly ? (
-          <NativeActionButton
-            label={t`Stop`}
-            prominence="secondary"
-            size="compact"
-            busy={stop.pending}
-            style={{ alignSelf: "flex-start", marginTop: 11, marginEnd: 8 }}
-            onPress={() => stop.run(stopHelper)}
-          />
-        ) : null}
         {openTarget ? (
           <Pressable
             onPress={toggleBody}
@@ -274,8 +275,54 @@ function HelperMessageCard({
           </View>
         )}
       </View>
-      {subagentOpen && body ? (
-        <View style={{ paddingHorizontal: 16, paddingBottom: 14, marginTop: -6 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          paddingStart: 16,
+          paddingEnd: 8,
+          paddingBottom: 12,
+          marginTop: -6,
+        }}
+      >
+        <Text
+          numberOfLines={1}
+          style={{ flex: 1, color: tokens.mutedForeground, ...typeScale.secondary }}
+        >
+          {summary}
+        </Text>
+        {running && stopHelper && !readOnly ? (
+          <NativeActionButton
+            label={t`Stop`}
+            prominence="secondary"
+            size="compact"
+            busy={stop.pending}
+            onPress={() => stop.run(stopHelper)}
+          />
+        ) : null}
+      </View>
+      {subagentOpen && briefIsLonger ? (
+        <ScrollView
+          nestedScrollEnabled
+          style={{
+            maxHeight: 240,
+            marginHorizontal: 16,
+            marginBottom: 12,
+            borderRadius: 12,
+            backgroundColor: tokens.background,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: tokens.border,
+          }}
+          contentContainerStyle={{ padding: 12 }}
+        >
+          <Text style={{ color: tokens.mutedForeground, ...typeScale.secondary }}>
+            {special.task.trim()}
+          </Text>
+        </ScrollView>
+      ) : null}
+      {subagentOpen && showBody ? (
+        <View style={{ paddingHorizontal: 16, paddingBottom: 14 }}>
           <ChatMarkdown palette={tokens} colorScheme={colorScheme} streaming={running}>
             {body}
           </ChatMarkdown>

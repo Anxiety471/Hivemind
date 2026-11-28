@@ -142,6 +142,20 @@ export function helperCardState(block: { status: string; result?: string; progre
   };
 }
 
+/**
+ * A helper's text as one line for a folded card: its first sentence, or its first line when no
+ * sentence ends in it. The card clips that line to one row, so any length stays one row.
+ */
+export function helperTextSummary(text: string): string {
+  const line = text
+    .split(/\r?\n/u)
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!line) return "";
+  const sentence = /^.*?[.!?](?=\s|$)/u.exec(line);
+  return sentence ? sentence[0] : line;
+}
+
 /** A helper only holds up computer operations after a worker claimed that computer. */
 export function computerUsingRuns(now: Date = new Date()) {
   return {
