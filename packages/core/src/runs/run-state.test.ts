@@ -160,16 +160,20 @@ describe("run state machine", () => {
 describe("helperCardState", () => {
   it("reads a stopped helper as neither failed nor showing its result", () => {
     expect(helperCardState({ status: "failed", result: STOPPED_HELPER_RESULT })).toEqual({
+      status: "stopped",
       stopped: true,
       failed: false,
       body: "",
     });
     expect(helperCardState({ status: "failed", result: "no access" })).toEqual({
+      status: "failed",
       stopped: false,
       failed: true,
       body: "no access",
     });
+    expect(helperCardState({ status: "completed", result: "done" }).status).toBe("completed");
     expect(helperCardState({ status: "running", progress: "reading" })).toEqual({
+      status: "running",
       stopped: false,
       failed: false,
       body: "reading",

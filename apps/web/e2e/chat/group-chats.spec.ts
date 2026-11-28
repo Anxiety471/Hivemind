@@ -334,7 +334,9 @@ test("subagents keep group approvals answerable across reload while conversation
   await page.mouse.move(1, 1);
   await captureScreenshot(page, testInfo, "group-subagent-approval-chat-free");
   await allow.click();
-  await expect(page.getByTestId("subagent-card")).toContainText("Completed", { timeout: 30_000 });
+  await expect(
+    page.getByTestId("subagent-card").getByRole("img", { name: "Completed", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
   await expect(allow).toBeHidden();
   await page.mouse.move(1, 1);
   await captureScreenshot(page, testInfo, "group-subagent-completed");

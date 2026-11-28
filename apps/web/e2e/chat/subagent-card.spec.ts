@@ -21,7 +21,9 @@ test("a completed subagent card folds, opens from its header, and fills its widt
 
   const card = page.getByTestId("subagent-card");
   await expect(card).toBeVisible({ timeout: 30_000 });
-  await expect(card).toContainText("Completed", { timeout: 30_000 });
+  await expect(card.getByRole("img", { name: "Completed", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
   const header = card.locator("button[aria-expanded]");
   const body = card.getByTestId("subagent-body");
   await expect(header).toHaveAttribute("aria-expanded", "false");
@@ -72,14 +74,18 @@ test("a background helper's card can be stopped while the chat stays free", asyn
     page.getByTestId("message-bot-bubble").getByText("a background helper is on it"),
   ).toBeVisible({ timeout: 30_000 });
   const card = page.getByTestId("subagent-card");
-  await expect(card).toContainText("Running", { timeout: 30_000 });
+  await expect(card.getByRole("img", { name: "Running", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
   const stop = card.getByRole("button", { name: "Stop", exact: true });
   await expect(stop).toBeVisible();
   await page.mouse.move(1, 1);
   await captureScreenshot(page, testInfo, "background-helper-running");
 
   await stop.click();
-  await expect(card).toContainText("Stopped", { timeout: 15_000 });
+  await expect(card.getByRole("img", { name: "Stopped", exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(stop).toBeHidden();
   await page.mouse.move(1, 1);
   await captureScreenshot(page, testInfo, "background-helper-stopped");
@@ -117,7 +123,9 @@ test("a subagent approval survives refresh while the parent keeps answering", as
   await page.mouse.move(1, 1);
   await captureScreenshot(page, testInfo, "subagent-approval-chat-free");
   await allow.click();
-  await expect(page.getByTestId("subagent-card")).toContainText("Completed", { timeout: 30_000 });
+  await expect(
+    page.getByTestId("subagent-card").getByRole("img", { name: "Completed", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
   await expect(allow).toBeHidden();
   await page.mouse.move(1, 1);
   await captureScreenshot(page, testInfo, "subagent-approved");

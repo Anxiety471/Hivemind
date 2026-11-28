@@ -117,19 +117,27 @@ export const MAX_HELPERS_PER_CHAT = 8;
 /** The result a stopped background helper's card settles with, beside status "failed". */
 export const STOPPED_HELPER_RESULT = "stopped";
 
+/** The one state a helper card shows: its icon, its accessible name and its tone. */
+export type HelperCardStatus = "running" | "completed" | "failed" | "stopped";
+
 /**
  * How a helper card reads: a stopped helper settles as failed but did not fail, and shows no
  * body; otherwise the body is its result, or its progress while it works.
  */
 export function helperCardState(block: { status: string; result?: string; progress?: string }): {
+  status: HelperCardStatus;
   stopped: boolean;
   failed: boolean;
   body: string;
 } {
   const stopped = block.status === "failed" && block.result === STOPPED_HELPER_RESULT;
+  const failed = block.status === "failed" && !stopped;
+  const status: HelperCardStatus =
+    block.status === "running" ? "running" : stopped ? "stopped" : failed ? "failed" : "completed";
   return {
+    status,
     stopped,
-    failed: block.status === "failed" && !stopped,
+    failed,
     body: stopped ? "" : block.result || block.progress || "",
   };
 }

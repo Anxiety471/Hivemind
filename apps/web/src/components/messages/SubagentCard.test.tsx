@@ -29,10 +29,16 @@ function mountCard(
   const get = (id: string) => container.querySelector(`[data-testid="${id}"]`);
   const toggle = () => container.querySelector<HTMLButtonElement>("button[aria-expanded]");
   const click = () => flushSync(() => toggle()?.click());
+  // The status is one icon whose accessible name is the word for it.
+  const status = () =>
+    container
+      .querySelector('[data-testid="subagent-card"] [role="img"]')
+      ?.getAttribute("aria-label");
   return {
     get,
     toggle,
     click,
+    status,
     unmount: () => {
       root.unmount();
       container.remove();
@@ -51,17 +57,16 @@ const finished = {
 
 describe("SubagentCard", () => {
   it.each(["running", "completed", "failed"] as const)(
-    "labels %s helpers and respects reduced motion",
+    "names the %s status and animates only while running, and only for motion-safe",
     (status) => {
       const card = mountCard({ ...finished, agentId: `label-${status}`, status });
       const label =
         status === "running" ? "Running" : status === "completed" ? "Completed" : "Failed";
-      expect(card.toggle()?.textContent).toContain(label);
-      const pill = [...(card.toggle()?.querySelectorAll("span") ?? [])].find(
-        (span) => span.textContent === label,
+      expect(card.status()).toBe(label);
+      const icon = card.get("subagent-card")?.querySelector("svg");
+      expect(icon?.getAttribute("class")?.includes("motion-safe:animate-spin") ?? false).toBe(
+        status === "running",
       );
-      expect(pill?.getAttribute("style")).toBeNull();
-      if (status === "running") expect(pill?.className).toContain("motion-safe:animate-");
       card.unmount();
     },
   );
@@ -69,7 +74,7 @@ describe("SubagentCard", () => {
     const card = mountCard({ ...finished, agentId: "agent-folded" });
     expect(card.toggle()?.getAttribute("aria-expanded")).toBe("false");
     expect(card.get("subagent-task")?.textContent).toBe("A long brief");
-    expect(card.get("subagent-task")?.className).toContain("truncate");
+    expect(card.get("subagent-task")?.className).toContain("line-clamp-2");
     expect(card.get("subagent-body")).toBeNull();
     expect(card.get("subagent-chevron")?.getAttribute("class")).not.toContain("rotate-180");
     card.unmount();
@@ -77,16 +82,16 @@ describe("SubagentCard", () => {
 
   it("opens to the full task and result, and folds again", async () => {
     const card = mountCard({ ...finished, agentId: "agent-toggle" });
-    flushSync(() => (card.get("subagent-task") as HTMLElement).click());
+    card.click();
     expect(card.get("subagent-chevron")?.getAttribute("class")).toContain("rotate-180");
     expect(card.toggle()?.getAttribute("aria-expanded")).toBe("true");
-    expect(card.get("subagent-task")?.className).not.toContain("truncate");
+    expect(card.get("subagent-task")?.className).not.toContain("line-clamp-2");
     expect(card.get("subagent-task")?.className).toContain("wrap-anywhere");
     expect(card.get("subagent-body")?.textContent).toBe("A long report");
 
     card.click();
     expect(card.toggle()?.getAttribute("aria-expanded")).toBe("false");
-    expect(card.get("subagent-task")?.className).toContain("truncate");
+    expect(card.get("subagent-task")?.className).toContain("line-clamp-2");
     await vi.waitFor(() => expect(card.get("subagent-body")).toBeNull());
     card.unmount();
   });
@@ -99,7 +104,7 @@ describe("SubagentCard", () => {
       result: undefined,
       progress: "Reading files",
     });
-    expect(card.get("subagent-card")?.textContent).toContain("Running");
+    expect(card.status()).toBe("Running");
     expect(card.get("subagent-body")).toBeNull();
     card.click();
     expect(card.get("subagent-body")?.textContent).toBe("Reading files");
@@ -162,7 +167,6 @@ describe("SubagentCard", () => {
         (button) => button.getAttribute("aria-label") === "Open helper thread",
       );
     const saved = mountCard({ ...finished, agentId: "open-1" }, undefined, onOpen);
-    expect(openButton()?.textContent).toContain("Open");
     flushSync(() => (openButton() as HTMLButtonElement).click());
     expect(onOpen).toHaveBeenCalledOnce();
     saved.unmount();
@@ -173,8 +177,7 @@ describe("SubagentCard", () => {
 
   it("shows a stopped helper as stopped, not failed", () => {
     const card = mountCard({ ...finished, agentId: "bg-4", status: "failed", result: "stopped" });
-    expect(card.toggle()?.textContent).toContain("Stopped");
-    expect(card.toggle()?.textContent).not.toContain("Failed");
+    expect(card.status()).toBe("Stopped");
     expect(card.get("subagent-body")).toBeNull();
     card.unmount();
   });
