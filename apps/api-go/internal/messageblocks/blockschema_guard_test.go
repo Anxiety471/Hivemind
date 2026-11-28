@@ -162,8 +162,9 @@ func mustMarshal(t *testing.T, value any) []byte {
 
 // TestBlockSchemaFixtureIsCurrent regenerates the fixture from the TypeScript schemas and requires
 // it to be byte-identical, so a field, cap or refinement added in TS cannot pass without the Go
-// side being driven at the new shape. It skips where the workspace is not installed (the Go-only
-// gate); the workflow installs node and pnpm so CI never skips it.
+// side being driven at the new shape. The workflow (`.github/workflows/api-go.yml`) installs the
+// workspace through `./.github/actions/setup-workspace`, so CI has tsx and fails here when it does
+// not; a local Go-only run without an install skips instead.
 func TestBlockSchemaFixtureIsCurrent(t *testing.T) {
 	root, err := tsunions.Root()
 	if err != nil {
@@ -171,13 +172,18 @@ func TestBlockSchemaFixtureIsCurrent(t *testing.T) {
 	}
 	tsx := filepath.Join(root, "node_modules", ".bin", "tsx")
 	if _, err := os.Stat(tsx); err != nil {
+		if os.Getenv("CI") == "true" {
+			t.Fatalf("tsx is missing at %s under CI: the workflow must install the workspace so the TypeScript oracle runs (%v)", tsx, err)
+		}
 		t.Skip("tsx is not installed; run pnpm install to check the TypeScript oracle")
 	}
 	cmd := exec.Command(tsx, "apps/api-go/tools/blockschema-fixture.mts")
 	cmd.Dir = root
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("regenerate fixture: %v", err)
+		// CombinedOutput keeps the generator's own message (a missing zod, a sample TS refuses)
+		// beside the exit status; Output() would report only "exit status 1".
+		t.Fatalf("regenerate fixture: %v\n%s", err, out)
 	}
 	want, err := os.ReadFile("testdata/message-blocks-schema.json")
 	if err != nil {

@@ -43,6 +43,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      # The fixture-staleness guard runs the TypeScript generator through tsx, so the workspace has
+      # to be installed; the guard fails, rather than skips, when CI has no tsx.
+      - uses: ./.github/actions/setup-workspace
       # The module's own go directive: the version the binary is built with, not a copy of it.
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
