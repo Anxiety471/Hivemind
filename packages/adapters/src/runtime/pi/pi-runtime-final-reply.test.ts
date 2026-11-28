@@ -185,7 +185,7 @@ describe("final reply decision hook", () => {
         stream(prose("Decision for Joshua: either raise the guard, or exclude the folder.")),
       )
       .mockImplementationOnce(() => stream(askCall()));
-    const judge = vi.fn(async () => true);
+    const judge = vi.fn(async (_reply: string) => true);
 
     const events = await run(request(judge));
 
@@ -202,7 +202,7 @@ describe("final reply decision hook", () => {
     providerState.stream.mockImplementationOnce(() =>
       stream(prose("The snapshot is 310 MB, under the guard.")),
     );
-    const judge = vi.fn(async () => false);
+    const judge = vi.fn(async (_reply: string) => false);
 
     const events = await run(request(judge));
 
@@ -231,7 +231,7 @@ describe("final reply decision hook", () => {
       .mockImplementationOnce(() => stream(prose("Either raise the guard or exclude the folder?")))
       .mockImplementationOnce(() => stream(prose("NO_RESPONSE")))
       .mockImplementationOnce(() => stream(askCall()));
-    const judge = vi.fn(async () => true);
+    const judge = vi.fn(async (_reply: string) => true);
 
     await run(request(undefined));
     await run(request(judge));
@@ -246,7 +246,7 @@ describe("final reply decision hook", () => {
     providerState.stream
       .mockImplementationOnce(() => stream(prose("Decision for Joshua: either A or B?")))
       .mockImplementationOnce(() => stream(prose("Still either A or B, your call.")));
-    const judge = vi.fn(async () => true);
+    const judge = vi.fn(async (_reply: string) => true);
 
     const events = await run(request(judge));
 
