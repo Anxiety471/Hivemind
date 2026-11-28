@@ -189,17 +189,17 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
         const rawArgs = fakeAgentState.invoke.args;
         const args = target.prepareArguments?.(rawArgs) ?? rawArgs;
         const narration = "I will check the destination first.";
-        this.emit({
+        await this.emit({
           type: "message_update",
           assistantMessageEvent: { type: "text_delta", delta: narration },
         });
-        this.emit({
+        await this.emit({
           type: "tool_execution_start",
           toolName: target.name,
           args,
         });
         await target.execute("call-1", args);
-        this.emit({
+        await this.emit({
           type: "turn_end",
           message: {
             role: "assistant",
@@ -215,7 +215,7 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
           },
           toolResults: [{ toolCallId: "call-1", result: { ok: true } }],
         });
-        this.emit({
+        await this.emit({
           type: "turn_end",
           message: { role: "assistant", content: [] },
           toolResults: [],
@@ -223,17 +223,17 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
         if (fakeAgentState.followUpMessages.length > 0 && fakeAgentState.emitFinalAfterFollowUp) {
           const text = "The final answer.";
           if (!fakeAgentState.emitFinalOnCompletedMessage) {
-            this.emit({
+            await this.emit({
               type: "message_update",
               assistantMessageEvent: { type: "text_delta", delta: text },
             });
           }
           const content = fakeAgentState.emitFinalDeltaOnly ? [] : [{ type: "text", text }];
-          this.emit({
+          await this.emit({
             type: "message_end",
             message: { role: "assistant", content },
           });
-          this.emit({
+          await this.emit({
             type: "turn_end",
             message: { role: "assistant", content },
             toolResults: [],
@@ -458,8 +458,9 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
       fakeAgentState.abortCount += 1;
     }
 
-    private emit(event: Record<string, unknown>) {
-      for (const listener of this.listeners) listener(event);
+    // Like pi-agent-core, each listener is awaited before the loop moves on.
+    private async emit(event: Record<string, unknown>) {
+      for (const listener of this.listeners) await listener(event);
     }
   },
 }));
