@@ -58,6 +58,7 @@ vi.mock("react-native", async () => {
       );
     };
   return {
+    ActivityIndicator: element("i"),
     Alert: { alert: vi.fn() },
     Appearance: { getColorScheme: () => "light", addChangeListener: () => ({ remove() {} }) },
     Linking: { openURL: vi.fn().mockResolvedValue(undefined) },
@@ -293,17 +294,13 @@ describe("thread cards", () => {
   );
 
   it.each([
-    [
-      "helper then text",
-      [helper(), text("Ship Flow B")],
-      ["agent-1CompletedCheck the plan", "Ship Flow B"],
-    ],
+    ["helper then text", [helper(), text("Ship Flow B")], ["agent-1Check the plan", "Ship Flow B"]],
     ["text around a child", [text("Before"), child, text("After")], ["Before", "Planner", "After"]],
     ["cloud then text", [cloud, text("Cloud result")], ["Remote taskfinished", "Cloud result"]],
     [
       "two helpers",
       [helper(), helper("agent-2")],
-      ["agent-1CompletedCheck the plan", "agent-2CompletedCheck the plan"],
+      ["agent-1Check the plan", "agent-2Check the plan"],
     ],
   ])("renders %s in block order", (_, blocks, expected) => {
     renderBlocks(blocks as MessageBlock[]);
@@ -378,7 +375,7 @@ describe("thread cards", () => {
   it("keeps contiguous text in the normal bubble and leaves text-only messages unchanged", () => {
     renderBlocks([helper(), text("First"), text("Second")]);
     expect([...container.firstElementChild!.children].map((piece) => piece.textContent)).toEqual([
-      "agent-1CompletedCheck the plan",
+      "agent-1Check the plan",
       "First\nSecond",
     ]);
     renderBlocks([text("First"), text("Second")]);
@@ -613,7 +610,9 @@ describe("thread cards", () => {
       ],
     } as MobileMessage;
     act(() => root.render(<Bubble botId="bot-1" bots={[]} message={message} actionProps={{}} />));
-    expect(container.textContent).toContain("Running");
+    expect(container.querySelector("button[aria-expanded]")?.getAttribute("aria-label")).toContain(
+      "Running",
+    );
   });
 
   it("stops a background helper from its saved card, and shows it as stopped", async () => {
@@ -640,8 +639,9 @@ describe("thread cards", () => {
       ),
     );
     show(helper("card-1", "failed", "stopped"));
-    expect(container.textContent).toContain("Stopped");
-    expect(container.textContent).not.toContain("Failed");
+    expect(container.querySelector("button[aria-expanded]")?.getAttribute("aria-label")).toContain(
+      "Stopped",
+    );
     expect(stopButton()).toBeUndefined();
   });
 
@@ -668,13 +668,13 @@ describe("thread cards", () => {
     );
     const card = () => container.querySelector("button[aria-expanded]");
     expect(container.querySelector("[data-symbol='chevron.down']")).not.toBeNull();
-    expect(container.textContent).toContain("Completed");
+    expect(card()?.getAttribute("aria-label")).toContain("Completed");
     act(() => card()?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
     expect(onLongPress).toHaveBeenCalled();
     const task = () =>
       [...container.querySelectorAll("span")].find((span) => span.textContent === longQuestion);
     expect(card()?.getAttribute("aria-expanded")).toBe("false");
-    expect(task()?.getAttribute("data-number-of-lines")).toBe("1");
+    expect(task()?.getAttribute("data-number-of-lines")).toBe("2");
     expect(container.textContent).not.toContain("A long report");
 
     act(() => (card() as HTMLElement).click());

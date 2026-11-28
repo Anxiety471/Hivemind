@@ -6,7 +6,7 @@ import { cloudAgentHttpsUrl, helperCardState, displayName as safeDisplayName } f
 import { typeScale } from "@rakazo/ui-tokens";
 import { useEffect, useRef, useState } from "react";
 import type { ViewInstance } from "react-native";
-import { Linking, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, Text, View } from "react-native";
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -99,23 +99,41 @@ function HelperMessageCard({
   });
   const running = special.status === "running";
   const helperName = safeDisplayName(special.name, t`subagent`);
-  const { stopped, failed, body } = helperCardState(special);
-  const statusLabel = running
-    ? t`Running`
-    : stopped
-      ? t`Stopped`
-      : special.status === "failed"
-        ? t`Failed`
-        : special.status === "completed"
-          ? t`Completed`
-          : special.status;
-  const statusColor = failed
-    ? tokens.destructive
-    : running
-      ? tokens.warning
-      : stopped
-        ? tokens.mutedForeground
-        : tokens.success;
+  const { status, body } = helperCardState(special);
+  const statusLabel =
+    status === "running"
+      ? t`Running`
+      : status === "stopped"
+        ? t`Stopped`
+        : status === "failed"
+          ? t`Failed`
+          : t`Completed`;
+  // One icon per state, read by the row's accessible label, so the word is not drawn twice.
+  const statusIcon =
+    status === "running" ? (
+      <ActivityIndicator size="small" color={tokens.warning} />
+    ) : status === "failed" ? (
+      <NativeSymbol
+        ios="xmark.circle.fill"
+        android="close-circle"
+        size={18}
+        color={tokens.destructive}
+      />
+    ) : status === "stopped" ? (
+      <NativeSymbol
+        ios="minus.circle.fill"
+        android="remove-circle"
+        size={18}
+        color={tokens.mutedForeground}
+      />
+    ) : (
+      <NativeSymbol
+        ios="checkmark.circle.fill"
+        android="checkmark-circle"
+        size={18}
+        color={tokens.success}
+      />
+    );
   // A saved card names its helper's thread; a live card from this turn has none.
   const openTarget =
     stopHelper && onOpenHelper ? helperThreadTarget(stopHelper.messageId, special) : undefined;
@@ -189,6 +207,11 @@ function HelperMessageCard({
                 gap: 8,
               }}
             >
+              <View
+                style={{ width: 20, height: 20, alignItems: "center", justifyContent: "center" }}
+              >
+                {statusIcon}
+              </View>
               <Text
                 style={{
                   flexShrink: 1,
@@ -199,18 +222,27 @@ function HelperMessageCard({
               >
                 {helperName}
               </Text>
-              <Text style={{ color: statusColor, ...typeScale.caption }}>{statusLabel}</Text>
             </View>
             {special.task ? (
               <Text
-                numberOfLines={subagentOpen ? undefined : 1}
-                style={{ color: tokens.mutedForeground, marginTop: 8, ...typeScale.secondary }}
+                numberOfLines={subagentOpen ? undefined : 2}
+                style={{ color: tokens.mutedForeground, marginTop: 6, ...typeScale.secondary }}
               >
                 {special.task}
               </Text>
             ) : null}
           </View>
         </Pressable>
+        {running && stopHelper && !readOnly ? (
+          <NativeActionButton
+            label={t`Stop`}
+            prominence="secondary"
+            size="compact"
+            busy={stop.pending}
+            style={{ alignSelf: "flex-start", marginTop: 11, marginEnd: 8 }}
+            onPress={() => stop.run(stopHelper)}
+          />
+        ) : null}
         {openTarget ? (
           <Pressable
             onPress={toggleBody}
@@ -242,16 +274,6 @@ function HelperMessageCard({
           </View>
         )}
       </View>
-      {running && stopHelper && !readOnly ? (
-        <NativeActionButton
-          label={t`Stop`}
-          prominence="secondary"
-          size="compact"
-          busy={stop.pending}
-          style={{ marginHorizontal: 16, marginBottom: 14 }}
-          onPress={() => stop.run(stopHelper)}
-        />
-      ) : null}
       {subagentOpen && body ? (
         <View style={{ paddingHorizontal: 16, paddingBottom: 14, marginTop: -6 }}>
           <ChatMarkdown palette={tokens} colorScheme={colorScheme} streaming={running}>
