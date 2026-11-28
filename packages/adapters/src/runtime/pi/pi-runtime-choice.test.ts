@@ -5,6 +5,7 @@ const fakeAgentState = vi.hoisted(() => ({
   options: ["Berlin", "Seoul", "Toronto"] as string[] | undefined,
   recommended: undefined as string | undefined,
   detail: undefined as string | undefined,
+  ticketRef: undefined as string | undefined,
   items: undefined as unknown[] | undefined,
   tools: [] as Array<{
     name: string;
@@ -36,6 +37,7 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
           ? {}
           : { recommended: fakeAgentState.recommended }),
         ...(fakeAgentState.detail === undefined ? {} : { detail: fakeAgentState.detail }),
+        ...(fakeAgentState.ticketRef === undefined ? {} : { ticketRef: fakeAgentState.ticketRef }),
         ...(fakeAgentState.items === undefined ? {} : { items: fakeAgentState.items }),
       };
       const args = askUser.prepareArguments?.(raw) ?? raw;
@@ -110,6 +112,7 @@ describe("Pi choice asks", () => {
     fakeAgentState.recommended = undefined;
     fakeAgentState.detail = undefined;
     fakeAgentState.items = undefined;
+    fakeAgentState.ticketRef = undefined;
   });
 
   it("emits a tappable ask and stops without a finished-work fallback", async () => {
@@ -185,6 +188,35 @@ describe("Pi choice asks", () => {
         // exhaust generator
       }
     }).rejects.toThrow("ask_user recommended option must match one of the provided options");
+  });
+
+  describe("single ask ticket ref", () => {
+    it("forwards a trimmed ticketRef on the single ask event", async () => {
+      fakeAgentState.ticketRef = "  OPS-12 ";
+      const runtime = new PiAgentRuntime();
+      const events: AgentRuntimeEvent[] = [];
+
+      for await (const event of runtime.run(runRequest, runContext)) events.push(event);
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "ask",
+          text: "Which city should I use?",
+          ticketRef: "OPS-12",
+        }),
+      );
+    });
+
+    it("omits ticketRef when the call names no ticket", async () => {
+      const runtime = new PiAgentRuntime();
+      const events: AgentRuntimeEvent[] = [];
+
+      for await (const event of runtime.run(runRequest, runContext)) events.push(event);
+
+      const ask = events.find((event) => event.type === "ask");
+      expect(ask).toBeDefined();
+      expect(ask).not.toHaveProperty("ticketRef");
+    });
   });
 
   describe("batch triage items", () => {

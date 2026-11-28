@@ -5,6 +5,7 @@ import {
   normalizeIssueUrl,
   normalizePullRequestUrl,
   pullRequestMergeFinishesTicket,
+  ticketRef,
 } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import {
@@ -20,6 +21,8 @@ import type { TicketChangeNotifier } from "./ticket-changes.js";
 
 type Deps = { prisma: PrismaClient; onTicketChange?: TicketChangeNotifier };
 type TicketRow = Awaited<ReturnType<PrismaClient["ticket"]["update"]>>;
+/** A ticket a link change updated; `settled` when the change finished it. */
+type LinkedTicketChange = { row: TicketRow; settled?: { ticketRef: string; answer: string } };
 
 /**
  * Records a pull request's new state on every ticket in the Space that links it. A merge that
@@ -40,7 +43,7 @@ export async function recordTicketPullRequestState(
       !isTicketCompletedStatus(coerceTicketStatus(row.status)) &&
       pullRequestMergeFinishesTicket(current, next);
     const pendingDecision = hasPendingTicketDecision({ decision: readTicketDecision(row) });
-    return tx.ticket.update({
+    const updated = await tx.ticket.update({
       where: { id: row.id },
       data: {
         pullRequests: next,
@@ -55,6 +58,13 @@ export async function recordTicketPullRequestState(
           : {}),
       },
     });
+    if (!finishes) return { row: updated };
+    const board = await tx.board.findUniqueOrThrow({
+      where: { id: row.boardId },
+      select: { ticketPrefix: true },
+    });
+    const ref = ticketRef(board.ticketPrefix, row.number);
+    return { row: updated, settled: { ticketRef: ref, answer: `Resolved on ${ref}` } };
   });
 }
 
@@ -71,12 +81,13 @@ export async function recordTicketIssueState(
   return recordLinkState(deps, input.spaceId, url, "issues", async (tx, row) => {
     const current = readStoredTicketIssues(row);
     if (!current.some((item) => item.url === url && item.state !== input.state)) return null;
-    return tx.ticket.update({
+    const updated = await tx.ticket.update({
       where: { id: row.id },
       data: {
         issues: current.map((item) => (item.url === url ? { url, state: input.state } : item)),
       },
     });
+    return { row: updated };
   });
 }
 
@@ -86,7 +97,7 @@ async function recordLinkState(
   spaceId: string,
   url: string,
   column: "pullRequests" | "issues",
-  change: (tx: Prisma.TransactionClient, row: TicketRow) => Promise<TicketRow | null>,
+  change: (tx: Prisma.TransactionClient, row: TicketRow) => Promise<LinkedTicketChange | null>,
 ): Promise<number> {
   const changed = await deps.prisma.$transaction(async (tx) => {
     const linked = JSON.stringify([{ url }]);
@@ -98,7 +109,7 @@ async function recordLinkState(
     const rows = await tx.ticket.findMany({
       where: { id: { in: locked.map((row) => row.id) }, spaceId },
     });
-    const updated: TicketRow[] = [];
+    const updated: LinkedTicketChange[] = [];
     for (const row of rows) {
       try {
         const next = await change(tx, row);
@@ -110,7 +121,7 @@ async function recordLinkState(
     }
     return updated;
   });
-  for (const row of changed) {
+  for (const { row, settled } of changed) {
     await deps.onTicketChange?.({
       spaceId: row.spaceId,
       boardId: row.boardId,
@@ -118,6 +129,7 @@ async function recordLinkState(
       assigneeBotId: row.assigneeBotId,
       wakeAssignee: false,
       wakeBotIds: [],
+      ...(settled ? { settledChatQuestion: settled } : {}),
     });
   }
   return changed.length;

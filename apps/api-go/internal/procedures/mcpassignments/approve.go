@@ -14,8 +14,6 @@ package mcpassignments
 import (
 	"context"
 	"errors"
-	"fmt"
-	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"log/slog"
 	"slices"
 	"time"
@@ -345,7 +343,7 @@ func rewriteCards(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, a
 			if !ok || !changed {
 				continue
 			}
-			if err := writeBlocks(ctx, tx, ring, message.id, thread.id, stored); err != nil {
+			if err := messageblocks.Write(ctx, tx, ring, message.id, thread.id, stored); err != nil {
 				return result, err
 			}
 			result.flipped++
@@ -369,29 +367,6 @@ func rewriteCards(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, a
 		}
 	}
 	return result, nil
-}
-
-// writeBlocks stores a rewritten blocks list the way the Prisma write hook does: sealed with the
-// message's Space key, with its blind-index tokens, or plaintext with those tokens dropped.
-func writeBlocks(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, messageID, threadID string, blocks []any) error {
-	sealed, err := ring.SealRow(ctx, "Message", map[string]any{
-		"id": messageID, "threadId": threadID, "blocks": blocks,
-	})
-	if err != nil {
-		return err
-	}
-	body, err := wtf8.Marshal(sealed["blocks"])
-	if err != nil {
-		return fmt.Errorf("store message blocks: %w", err)
-	}
-	if ring.EncryptWrites {
-		args := append(append(db.Data(db.JSONText(string(body))), messageID), db.Data(sealed["searchTokens"])...)
-		_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`, args...)
-		return err
-	}
-	_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = '{}' WHERE id = $2`,
-		append(db.Data(db.JSONText(string(body))), messageID)...)
-	return err
 }
 
 // cardState is what one message's blocks say about one server's approval cards.

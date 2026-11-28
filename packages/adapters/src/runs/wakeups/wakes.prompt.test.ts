@@ -10,7 +10,7 @@ import {
 describe("wake prompts", () => {
   it("renders each wake as the bot reads it", () => {
     expect(ticketWakePrompt("OPS-7")).toMatchInlineSnapshot(
-      `"Work on ticket OPS-7. Read it with ticket_get. Keep progress in ticket comments and update its status with ticket_update. When user input is needed, set status to blocked (or review), tag @user, and include decision with a short question, 3 concise options, and 1 recommended option (or use ask_user with 3 options + recommended in chat)."`,
+      `"Work on ticket OPS-7. Read it with ticket_get. Keep progress in ticket comments and update its status with ticket_update. When user input is needed, set status to blocked (or review), tag @user, and include decision with a short question, 3 concise options, and 1 recommended option."`,
     );
     expect(purchaseWakePrompt("purchase-1", "approved")).toMatchInlineSnapshot(
       `"Purchase purchase-1 is approved. Use purchase_status to continue."`,

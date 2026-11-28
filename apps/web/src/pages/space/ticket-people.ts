@@ -1,5 +1,5 @@
-import type { Bot, Ticket, TicketComment, TicketDecision } from "@rakazo/contracts";
-import { hasPendingTicketDecision, TICKET_DECISION_OPTION_MAX_LENGTH } from "@rakazo/contracts";
+import type { Bot, Ticket } from "@rakazo/contracts";
+import { hasPendingTicketDecision } from "@rakazo/contracts";
 
 export const OWNER_ME_VALUE = "user:me";
 
@@ -67,113 +67,6 @@ export function sameIdList(a: readonly string[], b: readonly string[]): boolean 
 
 const USER_MENTION_PRONOUN_RE =
   /(?:^|[^\w])@(?:user|me|owner|you)(?=$|[^\w])|\b(?:blocked|waiting)\s+on\s+@?(?:user|me|owner|you)\b|\b(?:needs|awaiting)\s+(?:@?(?:user|me|owner|you)|authorization|approval|direction|decision)\b|\b(?:choose|decide)\s+(?:keep|whether)\b/i;
-
-function truncateDecisionOption(text: string): string {
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= TICKET_DECISION_OPTION_MAX_LENGTH) return cleaned;
-  return `${cleaned.slice(0, TICKET_DECISION_OPTION_MAX_LENGTH - 1)}…`;
-}
-
-function extractInlineOptions(text: string): string[] | null {
-  const letteredMatches = [
-    ...text.matchAll(
-      /(?:^|[\s:;,.(])\(?([a-c1-3])\)\s+([^;\n]+?)(?=(?:\s*;|\n|\s+\(?[a-c1-3]\)|$))/gi,
-    ),
-  ];
-  const labels: string[] = [];
-  const seen = new Set<string>();
-  for (const match of letteredMatches) {
-    const marker = (match[1] ?? "").toLowerCase();
-    const expectedIndex = labels.length;
-    const expectedLetters = ["a", "b", "c"];
-    const expectedNumbers = ["1", "2", "3"];
-    if (marker !== expectedLetters[expectedIndex] && marker !== expectedNumbers[expectedIndex]) {
-      continue;
-    }
-    const label = truncateDecisionOption((match[2] ?? "").replace(/[.;,\s]+$/, ""));
-    if (!label || label.length < 4 || seen.has(label.toLowerCase())) continue;
-    seen.add(label.toLowerCase());
-    labels.push(label);
-    if (labels.length === 3) break;
-  }
-  if (labels.length < 2) return null;
-  if (labels.length === 2) labels.push("Hold and review before changing");
-  return labels;
-}
-
-/**
- * Provides a 3-choice (+ 1 recommended) decision for open blocked/review tickets awaiting user input
- * when a structured decision has not yet been written to the database by the worker bot.
- */
-export function deriveTicketDecision(
-  ticket: Ticket,
-  comments?: readonly TicketComment[],
-): TicketDecision | undefined {
-  if (hasPendingTicketDecision(ticket)) return ticket.decision;
-  if (ticket.decision?.answer) return undefined;
-  if (ticket.status !== "blocked" && ticket.status !== "review") return undefined;
-  if ((ticket.waitingOnBotIds?.length ?? 0) > 0 && !ticketMentionsMe(ticket)) return undefined;
-
-  const latestComment = comments && comments.length > 0 ? comments[comments.length - 1]?.body : "";
-  const combinedText = [ticket.title, ticket.description ?? "", latestComment ?? ""].join("\n");
-
-  const extracted = extractInlineOptions(combinedText);
-  if (extracted) {
-    return {
-      question: ticket.title,
-      options: extracted.map((label, index) => ({
-        id: `fallback-${index + 1}`,
-        label,
-        ...(index === 0 ? { recommended: true } : {}),
-      })),
-    };
-  }
-
-  if (/\bkeep\b.*\bor\s+delete\b|\boverage\b/i.test(combinedText)) {
-    return {
-      question: "How should we handle the preserved archive and storage overage?",
-      options: [
-        { id: "fallback-1", label: "Keep preserved archive (accept overage)", recommended: true },
-        { id: "fallback-2", label: "Delete preserved archive copy now" },
-        { id: "fallback-3", label: "Verify latest archive restore first, then delete" },
-      ],
-    };
-  }
-
-  if (
-    ticket.status === "blocked" &&
-    /\b(?:fix|patch|apply|reword|exclude|guard|retention|KEEP=)\b/i.test(combinedText)
-  ) {
-    return {
-      question: ticket.title,
-      options: [
-        { id: "fallback-1", label: "Approve and apply the proposed change", recommended: true },
-        { id: "fallback-2", label: "Hold — keep blocked without changes for now" },
-        { id: "fallback-3", label: "Close task without applying" },
-      ],
-    };
-  }
-
-  if (ticket.status === "review") {
-    return {
-      question: ticket.title,
-      options: [
-        { id: "fallback-1", label: "Approve and mark done", recommended: true },
-        { id: "fallback-2", label: "Request changes and move back to To do" },
-        { id: "fallback-3", label: "Keep in review for now" },
-      ],
-    };
-  }
-
-  return {
-    question: ticket.title,
-    options: [
-      { id: "fallback-1", label: "Approve and proceed", recommended: true },
-      { id: "fallback-2", label: "Hold — keep blocked for now" },
-      { id: "fallback-3", label: "Close as won't do" },
-    ],
-  };
-}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -1,5 +1,4 @@
 import type {
-  TicketDecision,
   TicketDecisionInput,
   TicketIssueInput,
   TicketPullRequestInput,
@@ -16,6 +15,7 @@ import {
   pullRequestMergeFinishesTicket,
   TicketDecisionSchema,
   TicketStatusSchema,
+  ticketRef,
   UpdateTicketInput,
 } from "@rakazo/contracts";
 import { sliceWellFormed } from "@rakazo/core";
@@ -30,6 +30,7 @@ import {
   readStoredTicketIssues,
   readStoredTicketPullRequests,
   readTicketDecision,
+  toDecisionJsonInput,
   toTicketCommentDto,
   toTicketDto,
 } from "@rakazo/db";
@@ -498,19 +499,6 @@ export async function getTicket(deps: TicketToolDeps, input: { spaceId: string; 
   };
 }
 
-function toDecisionJsonInput(decision: TicketDecision): Prisma.InputJsonObject {
-  return {
-    question: decision.question,
-    options: decision.options.map((option) => ({
-      id: option.id,
-      label: option.label,
-      ...(option.recommended ? { recommended: true } : {}),
-    })),
-    ...(decision.answer ? { answer: decision.answer } : {}),
-    ...(decision.answeredAt ? { answeredAt: decision.answeredAt } : {}),
-  };
-}
-
 export async function createTicket(
   deps: TicketToolDeps,
   input: {
@@ -797,8 +785,15 @@ export async function updateTicket(
     const addedWorkers = nextWorkers
       ? nextWorkers.filter((id) => !prevWorkers.has(id) && id !== input.botId)
       : [];
-    const statusChanged = data.status !== undefined && data.status !== current.status;
-    return { row, addedWorkers, statusChanged };
+    // A merge that finishes the ticket counts as its status change, as the write itself would.
+    const statusChanged = status !== undefined && status !== current.status;
+    return {
+      row,
+      addedWorkers,
+      statusChanged,
+      status,
+      decisionCleared: shouldClearPendingDecision,
+    };
   });
   if (!result) return { error: "Ticket not found." };
   // Moving a ticket to todo, doing or review asks its workers to pick it up, except the bot that
@@ -818,6 +813,21 @@ export async function updateTicket(
       : mentionedBots.length > 0
         ? "You were mentioned on this ticket — read it with ticket_get and address what is needed from you."
         : undefined;
+  // A chat question about the ticket stops waiting once it is closed or its decision is cleared.
+  const ref = ticketRef(board.ticketPrefix, result.row.number);
+  const completedNow =
+    result.statusChanged && result.status !== undefined && isTicketCompletedStatus(result.status);
+  const settledChatQuestion =
+    completedNow || result.decisionCleared || data.decision === null
+      ? {
+          ticketRef: ref,
+          answer: completedNow
+            ? result.status === "closed"
+              ? `Closed ${ref}`
+              : `Marked ${ref} done`
+            : `Resolved on ${ref}`,
+        }
+      : undefined;
   await deps.onTicketChange?.({
     spaceId: input.spaceId,
     boardId: board.id,
@@ -826,6 +836,7 @@ export async function updateTicket(
     wakeAssignee: wakeBotIds.length > 0,
     wakeBotIds,
     ...(wakeNote ? { wakeNote } : {}),
+    ...(settledChatQuestion ? { settledChatQuestion } : {}),
   });
   return { ticket: toTicketDto(result.row, board.ticketPrefix) };
 }
@@ -975,6 +986,10 @@ export async function decideTicket(
     wakeAssignee: wakeBotIds.length > 0,
     wakeBotIds,
     ...(wakeBotIds.length > 0 ? { wakeNote: `User answered decision: ${excerpt}` } : {}),
+    settledChatQuestion: {
+      ticketRef: ticketRef(board.ticketPrefix, outcome.updatedTicket.number),
+      answer: outcome.answerText,
+    },
   });
   return {
     ticket: toTicketDto(outcome.updatedTicket, board.ticketPrefix),

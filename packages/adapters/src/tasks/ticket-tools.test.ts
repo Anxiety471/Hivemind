@@ -723,4 +723,90 @@ describe("ticket mutations", () => {
       expect(custom.comment.body).toBe("> Which region?\n\nOther: Use Tokyo instead");
     }
   });
+  it("settles the chat question about a decided ticket with the answer it was given", async () => {
+    const s = mutationDeps();
+    s.tx.ticket.findFirst.mockResolvedValue(
+      ticket({
+        status: "blocked",
+        decision: {
+          question: "Which region?",
+          options: [
+            { id: "sg", label: "Singapore", recommended: true },
+            { id: "us", label: "Virginia" },
+            { id: "eu", label: "Frankfurt" },
+          ],
+        },
+      }),
+    );
+
+    await decideTicket(s.deps, { spaceId: "ws", userId: "user-1", ticketId: "t1", optionId: "sg" });
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        settledChatQuestion: { ticketRef: "RAK-1", answer: "Singapore" },
+      }),
+    );
+  });
+
+  it("settles the chat question when a ticket is closed, marked done, or its decision is cleared", async () => {
+    const s = mutationDeps();
+    s.tx.ticket.findFirst.mockResolvedValue(ticket({ status: "doing" }));
+
+    await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      id: "t1",
+      status: "closed",
+    });
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        settledChatQuestion: { ticketRef: "RAK-1", answer: "Closed RAK-1" },
+      }),
+    );
+
+    await updateTicket(s.deps, { spaceId: "ws", userId: "user-1", id: "t1", status: "done" });
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        settledChatQuestion: { ticketRef: "RAK-1", answer: "Marked RAK-1 done" },
+      }),
+    );
+
+    await updateTicket(s.deps, { spaceId: "ws", userId: "user-1", id: "t1", decision: null });
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        settledChatQuestion: { ticketRef: "RAK-1", answer: "Resolved on RAK-1" },
+      }),
+    );
+  });
+
+  it("leaves chat questions alone when a ticket moves without settling anything", async () => {
+    const s = mutationDeps();
+    s.tx.ticket.findFirst.mockResolvedValue(ticket({ status: "todo" }));
+
+    await updateTicket(s.deps, { spaceId: "ws", userId: "user-1", id: "t1", status: "doing" });
+
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ settledChatQuestion: expect.anything() }),
+    );
+  });
+  it("settles the chat question when a merge finishes the ticket, even without a stored decision", async () => {
+    const s = mutationDeps();
+    const url = "https://github.com/acme/app/pull/12";
+    s.tx.ticket.findFirst.mockResolvedValue(
+      ticket({ status: "doing", decision: null, pullRequests: [{ url, state: "open" }] }),
+    );
+
+    const result = await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      id: "t1",
+      pullRequests: [{ url, state: "merged" }],
+    });
+
+    expect("ticket" in result && result.ticket?.status).toBe("done");
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        settledChatQuestion: { ticketRef: "RAK-1", answer: "Marked RAK-1 done" },
+      }),
+    );
+  });
 });

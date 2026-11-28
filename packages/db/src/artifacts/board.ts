@@ -121,6 +121,20 @@ function coerceTicketPriority(value: string | null | undefined): TicketPriority 
   return parsed.success ? parsed.data : "normal";
 }
 
+/** A decision as its JSON column stores it. */
+export function toDecisionJsonInput(decision: TicketDecision): Prisma.InputJsonObject {
+  return {
+    question: decision.question,
+    options: decision.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      ...(option.recommended ? { recommended: true } : {}),
+    })),
+    ...(decision.answer ? { answer: decision.answer } : {}),
+    ...(decision.answeredAt ? { answeredAt: decision.answeredAt } : {}),
+  };
+}
+
 export function readTicketDecision(row: Pick<TicketRow, "id" | "decision">): TicketDecision | null {
   if (row.decision == null) return null;
   return readJsonColumn(

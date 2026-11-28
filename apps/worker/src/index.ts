@@ -206,6 +206,7 @@ async function main() {
   );
   const ticketChanges = createTicketChangeNotifier({
     boardEvents,
+    realtime,
     jobs,
     prisma,
     deploymentLabs: env.deploymentLabs,

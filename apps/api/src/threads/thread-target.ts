@@ -26,7 +26,7 @@ import {
   runReadsThreadHistory,
 } from "@rakazo/core";
 import { deriveMessageQuote, messageReplyPreview } from "@rakazo/core/message-quote";
-import type { Prisma, PrismaClient, ThreadEvents } from "@rakazo/db";
+import type { Prisma, PrismaClient, ThreadEvents, TicketChatAnswer } from "@rakazo/db";
 import {
   answerWaitingRunWithTextInTransaction,
   appendEventInTransaction,
@@ -47,7 +47,7 @@ import {
   touchGroupUpdatedAt,
   withTransactionRetry,
 } from "@rakazo/db";
-import { getLogger } from "@rakazo/logging";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import {
   buildSendPrompt,
   buildUserMessageBlocks,
@@ -530,8 +530,11 @@ export async function sendThreadMessage(
     throw new ORPCError("BAD_REQUEST", { message: "replyQuote requires replyToMessageId." });
   }
 
+  // Board tickets the reply's answered asks settle; resolved once the send commits.
+  let answeredTicketAnswers: TicketChatAnswer[] = [];
   const commit = () =>
     deps.prisma.$transaction(async (tx) => {
+      answeredTicketAnswers = [];
       // A Space being deleted takes no new turns; its lock comes before the group and thread rows.
       if (!(await spaceTakesWork(tx, actor.spaceId))) throw new SpaceDeletionInProgressError();
       const author = await loadMessageAuthor(tx, actor.userId);
@@ -692,19 +695,20 @@ export async function sendThreadMessage(
           (run) => !stopping && run.status === "waiting_input" && run.userId === actor.userId,
         )) {
           if (targetedRunId && run.id !== targetedRunId) continue;
-          if (
-            await answerWaitingRunWithTextInTransaction(tx, {
-              ...composerAnswerInput(message),
-              runId: run.id,
-            })
-          )
+          const settled = await answerWaitingRunWithTextInTransaction(tx, {
+            ...composerAnswerInput(message),
+            runId: run.id,
+          });
+          if (settled) {
             answered.push({ ...run, status: "queued" });
-          else
+            answeredTicketAnswers.push(...settled.ticketAnswers);
+          } else {
             await retireWaitingQuestionInTransaction(tx, {
               ...composerAnswerInput(message),
               botId: target.botId,
               runId: run.id,
             });
+          }
         }
         if (answered.length) {
           const primary = answered[0];
@@ -976,6 +980,7 @@ export async function sendThreadMessage(
             runId: run.id,
           });
           if (answered) {
+            answeredTicketAnswers.push(...answered.ticketAnswers);
             const queuedForBot = answeredByBotId.get(run.botId) ?? [];
             queuedForBot.push({ ...run, status: "queued" });
             answeredByBotId.set(run.botId, queuedForBot);
@@ -1122,6 +1127,15 @@ export async function sendThreadMessage(
     throw error;
   });
   if ("replay" in committed) return committed.replay;
+  if (answeredTicketAnswers.length)
+    await bestEffort(
+      "resolve ticket decisions from chat",
+      deps.events.resolveTicketAnswers({
+        spaceId: actor.spaceId,
+        answeredByUserId: actor.userId,
+        answers: answeredTicketAnswers,
+      }),
+    );
   deps.analytics?.capture(
     actor.userId,
     { name: "message_sent", trigger: "user" },

@@ -15,7 +15,6 @@ import {
   normalizeOneTimeCode,
 } from "@rakazo/contracts";
 import {
-  ACTIVE_RUN_STATUSES,
   BACKGROUND_HELPER_TRIGGER,
   callIdFromClientNonce,
   instructionUpdateDiff,
@@ -29,6 +28,7 @@ import {
 } from "@rakazo/core";
 import { urlSite } from "@rakazo/core/egress";
 import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
+import { bestEffort } from "@rakazo/logging";
 import { recordSecurityEvent } from "../account/security-events.js";
 import { saveApprovalRule, storedBatchActions } from "../bots/approval-settings.js";
 import { expireComputerExecutionLeases } from "../computers/computers.js";
@@ -37,8 +37,6 @@ import { JsonObject, readJsonColumn } from "../database/json-column.js";
 import { THREAD_LOCK_TRANSACTION_OPTIONS } from "../database/transaction-retry.js";
 import { contentEncryptionOf } from "../encryption/content-encryption.js";
 import { startedHelpersWhere } from "../runs/cancel-runs.js";
-import { deleteRunSecretsInTransaction } from "../runs/run-secrets.js";
-import { RUN_TURN_CHECKPOINT_KIND } from "../runs/run-turn-checkpoint.js";
 import { publishSpaceChange } from "../spaces/space-changes.js";
 import { notifyCommittedEvent, notifyRealtime } from "./event-stream.js";
 import type { FinalizeRunResult } from "./events.js";
@@ -46,6 +44,11 @@ import { appendEventInTransaction, transientRunEventsWhere } from "./events.js";
 import { readMessageBlocks } from "./message-blocks.js";
 import { createThreadMessageInTransaction, loadMessageAuthor } from "./messages.js";
 import { createPendingSteeringRun, releaseUnreadHandovers } from "./thread-steering.js";
+import type { TicketChatAnswer } from "./ticket-chat-answers.js";
+import {
+  cancelWaitingRunWithAnswersInTransaction,
+  resolveTicketDecisionsFromChatAnswer,
+} from "./ticket-chat-answers.js";
 
 export const STRATEGIC_INITIATIVE_NONCE_PREFIX = "strategic-initiative";
 
@@ -131,13 +134,15 @@ function resolveBatchAnswer(
   items: readonly AskItem[],
   answers: Record<string, string>,
   checkpoint: string | null | undefined,
-): { items: AskItem[]; lines: string[] } | null {
+): { items: AskItem[]; lines: string[]; labels: Map<string, string> } | null {
   const actionableIds = new Set(
     items.filter((item) => item.actions?.length).map((item) => item.id),
   );
   if (Object.keys(answers).some((id) => !actionableIds.has(id))) return null;
   const resolved: AskItem[] = [];
   const lines: string[] = [];
+  // Each actionable item's answer as the user meant it: the choice's label, or the custom text.
+  const labels = new Map<string, string>();
   for (const item of items) {
     if (!item.actions?.length) {
       resolved.push(item);
@@ -146,16 +151,12 @@ function resolveBatchAnswer(
     const raw = answers[item.id];
     if (raw === undefined) return null;
     const choice = resolveAskChoice(raw, item.actions);
+    const label = choice ? resumeBatchChoiceLabel(item.id, choice, checkpoint) : raw;
+    labels.set(item.id, label);
     resolved.push({ ...item, answer: choice ? choice.id : raw });
-    lines.push(
-      `- ${item.question}: ${
-        choice
-          ? `Selected choice ${choice.id}: ${resumeBatchChoiceLabel(item.id, choice, checkpoint)}`
-          : raw
-      }`,
-    );
+    lines.push(`- ${item.question}: ${choice ? `Selected choice ${choice.id}: ${label}` : raw}`);
   }
-  return { items: resolved, lines };
+  return { items: resolved, lines, labels };
 }
 
 function resumeChoiceLabel(
@@ -274,6 +275,7 @@ async function commitAnswerRunInput(
 ): Promise<{
   threadId: string;
   seq: number;
+  ticketAnswers: TicketChatAnswer[];
   approval?: { decision: string; effectKind: string };
 } | null> {
   // Thread row first, then run rows — the same order as clearThread and finalizeRun, so a
@@ -435,6 +437,22 @@ async function commitAnswerRunInput(
       : (selectedChoice?.id ?? approvalAnswer);
   const callId = callIdFromClientNonce(input.clientNonce);
   const recordsCallUtterance = Boolean(callId && !secretAsk);
+  const resumeLabel = selectedChoice
+    ? resumeChoiceLabel(selectedChoice, run.checkpoint)
+    : undefined;
+  // Board tickets this answer settles, resolved after the commit. Secret and approval cards never do.
+  const ticketAnswers: TicketChatAnswer[] = [];
+  if (!approvalAsk && !secretAsk) {
+    if (batch && pendingAsk.items) {
+      for (const item of pendingAsk.items) {
+        const answer = batch.labels.get(item.id);
+        if (item.ticketRef && answer) ticketAnswers.push({ ticketRef: item.ticketRef, answer });
+      }
+    } else if (pendingAsk.ticketRef) {
+      const answer = (resumeLabel ?? input.answer).trim();
+      if (answer) ticketAnswers.push({ ticketRef: pendingAsk.ticketRef, answer });
+    }
+  }
 
   // Give spoken answers the same durable, call-scoped user utterance as other voice turns.
   // Secret asks stay out of message history; the call UI requires those answers on screen.
@@ -553,9 +571,6 @@ async function commitAnswerRunInput(
     });
     if (task.count !== 1) throw new Error("Run task was not available to answer");
   } else {
-    const resumeLabel = selectedChoice
-      ? resumeChoiceLabel(selectedChoice, run.checkpoint)
-      : undefined;
     const task = await tx.task.updateMany({
       where: { runs: { some: { id: input.runId } } },
       data: {
@@ -605,6 +620,7 @@ async function commitAnswerRunInput(
   return {
     threadId: updated.threadId,
     seq: updated.seq,
+    ticketAnswers,
     ...(approvalEffect
       ? { approval: { decision: approvalAnswer, effectKind: approvalEffect.kind } }
       : {}),
@@ -631,6 +647,19 @@ export async function answerRunInput(
       : await commit();
 
   if (!committed) return false;
+  if (committed.ticketAnswers.length)
+    await bestEffort(
+      "resolve ticket decisions from chat",
+      resolveTicketDecisionsFromChatAnswer(
+        prisma,
+        {
+          spaceId: input.spaceId,
+          answeredByUserId: input.answeredByUserId,
+          answers: committed.ticketAnswers,
+        },
+        realtime,
+      ),
+    );
   if (committed.approval) {
     await recordSecurityEvent({
       type: "approval.decided",
@@ -693,7 +722,7 @@ export async function retireWaitingQuestionInTransaction(
       questions.push({
         id: message.id,
         blocks: parsed.data.map((block) =>
-          pending.includes(block)
+          block.kind === "ask" && pending.includes(block)
             ? {
                 ...block,
                 status: "answered" as const,
@@ -706,43 +735,16 @@ export async function retireWaitingQuestionInTransaction(
     }
   }
   if (!questions.length) return false;
-  const now = new Date();
-  const retired = await tx.run.updateMany({
-    where,
-    data: {
-      status: "cancelled",
-      completedAt: now,
-      checkpoint: null,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-    },
+  const cancelled = await cancelWaitingRunWithAnswersInTransaction(tx, {
+    spaceId: input.spaceId,
+    threadId: input.threadId,
+    botId: input.botId,
+    runId: input.runId,
+    userId: run.userId,
+    taskId: run.taskId,
+    questions,
   });
-  if (retired.count !== 1) return false;
-  await tx.externalEffect.deleteMany({
-    where: { runId: input.runId, kind: RUN_TURN_CHECKPOINT_KIND, status: RUN_TURN_CHECKPOINT_KIND },
-  });
-  await deleteRunSecretsInTransaction(tx, [
-    { id: input.runId, userId: run.userId, spaceId: input.spaceId },
-  ]);
-  await tx.attempt.updateMany({
-    where: { runId: input.runId, status: "waiting_input" },
-    data: { status: "cancelled", finishedAt: now },
-  });
-  await tx.task.updateMany({
-    where: { id: run.taskId, runs: { none: { status: { in: [...ACTIVE_RUN_STATUSES] } } } },
-    data: { status: "cancelled" },
-  });
-  for (const question of questions) {
-    await tx.message.update({ where: { id: question.id }, data: { blocks: question.blocks } });
-    await appendEventInTransaction(tx, {
-      ...input,
-      type: "thread.message.updated",
-      allowCancelledRun: true,
-      payload: { messageId: question.id, role: "bot", blocks: question.blocks },
-    });
-  }
-  await appendEventInTransaction(tx, { ...input, type: "run.cancelled", payload: {} });
-  return true;
+  return cancelled !== null;
 }
 
 /** Read-only eligibility shared by image admission and composer free-text answers. */
@@ -795,11 +797,14 @@ export async function eligibleWaitingTextAnswer(
   return found.messageId;
 }
 
-/** Commit only answers that pass the same read-only composer eligibility check. */
+/**
+ * Commit only answers that pass the same read-only composer eligibility check. The board tickets
+ * the answer settles are returned for the caller to resolve once its transaction commits.
+ */
 export async function answerWaitingRunWithTextInTransaction(
   tx: Prisma.TransactionClient,
   input: Parameters<typeof eligibleWaitingTextAnswer>[1],
-): Promise<{ threadId: string; seq: number } | null> {
+): Promise<{ threadId: string; seq: number; ticketAnswers: TicketChatAnswer[] } | null> {
   const messageId = await eligibleWaitingTextAnswer(tx, input);
   return messageId
     ? commitAnswerRunInput(tx, { ...input, messageId, answer: input.answer.trim() })

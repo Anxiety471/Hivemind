@@ -121,7 +121,7 @@ type QueueStore interface {
 // A note, when there is one, says what changed since the bot last looked.
 func TicketWakePrompt(ref, note string) string {
 	prompt := fmt.Sprintf(
-		"Work on ticket %s. Read it with ticket_get. Keep progress in ticket comments and update its status with ticket_update. When user input is needed, set status to blocked (or review), tag @user, and include decision with a short question, 3 concise options, and 1 recommended option (or use ask_user with 3 options + recommended in chat).",
+		"Work on ticket %s. Read it with ticket_get. Keep progress in ticket comments and update its status with ticket_update. When user input is needed, set status to blocked (or review), tag @user, and include decision with a short question, 3 concise options, and 1 recommended option.",
 		ref,
 	)
 	if note != "" {

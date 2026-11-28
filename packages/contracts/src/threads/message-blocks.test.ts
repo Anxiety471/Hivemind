@@ -12,6 +12,17 @@ describe("ask blocks with batch items", () => {
     expect(MessageBlock.parse(block)).toEqual(block);
   });
 
+  it("keeps the board ticket a single question is about", () => {
+    const block = {
+      kind: "ask",
+      text: "Ship TASK-7?",
+      status: "pending",
+      ticketRef: "TASK-7",
+      actions: [{ id: "choice-1", label: "Ship" }],
+    };
+    expect(MessageBlock.parse(block)).toEqual(block);
+  });
+
   it("accepts actionable and FYI items on one ask", () => {
     const block = {
       kind: "ask",

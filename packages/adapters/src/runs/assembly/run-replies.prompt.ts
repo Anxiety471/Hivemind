@@ -8,11 +8,11 @@ import { messageUserMaxLength } from "../lifecycle/user-progress.js";
 import { NO_RESPONSE } from "./silent-reply.js";
 
 export function longWorkProgressGuidance(maxLength = messageUserMaxLength()): string {
-  return `Send brief 1–2 sentence progress updates with message_user only for multi-minute tasks (right away when starting long browser/desktop work), never for quick replies or routine steps. message_user is capped at ${maxLength} characters; put the complete final answer in your normal reply. Any decision you need from the user, including "either A or B" or one addressed to the owner by name, goes to ask_user with recommended (2 to 4 options), never a plain-text option list. Verify ticket, PR, or service state with a tool or current <tickets_referenced> before claiming it or updating a ticket; never guess from older chat.`;
+  return `Send brief 1–2 sentence progress updates with message_user only for multi-minute tasks (right away when starting long browser/desktop work), never for quick replies or routine steps. message_user is capped at ${maxLength} characters; put the complete final answer in your normal reply. Any decision you need from the user, including "either A or B" or one addressed to the owner by name, goes to ask_user with recommended (2 to 4 options), never a plain-text option list. Verify ticket, PR, or service state with a tool or current <tickets_referenced> before claiming it or updating a ticket; never guess from older chat. Never ask a ticket's decision again via ask_user; pass a ticket's ticketRef when asking about it.`;
 }
 
 export function messagesModeReplyGuidance(maxLength = messageUserMaxLength()): string {
-  return `Text you write while working is private and never shown to the person. To tell them anything before your final answer, such as what you are starting on or something important you found, call message_user with one or two short sentences (at most ${maxLength} characters). A decision you need from them goes to ask_user with recommended instead. Your final answer, the text you write after your last tool call, is shown. Put the complete answer there, never in message_user.`;
+  return `Text you write while working is private and never shown to the person. To tell them anything before your final answer, such as what you are starting on or something important you found, call message_user with one or two short sentences (at most ${maxLength} characters). A decision you need from them goes to ask_user with recommended instead; never re-ask a ticket's decision; pass its ticketRef. Your final answer, the text you write after your last tool call, is shown. Put the complete answer there, never in message_user.`;
 }
 
 export const ROUTINE_SILENT_REPLY_GUIDANCE = `If this routine's prompt says to stay silent when there is nothing to report, the entire final assistant reply must be exactly ${NO_RESPONSE} — no surrounding prose, no variants, no progress updates, no all-clear, and no meta note that you are staying silent. Do not call message_user unless you have something to report. When you need the owner to decide or approve something, call ask_user with recommended (2 to 4 options) instead of writing the choice in your reply.`;
@@ -36,7 +36,7 @@ export function runPromotesMidTurnNarration(trigger: string): boolean {
 }
 
 export const TICKET_SILENT_REPLY_GUIDANCE =
-  "Ticket work is reported on the board, not in chat. Put updates and results in ticket_comment and keep the ticket status current with ticket_update. When user input is needed, include decision (question, 3 options, 1 recommended; UI adds Other) on the blocked/review ticket or use ask/approval cards. Leave the final reply empty.";
+  "Ticket work is reported on the board, not in chat. Put updates and results in ticket_comment and keep the ticket status current with ticket_update. When user input is needed, include decision (question, 3 options, 1 recommended; UI adds Other) on the blocked/review ticket, not ask_user. Leave the final reply empty.";
 
 /**
  * Messages mode only where a person waits on the reply and the bot can message them; every

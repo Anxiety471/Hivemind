@@ -155,12 +155,17 @@ describe("reaction messages", () => {
       ["third", "❤️"],
       ["third", "❤️"],
     ] as const) {
-      await reactToThreadMessage({ prisma, jobs: jobs as never }, actor, target, {
-        messageId: "parent",
-        reaction,
-        clientNonce,
-        mayStartTurn: true,
-      });
+      await reactToThreadMessage(
+        { prisma, jobs: jobs as never, events: {} as never },
+        actor,
+        target,
+        {
+          messageId: "parent",
+          reaction,
+          clientNonce,
+          mayStartTurn: true,
+        },
+      );
     }
     expect(tx.message.create).toHaveBeenCalledTimes(3);
     expect(tx.event.create).toHaveBeenCalledTimes(3);
@@ -191,7 +196,7 @@ describe("reaction messages", () => {
     });
     tx.message.findFirst.mockResolvedValueOnce(null);
     await expect(
-      reactToThreadMessage({ prisma, jobs: jobs as never }, actor, target, {
+      reactToThreadMessage({ prisma, jobs: jobs as never, events: {} as never }, actor, target, {
         messageId: "elsewhere",
         reaction: "❤️",
         clientNonce: "fourth",
@@ -315,7 +320,7 @@ describe("reaction turns", () => {
     const releaseTakeover = vi.fn().mockResolvedValue(undefined);
     const react = () =>
       reactToThreadMessage(
-        { prisma, jobs: { enqueue } as never },
+        { prisma, jobs: { enqueue } as never, events: {} as never },
         { spaceId: "space-1", userId: "user-1" } as Actor,
         (options.groupMembers
           ? {

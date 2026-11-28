@@ -394,6 +394,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     boardEvents,
     jobs,
     prisma,
+    realtime,
     deploymentLabs: env.deploymentLabs,
   });
   const sandbox: SandboxProvider =
