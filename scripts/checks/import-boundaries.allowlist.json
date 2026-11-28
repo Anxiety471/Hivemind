@@ -5,6 +5,7 @@
   "relative": [
     "apps/api-go/tools/bench-spaces-list.mts -> ../../../packages/db/src/index.js",
     "apps/api-go/tools/bench-spaces-list.mts -> ../../api/src/app.js",
+    "apps/api-go/tools/blockschema-fixture.mts -> ../../../packages/contracts/src/threads/message-blocks.ts",
     "apps/api-go/tools/contract-k-mcp.mts -> ../../../packages/adapters/src/secrets/secrets.js",
     "apps/api-go/tools/contract-k-review.mts -> ../../../packages/adapters/src/secrets/secrets.js",
     "apps/api-go/tools/contract-l-push.mts -> ../../../packages/adapters/src/secrets/secrets.js",
