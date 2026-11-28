@@ -404,10 +404,11 @@ export const fleetTools: ConnectorTool[] = [
         intent: {
           type: "string",
           enum: ["request", "result", "question", "status", "fyi"],
-          description: "What the recipient should do with this message. Defaults to request.",
+          description:
+            "Required. fyi: informational heads-up only; the recipient takes no action, modifies no files, and does not reply unless it flags a factual error or blocker. request: delegate concrete work that belongs to the recipient's role; its final reply comes back to you automatically. question: a specific question within the recipient's domain. status: interim progress on work you delegated. result: the final outcome of a delegated request.",
         },
       },
-      required: ["message"],
+      required: ["message", "intent"],
     },
   },
   {

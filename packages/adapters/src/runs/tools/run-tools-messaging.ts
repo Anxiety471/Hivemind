@@ -1,8 +1,9 @@
 import { posix } from "node:path";
-import { ATTACHMENT_MAX_COUNT } from "@rakazo/contracts";
+import { ATTACHMENT_MAX_COUNT, BotMessageIntent } from "@rakazo/contracts";
 import {
   BOT_MESSAGE_MAX_LENGTH,
   BOT_MESSAGE_TOO_LONG,
+  botAddressError,
   isBackgroundRunTrigger,
   redactSecrets,
   resolveBotAddress,
@@ -42,6 +43,16 @@ import type { ToolCall, ToolHandlers } from "./run-tool-gate.js";
 import type { AttachmentBlock } from "./run-tools-files.js";
 import { readWorkspaceFile, saveWorkspaceFile } from "./run-tools-files.js";
 
+const INTENT_REQUIRED_ERROR =
+  "intent is required (request, result, question, status, or fyi); use fyi for heads-ups that need no action";
+
+type RecipientCandidate = {
+  id: string;
+  name: string;
+  computerId: string | null;
+  computerSwitching: boolean;
+};
+
 const ZIP_HELPS = new Set(["file not found or unreadable", "unsupported attachment type"]);
 
 /** `recipientId` is the bot the files were prepared for; delivery must go to that same bot. */
@@ -60,8 +71,9 @@ async function prepareSentFiles(
   const paths = filePaths(call);
   if ("error" in paths) return paths;
   if (!paths.length) return { files: [], sharedPaths: [] };
-  const target = await findRecipient(ctx, recipient);
-  if (!target) return { error: "no bot found with that id or name. Nothing was sent." };
+  const found = await findRecipient(ctx, recipient);
+  if ("error" in found) return { error: `${found.error}. Nothing was sent.` };
+  const { target } = found;
   const { bot } = ctx;
   if (
     bot.computerId &&
@@ -129,7 +141,7 @@ function withRecipient(prepared: { error: string } | SentFiles, recipientId: str
 async function findRecipient(
   ctx: RunContext,
   recipient: { botId?: string; name?: string; groupId?: string },
-) {
+): Promise<{ target: RecipientCandidate } | { error: string }> {
   const { run, deps, bot } = ctx;
   const candidates = await deps.prisma.bot.findMany({
     where: {
@@ -141,7 +153,8 @@ async function findRecipient(
     select: { id: true, name: true, computerId: true, computerSwitching: true },
   });
   const target = resolveBotAddress(candidates, recipient);
-  return target && target.id !== bot.id ? target : undefined;
+  if (!target) return { error: botAddressError(candidates, recipient) };
+  return target.id === bot.id ? { error: "no bot found with that id or name" } : { target };
 }
 
 /** Paths on the shared computer, checked to exist, as any bot on it can address them. */
@@ -322,6 +335,9 @@ export const messagingTools: ToolHandlers = {
     const { args, effectKey } = call;
     const invalid = messageError(ctx, args.message);
     if (invalid) return call.finish({ error: invalid });
+    // Required, not defaulted: the recipient acts on it, so a missing intent must not look like a request.
+    const parsedIntent = BotMessageIntent.safeParse(args.intent);
+    if (!parsedIntent.success) return call.finish({ error: INTENT_REQUIRED_ERROR });
     const stored = await prepareSentFiles(ctx, call, {
       botId: args.bot_id ? String(args.bot_id) : undefined,
       name: args.confirm_name ? String(args.confirm_name) : undefined,
@@ -341,7 +357,7 @@ export const messagingTools: ToolHandlers = {
             ? String(args.confirm_name)
             : undefined,
         message: delivered.message,
-        intent: args.intent as "request" | "result" | "question" | "status" | "fyi" | undefined,
+        intent: parsedIntent.data,
         deliveryKey: effectKey,
         files: stored.files,
       },

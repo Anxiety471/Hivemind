@@ -2,11 +2,14 @@ import { BOT_DESCRIPTION_MAX_LENGTH } from "@rakazo/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BOT_DIRECTORY_DESCRIPTIONS_MAX_LENGTH,
+  BOT_ID_NAME_MISMATCH_ERROR,
   BOT_MESSAGE_MAX_LENGTH,
+  botAddressError,
   botMessageAllowsSilence,
   botMessageHopExhausted,
   botMessageMaxHops,
   clampBotMessage,
+  DEFAULT_BOT_MESSAGE_MAX_HOPS,
   nextBotMessageHop,
   resolveBotAddress,
 } from "./bot-messages.js";
@@ -84,20 +87,33 @@ describe("hop bounding", () => {
     expect(nextBotMessageHop(5)).toBe(6);
   });
 
-  it("is unlimited by default, so long chains are never refused", () => {
-    expect(botMessageMaxHops()).toBe(0);
+  it("caps chains at 6 by default", () => {
+    expect(DEFAULT_BOT_MESSAGE_MAX_HOPS).toBe(6);
+    expect(botMessageMaxHops()).toBe(6);
     expect(botMessageHopExhausted(6)).toBe(false);
-    expect(botMessageHopExhausted(100)).toBe(false);
+    expect(botMessageHopExhausted(7)).toBe(true);
   });
 
-  it.each([undefined, "", " ", "0", "-1", "0.5", "NaN", "Infinity", "ten", "8hops"])(
-    "is unlimited for BOT_MESSAGE_MAX_HOPS=%j",
+  it.each([undefined, "", " "])("defaults to 6 for BOT_MESSAGE_MAX_HOPS=%j", (value) => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", value);
+    expect(botMessageMaxHops()).toBe(6);
+    expect(botMessageHopExhausted(7)).toBe(true);
+  });
+
+  it.each(["-1", "0.5", "NaN", "Infinity", "ten", "8hops"])(
+    "defaults to 6 for an invalid BOT_MESSAGE_MAX_HOPS=%j",
     (value) => {
       vi.stubEnv("BOT_MESSAGE_MAX_HOPS", value);
-      expect(botMessageMaxHops()).toBe(0);
-      expect(botMessageHopExhausted(100)).toBe(false);
+      expect(botMessageMaxHops()).toBe(6);
+      expect(botMessageHopExhausted(7)).toBe(true);
     },
   );
+
+  it.each(["0", "0.0"])("is unlimited when BOT_MESSAGE_MAX_HOPS=%j opts out", (value) => {
+    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", value);
+    expect(botMessageMaxHops()).toBe(0);
+    expect(botMessageHopExhausted(100)).toBe(false);
+  });
 
   it.each([
     ["1", 1],
@@ -112,8 +128,7 @@ describe("hop bounding", () => {
     expect(botMessageHopExhausted(expected + 1)).toBe(true);
   });
 
-  it("stops a two-bot volley at the opt-in fuse", () => {
-    vi.stubEnv("BOT_MESSAGE_MAX_HOPS", "6");
+  it("stops a two-bot volley at the default fuse", () => {
     let hop = nextBotMessageHop(undefined);
     let delivered = 0;
     while (!botMessageHopExhausted(hop)) {
@@ -169,6 +184,23 @@ describe("addressing", () => {
     expect(resolveBotAddress(twins, { botId: "b_404", name: "Reviewer" })).toBeUndefined();
   });
 
+  it("refuses a bot_id and name that name different bots instead of routing to the id", () => {
+    expect(resolveBotAddress(bots, { botId: "b_1", name: "Analyst" })).toBeUndefined();
+    expect(resolveBotAddress(bots, { botId: "b_1", name: "Analyst " })).toBeUndefined();
+    expect(resolveBotAddress(bots, { botId: "b_2", name: "  analyst" })?.id).toBe("b_2");
+    expect(resolveBotAddress(bots, { botId: "b_2", name: "" })?.id).toBe("b_2");
+  });
+
+  it("explains a mismatch separately from an unknown target", () => {
+    expect(botAddressError(bots, { botId: "b_1", name: "Analyst" })).toBe(
+      BOT_ID_NAME_MISMATCH_ERROR,
+    );
+    expect(botAddressError(bots, { botId: "b_404", name: "Analyst" })).toBe(
+      "no bot found with that id or name",
+    );
+    expect(botAddressError(bots, { name: "Nobody" })).toBe("no bot found with that id or name");
+  });
+
   it("returns nothing for an unknown target", () => {
     expect(resolveBotAddress(bots, { botId: "b_404" })).toBeUndefined();
     expect(resolveBotAddress(bots, {})).toBeUndefined();
@@ -176,6 +208,13 @@ describe("addressing", () => {
 });
 
 describe("directory", () => {
+  it("tells bots to message a teammate only within its role and to use fyi for heads-ups", () => {
+    const directory = renderBotDirectory(bots) ?? "";
+    expect(directory).toContain("only when the work belongs to their role");
+    expect(directory).toContain('intent "fyi"');
+    expect(directory).toContain("needs no action");
+  });
+
   it("lists teammates with ids and says delivery is asynchronous", () => {
     const directory =
       renderBotDirectory([
@@ -446,6 +485,24 @@ describe("inbound wake prompt", () => {
   it("leaves an FYI free to go unanswered", () => {
     const wake = buildBotMessageWakePrompt({ from: bots[0]!, text: "Deploy done.", intent: "fyi" });
     expect(wake).not.toContain(BOT_DELIBERATION_GUIDANCE);
+  });
+
+  it("tells the recipient an FYI is information only, with no action or reply", () => {
+    const wake = buildBotMessageWakePrompt({ from: bots[0]!, text: "Deploy done.", intent: "fyi" });
+    expect(wake).toContain("for information only");
+    expect(wake).toContain("Do not run tasks, modify files, ask the user");
+    expect(wake).toContain(`message Researcher back unless it contains a factual error or blocker`);
+  });
+
+  it("lets a request outside the recipient's role go back to its sender", () => {
+    const wake = buildBotMessageWakePrompt({
+      from: bots[0]!,
+      text: "Book the venue.",
+      intent: "request",
+    });
+    expect(wake).toContain("falls outside your role");
+    expect(wake).toContain("hand it back to Researcher");
+    expect(wake).toContain("instead of doing another bot's job or asking the user about it");
   });
 });
 

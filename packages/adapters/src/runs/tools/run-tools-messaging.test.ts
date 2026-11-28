@@ -52,7 +52,7 @@ const { messagingTools } = await import("./run-tools-messaging.js");
 function callWith(name: string, args: Record<string, unknown>) {
   return {
     name,
-    args: { bot_id: "bot-servo", message: "deploy this", ...args },
+    args: { bot_id: "bot-servo", message: "deploy this", intent: "request", ...args },
     executionId: "exec-1",
     effectKey: "effect-1",
     finish: async (result: unknown) => result,
@@ -80,6 +80,52 @@ function context(servoComputerId: string) {
   } as unknown as RunContext;
   return { ctx, listFiles, findMany };
 }
+
+describe("message_bot intent and addressing", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([undefined, "", "ask", "REQUEST"])(
+    "refuses a missing or invalid intent %j before anything is sent",
+    async (intent) => {
+      const { ctx, findMany } = context("computer-team");
+      await expect(
+        messagingTools.message_bot!(ctx, callWith("message_bot", { intent, files: ["site"] })),
+      ).resolves.toEqual({
+        error:
+          "intent is required (request, result, question, status, or fyi); use fyi for heads-ups that need no action",
+      });
+      expect(findMany).not.toHaveBeenCalled();
+      expect(mocks.messageBot).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["request", "result", "question", "status", "fyi"] as const)(
+    "passes intent %s through to delivery",
+    async (intent) => {
+      const { ctx } = context("computer-team");
+      await messagingTools.message_bot!(ctx, callWith("message_bot", { intent }));
+      expect(mocks.messageBot).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ intent }),
+      );
+    },
+  );
+
+  it("refuses a bot_id and confirm_name that name different bots when files are sent", async () => {
+    const { ctx } = context("computer-team");
+    await expect(
+      messagingTools.message_bot!(
+        ctx,
+        callWith("message_bot", { bot_id: "bot-servo", confirm_name: "Coder", files: ["site"] }),
+      ),
+    ).resolves.toEqual({
+      error: "bot_id and confirm_name do not match the same bot. Nothing was sent.",
+    });
+    expect(mocks.messageBot).not.toHaveBeenCalled();
+  });
+});
 
 describe("sending files to another bot", () => {
   beforeEach(() => vi.clearAllMocks());

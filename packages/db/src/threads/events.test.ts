@@ -4583,7 +4583,8 @@ describe("sendUserMessage", () => {
 
       if (waiting === "user" && group) {
         // Only the owner can end the owner's app task: a group text waits for it to finish.
-        expect(sent.runId).toBe("run-takeover");
+        // Held behind the owner's task, so the message is not tied to that run either.
+        expect(sent.runId).toBeNull();
         expect(tx.run.create).not.toHaveBeenCalled();
         expect(tx.steeringMessage.create).toHaveBeenCalledWith({
           data: {
@@ -4711,7 +4712,7 @@ describe("sendUserMessage", () => {
         prompt: "Check the inbox",
         trigger: "user",
       }),
-    ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: "intro-run" });
+    ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: null });
 
     expect(tx.run.create).not.toHaveBeenCalled();
     expect(tx.task.create).not.toHaveBeenCalled();
@@ -4766,7 +4767,7 @@ describe("sendUserMessage", () => {
         trigger: "messaging",
         clientNonce: "messaging:slack:handle-1",
       }),
-    ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: "intro-run" });
+    ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: null });
 
     expect(tx.run.create).not.toHaveBeenCalled();
     expect(tx.steeringMessage.create).toHaveBeenCalledWith({
@@ -4826,7 +4827,7 @@ describe("sendUserMessage", () => {
           prompt: "hello",
           trigger: "messaging",
         }),
-      ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: "run-routine" });
+      ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: null });
 
       expect(tx.run.create).not.toHaveBeenCalled();
       // No run on the steering row: the routine never claims it; its continuation does.
@@ -4840,8 +4841,40 @@ describe("sendUserMessage", () => {
           originTrigger: "messaging",
         },
       });
+      // The message is not the busy run's: neither the message row nor its created event names it.
+      expect(tx.message.update).not.toHaveBeenCalled();
+      const created = tx.event.create.mock.calls.map(
+        ([call]) => call.data as { type: string; runId?: string | null },
+      );
+      expect(created.find((data) => data.type === "thread.message.created")?.runId ?? null).toBe(
+        null,
+      );
     },
   );
+
+  it("replays a held message with no run, as its first send reported it", async () => {
+    const prisma = {
+      message: {
+        findUnique: vi.fn().mockResolvedValue({ id: "message-1", seq: 4, runId: null }),
+      },
+      run: { findFirst: vi.fn().mockResolvedValue(null), findUnique: vi.fn() },
+      $transaction: vi.fn(),
+    } as unknown as PrismaClient;
+
+    await expect(
+      sendUserMessage(prisma, {
+        spaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        userId: "user-1",
+        blocks: [{ kind: "text", text: "hello" }],
+        prompt: "hello",
+        trigger: "messaging",
+        clientNonce: "nonce-1",
+      }),
+    ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: null });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
 
   it("keeps another member's message pending instead of steering the busy run", async () => {
     const tx = {
@@ -5082,7 +5115,12 @@ describe("sendUserMessage", () => {
         prompt: "hello",
         trigger: "messaging",
       }),
-    ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: null, runId: "run-text" });
+    ).resolves.toEqual({
+      messageId: "message-1",
+      seq: 4,
+      taskId: null,
+      runId: held ? null : "run-text",
+    });
 
     expect(tx.run.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

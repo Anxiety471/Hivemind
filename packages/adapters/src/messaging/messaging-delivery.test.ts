@@ -1755,9 +1755,9 @@ describe("deliverRun to a group", () => {
     expect(wakes(t)).toEqual([]);
   });
 
-  it("keeps peer bots answering past six hops by default", async () => {
+  it("keeps peer bots answering within the default six hops", async () => {
     const t = setup();
-    groupRun(t.world, [text("m-1", "@Helper again?")], { hop: 6 });
+    groupRun(t.world, [text("m-1", "@Helper again?")], { hop: 5 });
     await t.delivery.deliverRun("run-1");
 
     expect(peerContext(t)).toEqual([]);

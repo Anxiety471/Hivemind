@@ -8,6 +8,7 @@ import {
   MessagingDelivery,
   ScriptedAgentRuntime,
   SendBlueEmulator,
+  wakeRun,
 } from "@rakazo/adapters";
 import type { PrismaClient } from "@rakazo/db";
 import {
@@ -39,6 +40,7 @@ describeMessaging("messaging surface journeys", () => {
   const platform = createEmulatedSendbluePlatform(emulator);
   const messaging = new ChatSdkMessagingSurface([platform]);
   let delivery: MessagingDelivery;
+  let jobs: Parameters<typeof wakeRun>[0];
   const dataDir = mkdtempSync(path.join(tmpdir(), "rakazo-messaging-"));
   // Unique per run: identities, threads, and outbox rows persist in the dev
   // database. Random E.164 fixtures — a timestamp suffix repeats within
@@ -116,6 +118,7 @@ describeMessaging("messaging surface journeys", () => {
     });
     app = handles.app;
     stop = handles.stop;
+    jobs = handles.jobs;
     prisma = asSystem(handles.prisma);
     delivery = new MessagingDelivery({
       prisma,
@@ -276,6 +279,9 @@ describeMessaging("messaging surface journeys", () => {
         trigger: "user",
       },
     });
+    // The app's send wakes the run it starts, as the send route does; the held text below
+    // no longer carries this run's id, so nothing else would start it.
+    await wakeRun(jobs, appRun.id);
 
     const histories = new Map<string, string>();
     const scripted = ScriptedAgentRuntime.prototype.run;
