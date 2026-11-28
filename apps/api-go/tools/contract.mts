@@ -25,6 +25,7 @@ import { createApp } from "../../api/src/app.js";
 import { jobCases } from "./contract-job.mts";
 import { replyPreviewCases } from "./contract-reply.mts";
 import { askCases } from "./contract-ask.mts";
+import { blockCases } from "./contract-blocks.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
@@ -779,6 +780,7 @@ const cases: Case[] = [
   ...threadGetCases(system),
   ...jobCases(system),
   ...askCases(system),
+  ...blockCases(system),
   ...replyPreviewCases(system),
   ...spaceRunCases(system),
   ...threadAdversarialCases(system),
