@@ -47,10 +47,12 @@ import {
   SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
   SILENT_TOOL_CONTINUATION_PROMPT,
 } from "../../runs/assembly/continuation.prompt.js";
+import { UNDECIDED_ASK_CORRECTION_PROMPT } from "../../runs/assembly/final-reply-decision.prompt.js";
 import {
   midTaskMessageFromPrompt,
   midTaskMessagePrompt,
 } from "../../runs/assembly/run-replies.prompt.js";
+import { isExactNoResponse } from "../../runs/assembly/silent-reply.js";
 import { runToolCallIds, uniqueToolCallIdStream } from "../../runs/turn/tool-call-ids.js";
 import type { ComputerModeCheckpoint } from "../../runs/turn/turn-checkpoint.js";
 import {
@@ -908,6 +910,9 @@ export class PiAgentRuntime implements AgentRuntime {
         let toolActivityShowing = false;
         let silentToolContinuations = 0;
         let emptyResponseReminders = 0;
+        // One corrective turn per run when a final reply leaves a decision in prose.
+        let undecidedAskCorrected = false;
+        const finalReplyJudge = request.finalReplyJudge;
         // A reply cut off by a dropped connection continues in the same bubble: no turn break,
         // and a continuation that starts by repeating the end of the cut text loses that repeat.
         let joinCutReply: { tail: string; held: string; requested: boolean } | undefined;
@@ -1078,6 +1083,37 @@ export class PiAgentRuntime implements AgentRuntime {
                   : EMPTY_RESPONSE_REMINDER_PROMPT,
                 timestamp: Date.now(),
               });
+            }
+            // A final text reply that asks the user to decide gets one turn to call ask_user.
+            // Awaited here, so the run cannot settle before the verdict.
+            const reply = messageText.trim();
+            if (
+              finalReplyJudge &&
+              reply &&
+              !isExactNoResponse(reply) &&
+              !undecidedAskCorrected &&
+              !hasToolCalls &&
+              !hasToolResults &&
+              !toolWorkPendingFinal &&
+              !host.pausePending &&
+              !signal.aborted &&
+              event.message.role === "assistant" &&
+              event.message.stopReason === "stop" &&
+              !providerFailureText(event.message)
+            ) {
+              const needsDecision = await bestEffort(
+                "final reply decision judge",
+                finalReplyJudge(reply),
+              );
+              if (needsDecision) {
+                undecidedAskCorrected = true;
+                getLogger().info("agent.undecided_ask_correction", { runId: request.runId });
+                agent.followUp({
+                  role: "user",
+                  content: UNDECIDED_ASK_CORRECTION_PROMPT,
+                  timestamp: Date.now(),
+                });
+              }
             }
           }
           if (event.type === "message_end" && event.message.role === "assistant") {
