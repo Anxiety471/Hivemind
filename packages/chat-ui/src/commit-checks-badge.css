@@ -1,0 +1,112 @@
+/* The status glyph beside a commit or pull request link. */
+.rk-check-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-inline-start: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted-foreground);
+  vertical-align: -2px;
+  cursor: pointer;
+}
+
+.rk-check-status[data-tone="passed"] {
+  color: var(--success);
+}
+
+.rk-check-status[data-tone="failed"] {
+  color: var(--destructive);
+}
+
+.rk-check-status:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.rk-check-ring {
+  display: block;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: rk-check-spin 0.9s linear infinite;
+}
+
+.rk-check-ring-queued {
+  border-top-color: currentColor;
+  animation: none;
+  opacity: 0.5;
+}
+
+@keyframes rk-check-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Under reduced motion the ring stays still: it still shows that checks are running. */
+@media (prefers-reduced-motion: reduce) {
+  .rk-check-ring {
+    animation: none;
+    border-top-color: currentColor;
+    opacity: 0.6;
+  }
+}
+
+.rk-check-list ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.rk-check-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.rk-check-row-state {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
+.rk-check-row-state[data-state="passed"] {
+  color: var(--success);
+}
+
+.rk-check-row-state[data-state="failed"] {
+  color: var(--destructive);
+}
+
+.rk-check-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.rk-check-row-name:hover {
+  text-decoration: underline;
+}
+
+.rk-check-row-time {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}

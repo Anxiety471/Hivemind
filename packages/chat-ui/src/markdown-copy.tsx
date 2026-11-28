@@ -1,3 +1,4 @@
+import type { CommitCheckState } from "@rakazo/contracts";
 import type { ReactNode } from "react";
 import { createContext, useContext } from "react";
 import type { TableSortDirection } from "./table-utils";
@@ -32,6 +33,12 @@ export type MarkdownCopy = {
   sortedBy: (column: string, direction: TableSortDirection) => string;
   /** The zoom level button: names the reset it performs and the current level. */
   resetZoom: (percent: number) => string;
+  /** The status glyph beside a commit or pull request link, and the list it opens. */
+  checksPassed: string;
+  checksFailed: string;
+  checksProgress: (passed: number, total: number) => string;
+  checkStates: Record<CommitCheckState, string>;
+  checkSeconds: (seconds: number) => string;
 };
 
 export const defaultMarkdownCopy: MarkdownCopy = {
@@ -61,6 +68,18 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   sortedBy: (column, direction) =>
     `Sorted by ${column}, ${direction === "asc" ? "ascending" : "descending"}`,
   resetZoom: (percent) => `Reset zoom, ${percent}%`,
+  checksPassed: "Checks passed",
+  checksFailed: "Checks failed",
+  checksProgress: (passed, total) => `Checks: ${passed} of ${total} passed`,
+  checkStates: {
+    queued: "Queued",
+    running: "Running",
+    passed: "Passed",
+    failed: "Failed",
+    skipped: "Skipped",
+  },
+  checkSeconds: (seconds) =>
+    seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
 };
 
 const MarkdownCopyContext = createContext<MarkdownCopy>(defaultMarkdownCopy);

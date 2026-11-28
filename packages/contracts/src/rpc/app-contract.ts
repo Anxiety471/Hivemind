@@ -8,6 +8,7 @@ import { artifactsRpc } from "../artifacts/artifacts-rpc.js";
 import { filesRpc } from "../artifacts/files-rpc.js";
 import { billingRpc } from "../billing/billing-rpc.js";
 import { botsRpc } from "../bots/bots-rpc.js";
+import { commitChecksRpc } from "../checks/commit-checks-rpc.js";
 import { serverRpc } from "../clients/server-rpc.js";
 import { computersRpc } from "../computers/computers-rpc.js";
 import { integrationsRpc } from "../integrations/integrations-rpc.js";
@@ -28,6 +29,7 @@ export const appContract = {
   ...botsRpc,
   ...threadsRpc,
   ...routinesRpc,
+  ...commitChecksRpc,
   ...artifactsRpc,
   ...filesRpc,
   ...skillsRpc,

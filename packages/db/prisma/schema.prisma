@@ -704,6 +704,8 @@ model Space {
   browserProfiles             BrowserProfile[]
   artifacts                   Artifact[]
   fileFolders                 FileFolder[]
+  commitChecks                CommitCheck[]
+  pullRequestHeads            PullRequestHead[]
   pages                       Page[]
   notificationPreferences     NotificationPreference[]
   computers                   Computer[]
@@ -2953,4 +2955,38 @@ model CapabilityInstallSpace {
   @@id([installId, spaceId])
   @@index([spaceId, userId])
   @@map("capability_install_spaces")
+}
+
+/// One check of a commit, as the code host last reported it. The row keeps the newest check run
+/// for a name, so a re-run replaces the earlier run and a late delivery of an older one is ignored.
+model CommitCheck {
+  spaceId     String
+  space       Space     @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  /// Host and full repository name, lowercased, e.g. `host.example/owner/repo`.
+  repository  String
+  headSha     String
+  name        String
+  checkRunId  BigInt
+  /// One of queued, running, passed, failed, skipped.
+  state       String
+  url         String?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  @@id([spaceId, repository, headSha, name])
+  @@map("commit_checks")
+}
+
+/// The head commit a pull request pointed at in its newest event.
+model PullRequestHead {
+  spaceId    String
+  space      Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  repository String
+  number     Int
+  headSha    String
+  /// The pull request's own last-updated time from the event, so an older event never wins.
+  updatedAt  DateTime
+
+  @@id([spaceId, repository, number])
+  @@map("pull_request_heads")
 }

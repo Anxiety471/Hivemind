@@ -33,6 +33,8 @@ import {
   CopyTextFallback,
   useCopyText,
 } from "@rakazo/ui-web";
+import { commitCheckTarget } from "./commit-checks";
+import { CommitChecksBadge } from "./commit-checks-badge";
 import { CheckIcon, CopyIcon, GlobeIcon, ImageIcon } from "./icons";
 import type { ChatMarkdownProps } from "./markdown";
 import {
@@ -547,16 +549,21 @@ function WebsiteLink({
   className,
   ...props
 }: React.ComponentPropsWithoutRef<"a"> & { href: string; children: ReactNode }) {
+  // The status glyph sits beside the link, not inside it: a control cannot nest in an anchor.
+  const target = commitCheckTarget(href);
   return (
-    <ConfirmableAnchor
-      {...props}
-      href={href}
-      className={className ? `rk-chat-link ${className}` : "rk-chat-link"}
-    >
-      <LinkFavicon href={href} />
-      {/* bdi: direction characters in a label cannot reorder the text around the link. */}
-      <bdi className="rk-chat-link-label">{children}</bdi>
-    </ConfirmableAnchor>
+    <>
+      <ConfirmableAnchor
+        {...props}
+        href={href}
+        className={className ? `rk-chat-link ${className}` : "rk-chat-link"}
+      >
+        <LinkFavicon href={href} />
+        {/* bdi: direction characters in a label cannot reorder the text around the link. */}
+        <bdi className="rk-chat-link-label">{children}</bdi>
+      </ConfirmableAnchor>
+      {target ? <CommitChecksBadge target={target} /> : null}
+    </>
   );
 }
 
@@ -904,6 +911,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   );
 });
 
+export type { CommitChecksSource, CommitCheckTarget } from "./commit-checks";
+export { CommitChecksContext, commitCheckTarget } from "./commit-checks";
 export type { ChatMarkdownProps, LinkFavicons } from "./markdown";
 export {
   LinkFaviconsContext,
